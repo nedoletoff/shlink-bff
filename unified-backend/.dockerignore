@@ -1,0 +1,18 @@
+# Git
+.git
+.gitignore
+
+# Tests
+test/
+*_test.go
+
+# Docs
+*.md
+
+# Build artifacts
+unified-backend
+
+# IDE
+.idea/
+.vscode/
+*.swp
