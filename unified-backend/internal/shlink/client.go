@@ -28,7 +28,7 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
-// --- Типы ответов Shlink API ---
+// --- Типы ответов Shlink API (v5.x) ---
 
 type VisitsSummary struct {
 	Total int `json:"total"`
@@ -45,11 +45,11 @@ type ShortURL struct {
 }
 
 type Pagination struct {
-	CurrentPage            int `json:"currentPage"`
-	PagesCount             int `json:"pagesCount"`
-	ItemsPerPage           int `json:"itemsPerPage"`
-	ItemsInCurrentPage     int `json:"itemsInCurrentPage"`
-	TotalItems             int `json:"totalItems"`
+	CurrentPage        int `json:"currentPage"`
+	PagesCount         int `json:"pagesCount"`
+	ItemsPerPage       int `json:"itemsPerPage"`
+	ItemsInCurrentPage int `json:"itemsInCurrentPage"`
+	TotalItems         int `json:"totalItems"`
 }
 
 type ShortURLsResponse struct {
@@ -71,10 +71,14 @@ type TagsWithStatsResponse struct {
 	} `json:"tags"`
 }
 
+// TagStats reflects Shlink v5.x response: visitsCount replaced by visitsSummary object.
 type TagStats struct {
-	Tag         string `json:"tag"`
-	ShortURLsCount int `json:"shortUrlsCount"`
-	VisitsCount    int `json:"visitsCount"`
+	Tag           string `json:"tag"`
+	ShortURLsCount int    `json:"shortUrlsCount"`
+	// v5: visitsCount (int) is replaced by visitsSummary object
+	VisitsSummary struct {
+		Total int `json:"total"`
+	} `json:"visitsSummary"`
 }
 
 type VisitsResponse struct {
@@ -85,9 +89,9 @@ type VisitsResponse struct {
 }
 
 type Visit struct {
-	Referer   string    `json:"referer"`
-	Date      string    `json:"date"`
-	UserAgent string    `json:"userAgent"`
+	Referer       string        `json:"referer"`
+	Date          string        `json:"date"`
+	UserAgent     string        `json:"userAgent"`
 	VisitLocation VisitLocation `json:"visitLocation"`
 }
 
@@ -126,12 +130,14 @@ func (c *Client) GetTags(ctx context.Context, apiKey string) (*TagsWithStatsResp
 	return doRequest[TagsWithStatsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 
+// RenameTag uses PUT /rest/v3/tags with body {"oldName": "...", "newName": "..."}
 func (c *Client) RenameTag(ctx context.Context, apiKey string, body io.Reader) error {
 	url := c.baseURL + "/rest/v3/tags"
 	_, err := doRequest[struct{}](ctx, c, http.MethodPut, url, apiKey, body)
 	return err
 }
 
+// DeleteTags uses DELETE /rest/v3/tags?tags[]=tag1&tags[]=tag2
 func (c *Client) DeleteTags(ctx context.Context, apiKey string, tags []string) error {
 	url := c.baseURL + "/rest/v3/tags?tags[]=" + strings.Join(tags, "&tags[]=")
 	_, err := doRequest[struct{}](ctx, c, http.MethodDelete, url, apiKey, nil)
@@ -143,8 +149,9 @@ func (c *Client) GetVisitsSummary(ctx context.Context, apiKey string) (map[strin
 	return doRequest[map[string]any](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 
+// GetHealth calls the canonical /rest/health endpoint (no version prefix, works in all Shlink versions).
 func (c *Client) GetHealth(ctx context.Context) (map[string]any, error) {
-	url := c.baseURL + "/rest/v2/health"
+	url := c.baseURL + "/rest/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -178,8 +185,7 @@ func doRequest[T any](
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		slog.Error("shlink_client: request failed",
-			"method", method, "path", extractPath(url), "err", err)
+		slog.Error("shlink_client: request failed", "method", method, "path", extractPath(url), "err", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -191,7 +197,6 @@ func doRequest[T any](
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("shlink returned %d: %s", resp.StatusCode, string(bodyBytes))
 	}
-
 	var result T
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
