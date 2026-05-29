@@ -8,6 +8,7 @@ Browser → nginx (HTTPS) → oauth2-proxy → unified-backend (Go) → shlink-a
 ```
 
 **Принципы безопасности:**
+
 - `shlink_api_key` хранится только в PostgreSQL, никогда не попадает в браузер
 - `servers.json`, `/rest/`, `shlink-web-client` удалены полностью
 - RBAC принудителен на уровне backend, независимо от UI
@@ -17,14 +18,20 @@ Browser → nginx (HTTPS) → oauth2-proxy → unified-backend (Go) → shlink-a
 
 ```bash
 # 1. Скопируйте .env и заполните секреты
-cp .env .env.local && vi .env.local
+cp .env.example .env && vi .env
 
-# 2. Положите SSL-сертификат в nginx/ssl/haproxy.pem
+# 2. Скопируйте конфиги и отредактируйте под свой домен
+cp nginx/nginx.conf.example nginx/nginx.conf
+cp oauth2-proxy/shlink.cfg.example oauth2-proxy/shlink.cfg
 
-# 3. Запустите
-docker compose up -d
+# 3. Положите SSL-сертификат (cert + key в одном PEM)
+mkdir -p nginx/ssl
+# скопируйте cert.pem в nginx/ssl/cert.pem
 
-# 4. Создайте первого пользователя в БД
+# 4. Запустите
+docker compose up -d --build
+
+# 5. Создайте первого пользователя в БД
 docker compose exec postgres psql -U shlink -d shlink -c "
   INSERT INTO users (sub, username, email, role, shlink_api_key)
   VALUES ('keycloak-sub-here', 'admin', 'admin@example.local', 'admin', 'shlink-api-key-here');
@@ -35,7 +42,7 @@ docker compose exec postgres psql -U shlink -d shlink -c "
 
 ```bash
 cd unified-backend
-go test ./test/... -v
+go test ./... -v
 ```
 
 ## API контракт
@@ -47,12 +54,12 @@ go test ./test/... -v
 | GET | /api/dashboard | user/admin | Статистика |
 | GET | /api/shlink/short-urls | user/admin | Список ссылок |
 | POST | /api/shlink/short-urls | user/admin | Создать ссылку |
-| PATCH | /api/shlink/short-urls/{code} | user/admin | Обновить ссылку |
-| DELETE | /api/shlink/short-urls/{code} | user/admin | Удалить ссылку |
+| PATCH | /api/shlink/short-urls/{shortCode} | user/admin | Обновить ссылку |
+| DELETE | /api/shlink/short-urls/{shortCode} | user/admin | Удалить ссылку |
 | GET | /api/shlink/tags | user/admin | Теги |
 | POST | /api/shlink/tags | user/admin | Создать тег |
-| PUT | /api/shlink/tags/{id} | user/admin | Переименовать тег |
-| DELETE | /api/shlink/tags/{id} | user/admin | Удалить тег |
+| PUT | /api/shlink/tags/{tagId} | user/admin | Переименовать тег |
+| DELETE | /api/shlink/tags/{tagId} | user/admin | Удалить тег |
 | GET | /api/admin/users | **admin** | Список пользователей |
 | GET | /api/admin/users/{sub} | **admin** | Пользователь |
 | PUT | /api/admin/users/{sub} | **admin** | Обновить пользователя |
@@ -64,10 +71,10 @@ go test ./test/... -v
 ## Версии образов
 
 | Образ | Версия | Примечание |
-|-------|--------|-----------|
-| nginx | 1.27-alpine | Stable branch |
+|-------|--------|------------|
+| nginx | 1.30-alpine | Stable branch (1.28+ LTS) |
 | postgres | 17-alpine | Minor updates безопасны; major→18 требует миграции |
-| oauth2-proxy | v7.15.2 | Обновлено (auth-bypass fix) |
-| privatebin | 2.0.4 | Актуальный релиз май 2026 |
-| shlink | 4.4.3 | Зафиксировать после проверки upgrade path |
+| oauth2-proxy | v7.15.2 | Актуальный стабильный релиз |
+| shlink | 4.5.2 | Последний стабильный релиз |
 | golang | 1.24-alpine | Builder only, в финальном образе не присутствует |
+| node | 22-alpine | Builder only для web-ui |
