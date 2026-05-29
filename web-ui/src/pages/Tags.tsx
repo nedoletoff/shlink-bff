@@ -69,7 +69,7 @@ export function Tags() {
                   <Badge variant="light" size="md">{t.tag}</Badge>
                 </Table.Td>
                 <Table.Td>{t.shortUrlsCount}</Table.Td>
-                <Table.Td>{t.visitsCount.toLocaleString('ru')}</Table.Td>
+                              <Table.Td>{t.visitsSummary.total.toLocaleString('ru')}</Table.Td>
                 <Table.Td>
                   <Group gap={4}>
                     {user?.permissions.canManageOwnTags && (
