@@ -1,8 +1,10 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
+# Копируем manifest для кеширования слоя зависимостей
 COPY package*.json ./
-RUN npm ci --prefer-offline
+# npm ci если есть package-lock.json, иначе npm install
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline; else npm install; fi
 
 COPY . .
 RUN npm run build
