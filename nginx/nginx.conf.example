@@ -1,0 +1,165 @@
+# nginx.conf.example — пример конфигурации nginx для Shlink BFF
+#
+# Скопируйте в nginx/nginx.conf и отредактируйте под свой домен.
+#
+# Требуется:
+#   - SSL-сертификат в nginx/ssl/cert.pem (формат: cert + key в одном PEM-файле)
+#   - Записи в /etc/hosts или DNS: shlink.example.com, shlink-create.example.com
+#   - Запущен oauth2-proxy (см. oauth2-proxy/shlink.cfg.example)
+
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;
+    tcp_nopush    on;
+    keepalive_timeout 65;
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+
+    server_tokens off;
+
+    # Security headers
+    add_header X-Frame-Options DENY always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    upstream unified_backend {
+        server unified-backend:8080;
+        keepalive 32;
+    }
+
+    upstream oauth2_proxy_shlink {
+        server oauth2-proxy-shlink:4180;
+        keepalive 16;
+    }
+
+    upstream web_ui {
+        server web-ui:80;
+        keepalive 16;
+    }
+
+    # -- shlink-create.example.com -- защищённый интерфейс --
+    server {
+        listen 443 ssl;
+        server_name shlink-create.example.com;  # <-- заменить
+
+        ssl_certificate     /etc/nginx/ssl/cert.pem;
+        ssl_certificate_key /etc/nginx/ssl/cert.pem;  # cert+key в одном PEM
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
+        ssl_session_cache   shared:SSL:10m;
+
+        # Публичный healthcheck
+        location = /healthz {
+            proxy_pass http://unified_backend/healthz;
+            access_log off;
+        }
+
+        # oauth2-proxy callback
+        location /oauth2/ {
+            proxy_pass          http://oauth2_proxy_shlink;
+            proxy_set_header    Host              $host;
+            proxy_set_header    X-Real-IP         $remote_addr;
+            proxy_set_header    X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header    X-Forwarded-Proto $scheme;
+        }
+
+        # Внутренний auth endpoint
+        location = /_oauth2_auth {
+            internal;
+            proxy_pass              http://oauth2_proxy_shlink/oauth2/auth;
+            proxy_pass_request_body off;
+            proxy_set_header        Content-Length   "";
+            proxy_set_header        X-Original-URI   $request_uri;
+            proxy_set_header        X-Real-IP        $remote_addr;
+            proxy_set_header        X-Forwarded-For  $proxy_add_x_forwarded_for;
+            proxy_set_header        X-Forwarded-Proto $scheme;
+        }
+
+        # API Backend
+        location /api/ {
+            auth_request /_oauth2_auth;
+            error_page 401 = @oauth2_redirect;
+
+            auth_request_set $auth_user   $upstream_http_x_auth_request_user;
+            auth_request_set $auth_email  $upstream_http_x_auth_request_email;
+            auth_request_set $auth_uname  $upstream_http_x_auth_request_preferred_username;
+            auth_request_set $auth_groups $upstream_http_x_auth_request_groups;
+
+            proxy_pass http://unified_backend;
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Auth-Request-User               $auth_user;
+            proxy_set_header X-Auth-Request-Email              $auth_email;
+            proxy_set_header X-Auth-Request-Preferred-Username $auth_uname;
+            proxy_set_header X-Auth-Request-Groups             $auth_groups;
+            proxy_hide_header X-Shlink-API-Key;
+            proxy_read_timeout    30s;
+            proxy_connect_timeout 5s;
+        }
+
+        # Web UI SPA
+        location / {
+            auth_request /_oauth2_auth;
+            error_page 401 = @oauth2_redirect;
+            proxy_pass http://web_ui;
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location @oauth2_redirect {
+            return 302 /oauth2/sign_in;
+        }
+
+        # Запрет прямого доступа к shlink REST API
+        location ~ ^/(rest|bootstrap)/ {
+            return 404 '{"error":"not found"}';
+            add_header Content-Type application/json;
+        }
+        location = /servers.json {
+            return 404 '{"error":"not found"}';
+            add_header Content-Type application/json;
+        }
+    }
+
+    # -- shlink.example.com -- публичный редиректор (без auth) --
+    server {
+        listen 443 ssl;
+        server_name shlink.example.com;  # <-- заменить
+
+        ssl_certificate     /etc/nginx/ssl/cert.pem;
+        ssl_certificate_key /etc/nginx/ssl/cert.pem;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+
+        location / {
+            proxy_pass        http://shlink-api:8080;
+            proxy_set_header  Host              $host;
+            proxy_set_header  X-Real-IP         $remote_addr;
+            proxy_set_header  X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header  X-Forwarded-Proto $scheme;
+        }
+
+        location /rest/ {
+            return 403 '{"error":"forbidden"}';
+            add_header Content-Type application/json;
+        }
+    }
+
+    # HTTP → HTTPS redirect
+    server {
+        listen 80;
+        server_name shlink.example.com shlink-create.example.com;
+        return 301 https://$host$request_uri;
+    }
+}
