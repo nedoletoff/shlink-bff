@@ -75,6 +75,6 @@ go test ./... -v
 | nginx | 1.30-alpine | Stable branch (1.28+ LTS) |
 | postgres | 17-alpine | Minor updates безопасны; major→18 требует миграции |
 | oauth2-proxy | v7.15.2 | Актуальный стабильный релиз |
-| shlink | 4.5.2 | Последний стабильный релиз |
+| shlink | 5.0.2 | Последний стабильный релиз (v5.x) |
 | golang | 1.24-alpine | Builder only, в финальном образе не присутствует |
 | node | 22-alpine | Builder only для web-ui |
