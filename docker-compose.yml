@@ -19,7 +19,7 @@ services:
 
   # -- Nginx -- точка входа --
   nginx:
-    image: nginx:1.27-alpine
+        image: nginx:1.30-alpine
     container_name: nginx-proxy
     ports:
       - "80:80"
@@ -64,7 +64,7 @@ services:
 
   # -- Shlink API -- внутренний сервис, без публичных портов --
   shlink-api:
-    image: shlinkio/shlink:4.4.3
+        image: shlinkio/shlink:4.5.2
     container_name: shlink-api
     depends_on:
       postgres:
