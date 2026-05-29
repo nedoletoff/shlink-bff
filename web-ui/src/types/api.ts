@@ -21,7 +21,7 @@ export interface MeResponse {
   email:       string;
   role:        UserRole;
   permissions: Permissions;
-  hasApiKey:   boolean;  // только флаг — реальный ключ недоступен в браузере
+  hasApiKey:   boolean; // только флаг — реальный ключ недоступен в браузере
   features:    FeatureFlags;
   slugPrefix?: string;
 }
@@ -42,11 +42,11 @@ export interface ShortURL {
 }
 
 export interface Pagination {
-  currentPage:            number;
-  pagesCount:             number;
-  itemsPerPage:           number;
-  itemsInCurrentPage:     number;
-  totalItems:             number;
+  currentPage:        number;
+  pagesCount:         number;
+  itemsPerPage:       number;
+  itemsInCurrentPage: number;
+  totalItems:         number;
 }
 
 export interface ShortURLsListResponse {
@@ -57,10 +57,11 @@ export interface ShortURLsListResponse {
 }
 
 // Tags
+// Shlink v5.x: visitsCount (number) replaced by visitsSummary object
 export interface TagStats {
   tag:            string;
   shortUrlsCount: number;
-  visitsCount:    number;
+  visitsSummary:  VisitsSummary;
 }
 
 export interface TagsResponse {
@@ -81,40 +82,8 @@ export interface ClickPoint {
 }
 
 export interface DashboardResponse {
-  totalClicks:    number;
-  activeLinks:    number;
-  topTags:        TagCount[];
+  totalClicks:   number;
+  activeLinks:   number;
+  topTags:       TagCount[];
   clicksOverTime: ClickPoint[];
-}
-
-// Audit log
-export interface AuditLog {
-  id:        number;
-  userSub:   string;
-  username:  string;
-  role:      string;
-  action:    string;
-  resource:  string;
-  result:    'success' | 'denied' | 'error';
-  details:   Record<string, unknown>;
-  ipAddress: string;
-  createdAt: string;
-}
-
-export interface AuditLogsResponse {
-  logs:  AuditLog[];
-  total: number;
-}
-
-// Admin: пользователи (без API key)
-export interface AdminUser {
-  id:         string;
-  sub:        string;
-  username:   string;
-  email:      string;
-  role:       UserRole;
-  slugPrefix: string;
-  status:     'active' | 'disabled' | 'pending';
-  hasApiKey:  boolean;
-  createdAt:  string;
 }
