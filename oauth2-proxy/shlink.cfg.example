@@ -1,0 +1,48 @@
+# oauth2-proxy config для shlink-create.example.com
+# Скопируйте в shlink.cfg и заполните значения.
+# Секреты OAUTH2_CLIENT_SECRET и OAUTH2_COOKIE_SECRET задаются через env в docker-compose.yml.
+# Документация: https://oauth2-proxy.github.io/oauth2-proxy/docs/configuration/overview
+
+provider            = "oidc"
+oidc_issuer_url     = "https://YOUR_KEYCLOAK_HOST/realms/YOUR_REALM"  # <-- заменить
+client_id           = "shlink-bff"                                    # <-- client_id в Keycloak
+client_secret       = "OAUTH2_CLIENT_SECRET"                          # выдаётся через env
+
+redirect_url        = "https://shlink-create.example.com/oauth2/callback"  # <-- заменить
+
+# Слушаем на 4180
+http_address        = "0.0.0.0:4180"
+
+# Cookie (HttpOnly + Secure + SameSite=Lax)
+cookie_name         = "_shlink_session"
+cookie_secret       = "OAUTH2_COOKIE_SECRET"  # выдаётся через env
+cookie_secure       = true
+cookie_httponly     = true
+cookie_samesite     = "lax"
+cookie_expire       = "8h"
+cookie_refresh      = "1h"
+
+# Identity headers — передаём в upstream через nginx auth_request_set
+set_xauthrequest            = true
+pass_access_token           = false  # токен не покидает oauth2-proxy
+pass_authorization_header   = false  # Bearer не идёт в backend
+
+# Группы/роли из Keycloak (настройте mapper в Keycloak)
+oidc_groups_claim           = "groups"
+
+# Разрешённые email-домены (раскомментировать если нужно)
+# email_domains = ["example.com"]
+
+# Logging
+request_logging   = true
+auth_logging      = true
+standard_logging  = true
+
+# Trusted reverse proxy (nginx — доверяем внутренней сети)
+trusted_ips_config = "172.0.0.0/8,10.0.0.0/8,192.168.0.0/16"
+
+# Пропускаем auth для healthcheck
+skip_auth_routes = ["^/healthz$"]
+
+# Сессия в cookie (для prod рекомендуется Redis)
+session_store_type = "cookie"
