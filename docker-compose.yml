@@ -1,17 +1,13 @@
-version: "3.9"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Shlink BFF — Production-ready docker-compose
+# Shlink BFF — docker-compose
 #
 # Архитектура:
 #   Browser → nginx → oauth2-proxy → unified-backend → shlink-api
 #
-# Принципы безопасности:
-#   - shlink-api не публикует порты наружу (только expose внутри сети)
-#   - API ключ пользователя никогда не покидает unified-backend
-#   - servers.json, /rest/, shlink-web-client удалены
-#   - Все образы зафиксированы на конкретных версиях (не latest/stable)
-# ══════════════════════════════════════════════════════════════════════════════
+# Перед запуском:
+#   cp .env.example .env && vi .env
+#   Скопируйте nginx/nginx.conf.example → nginx/nginx.conf
+#   Скопируйте oauth2-proxy/shlink.cfg.example → oauth2-proxy/shlink.cfg
+#   Положите SSL-сертификат в nginx/ssl/cert.pem
 
 x-logging: &default-logging
   driver: "json-file"
@@ -21,7 +17,7 @@ x-logging: &default-logging
 
 services:
 
-  # ── Nginx — точка входа ────────────────────────────────────────────────────
+  # -- Nginx -- точка входа --
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx-proxy
@@ -40,13 +36,10 @@ services:
         condition: service_healthy
       oauth2-proxy-shlink:
         condition: service_started
-      oauth2-proxy-pb:
-        condition: service_started
     logging: *default-logging
     restart: unless-stopped
 
-  # ── PostgreSQL ────────────────────────────────────────────────────────────
-  # Фиксируем на 17.x (major upgrade до 18 — отдельная процедура)
+  # -- PostgreSQL --
   postgres:
     image: postgres:17-alpine
     container_name: postgres-shlink
@@ -60,7 +53,7 @@ services:
     networks:
       - internal
     expose:
-      - "5432"     # доступен только внутри сети, наружу НЕ торчит
+      - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${SHLINK_DB_USER} -d ${SHLINK_DB_NAME}"]
       interval: 5s
@@ -69,33 +62,28 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # ── Shlink API — внутренний сервис, нет публичных портов ─────────────────
-  # SECURITY: секция `ports` отсутствует намеренно.
-  # Доступ только через unified-backend внутри сети internal.
+  # -- Shlink API -- внутренний сервис, без публичных портов --
   shlink-api:
-    # Фиксируйте на конкретный релиз после проверки upgrade path!
-    # Пример: shlinkio/shlink:4.4.3
     image: shlinkio/shlink:4.4.3
     container_name: shlink-api
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DB_DRIVER:            postgres
-      DB_HOST:              postgres
-      DB_NAME:              ${SHLINK_DB_NAME}
-      DB_USER:              ${SHLINK_DB_USER}
-      DB_PASSWORD:          ${SHLINK_DB_PASSWORD}
-      DEFAULT_DOMAIN:       ${DOMAIN_SHORT}
-      IS_HTTPS_ENABLED:     "true"
-      INITIAL_API_KEY:      ${ADMIN_SHLINK_API_KEY}
-      # ACCESS_CONTROL_ALLOW_ORIGIN убран — браузер не обращается напрямую к shlink-api
+      DB_DRIVER:        postgres
+      DB_HOST:          postgres
+      DB_NAME:          ${SHLINK_DB_NAME}
+      DB_USER:          ${SHLINK_DB_USER}
+      DB_PASSWORD:      ${SHLINK_DB_PASSWORD}
+      DEFAULT_DOMAIN:   ${DOMAIN_SHORT}
+      IS_HTTPS_ENABLED: "true"
+      INITIAL_API_KEY:  ${ADMIN_SHLINK_API_KEY}
     volumes:
       - shlink_data:/data
     networks:
       - internal
     expose:
-      - "8080"     # только внутри internal network
+      - "8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/rest/v2/health"]
       interval: 10s
@@ -104,7 +92,7 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # ── Unified Backend (Go) ──────────────────────────────────────────────────
+  # -- Unified Backend (Go) --
   unified-backend:
     build:
       context: ./unified-backend
@@ -133,7 +121,7 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # ── Web UI (React SPA) ────────────────────────────────────────────────────
+  # -- Web UI (React SPA) --
   web-ui:
     build:
       context: ./web-ui
@@ -151,9 +139,8 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # ── oauth2-proxy для shlink-create.local ─────────────────────────────────
-  # SECURITY: Обновлено до 7.15.2 (закрывает auth-bypass).
-  # НЕ использовать latest — фиксировать тег!
+  # -- oauth2-proxy для shlink-create --
+  # SECURITY: зафиксирован тег, не использовать latest
   oauth2-proxy-shlink:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.2
     container_name: oauth2-proxy-shlink
@@ -172,55 +159,12 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # ── oauth2-proxy для pb-create.local ─────────────────────────────────────
-  oauth2-proxy-pb:
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.2
-    container_name: oauth2-proxy-pb
-    volumes:
-      - ./oauth2-proxy/pb.cfg:/oauth2-proxy.cfg:ro
-    command: --config=/oauth2-proxy.cfg
-    extra_hosts:
-      - "${KEYCLOAK_HOST}:${KEYCLOAK_IP}"
-    networks:
-      - internal
-    expose:
-      - "4180"
-    environment:
-      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_CLIENT_SECRET_PB}
-      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_COOKIE_SECRET}
-    logging: *default-logging
-    restart: unless-stopped
-
-  # ── PrivateBin ────────────────────────────────────────────────────────────
-  # 2.0.4 — актуальная версия на май 2026, оставляем
-  privatebin:
-    image: privatebin/nginx-fpm-alpine:2.0.4
-    container_name: privatebin
-    environment:
-      PB_PUBLIC_BASE_URL: https://${DOMAIN_PB}
-      # SHLINK_API_KEY удалён из env — переменная не должна быть в браузере
-    volumes:
-      - ./privatebin/conf.php:/srv/cfg/conf.php:ro
-      - privatebin_data:/srv/data
-    networks:
-      - internal
-    expose:
-      - "8080"
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/ || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 3
-    logging: *default-logging
-    restart: unless-stopped
-
 volumes:
   postgres_data:
   shlink_data:
-  privatebin_data:
 
 networks:
   internal:
     driver: bridge
-    # Все сервисы в одной сети; shlink-api доступен только через expose
-    # и внутреннее имя контейнера, без публикации портов наружу
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
