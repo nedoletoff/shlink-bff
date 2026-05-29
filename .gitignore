@@ -27,6 +27,13 @@ go.work.sum
 # env file
 .env
 
+# Nginx real config and SSL certs (use nginx.conf.example)
+nginx/nginx.conf
+nginx/ssl/
+
+# oauth2-proxy real config (use shlink.cfg.example)
+oauth2-proxy/shlink.cfg
+
 # Editor/IDE
 # .idea/
 # .vscode/
