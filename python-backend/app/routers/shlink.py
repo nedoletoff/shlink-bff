@@ -29,21 +29,21 @@ async def _shlink_request(
     params: dict | None = None,
     json: Any = None,
 ) -> Any:
-    """Forward a request to the internal Shlink instance."""
     settings = get_settings()
     url = settings.shlink_internal_url.rstrip("/") + "/rest/v3" + path
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.request(
-            method,
-            url,
-            headers=_shlink_headers(user),
-            params=params,
-            json=json,
-        )
-    if 500 > resp.status_code >= 400:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.request(
+                method,
+                url,
+                headers=_shlink_headers(user),
+                params=params,
+                json=json,
+            )
+    except httpx.ConnectError as e:
+        raise HTTPException(status_code=502, detail="Shlink unavailable") from e
+    if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    if resp.status_code >= 500:
-        raise HTTPException(status=resp.status_code, detail=resp.text)
     return resp.json()
 
 
