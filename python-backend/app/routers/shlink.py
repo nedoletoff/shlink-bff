@@ -40,8 +40,10 @@ async def _shlink_request(
             params=params,
             json=json,
         )
-    if resp.status_code >= 400:
+    if 500 > resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    if resp.status_code >= 500:
+        raise HTTPException(status=resp.status_code, detail=resp.text)
     return resp.json()
 
 

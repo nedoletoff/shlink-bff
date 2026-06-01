@@ -27,7 +27,7 @@ class Identity:
 def _resolve_role(groups: list[str]) -> str:
     """Map OIDC groups to internal role (admin wins)."""
     for g in groups:
-        if g.lower() in ("admin", "admins"):
+        if g.lower() in ("admin", "admins", "shlink-admins"):
             return Role.ADMIN
     return Role.USER
 
