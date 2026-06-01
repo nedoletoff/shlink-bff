@@ -116,3 +116,16 @@ async def seed_user(
     session.add(user)
     await session.flush()
     return user
+
+
+@pytest.fixture
+def auth_headers():
+    """Headers simulating an authenticated regular user via oauth2-proxy."""
+    return dict(USER_HEADERS)
+
+
+@pytest.fixture
+def admin_headers():
+    """Headers simulating an authenticated admin user via oauth2-proxy."""
+    return dict(ADMIN_HEADERS)
+
