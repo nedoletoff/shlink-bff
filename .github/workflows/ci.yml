@@ -28,7 +28,7 @@ jobs:
         working-directory: python-backend
         env:
           DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
-                    SHLINK_INTERNAL_URL: 'http://localhost:8080'
+          SHLINK_INTERNAL_URL: 'http://localhost:8080'
         run: pytest tests/ -v --tb=short
 
   lint:
