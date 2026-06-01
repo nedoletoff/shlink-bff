@@ -1,4 +1,4 @@
-"""Async SQLAlchemy engine and session factory."""
+"""Async SQLAlchemy engine and session factory (MySQL / aiomysql)."""
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -9,17 +9,37 @@ _engine = None
 _session_factory = None
 
 
+def _build_mysql_url(raw: str) -> str:
+    """Normalise DATABASE_URL to use mysql+aiomysql:// scheme.
+
+    Accepts the following input formats:
+      mysql://...
+      mysql+aiomysql://...
+      mysql+pymysql://...
+    """
+    for prefix in (
+        "mysql+pymysql://",
+        "mysql+aiomysql://",
+        "mysql://",
+    ):
+        if raw.startswith(prefix):
+            return "mysql+aiomysql://" + raw[len(prefix):]
+    # If already correct or unknown scheme — return as-is
+    return raw
+
+
 def _get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        # asyncpg driver: replace postgresql:// with postgresql+asyncpg://
-        url = settings.database_url.replace(
-            "postgresql://", "postgresql+asyncpg://", 1
-        ).replace(
-            "postgres://", "postgresql+asyncpg://", 1
+        url = _build_mysql_url(settings.database_url)
+        _engine = create_async_engine(
+            url,
+            echo=False,
+            pool_pre_ping=True,
+            # aiomysql: keep connections alive
+            pool_recycle=3600,
         )
-        _engine = create_async_engine(url, echo=False, pool_pre_ping=True)
     return _engine
 
 
