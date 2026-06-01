@@ -1,4 +1,4 @@
-"""GET /api/me — current user profile."""
+"""GET /api/me - current user profile."""
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -14,6 +14,15 @@ async def get_me(
     user: Annotated[User, Depends(get_or_create_user)],
 ) -> UserResponse:
     """Return authenticated user profile with computed permissions."""
-    response = UserResponse.model_validate(user)
-    response.permissions = compute_permissions(user.role)
-    return response
+    return UserResponse.model_validate(
+        {
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "role": user.role,
+            "is_active": user.is_active,
+            "created_at": user.created_at,
+            "updated_at": user.updated_at,
+            "permissions": compute_permissions(user.role),
+        }
+    )
