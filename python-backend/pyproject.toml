@@ -8,16 +8,16 @@ version = "0.1.0"
 description = "Python FastAPI backend for shlink-bff (unified-backend rewrite, MySQL edition)"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
+    "fastapi>=0.136.1",
+    "uvicorn[standard]>=0.34.0",
     "sqlalchemy[asyncio]>=2.0.36",
     "aiomysql>=0.2.0",
     "PyMySQL>=1.1.0",
-    "alembic>=1.14.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     "httpx>=0.28.0",
-    "python-jose[cryptography]>=3.3.0",
+    # python-jose>=3.4.0 fixes CVE-2024-33664 (JWT bomb DoS)
+    "python-jose[cryptography]>=3.4.0",
     "structlog>=24.4.0",
 ]
 
@@ -27,9 +27,14 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "httpx>=0.28.0",
     "pytest-mock>=3.14.0",
+    # aiosqlite: required for in-memory SQLite in tests (conftest.py)
+    "aiosqlite>=0.20.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [tool.ruff]
 line-length = 100
