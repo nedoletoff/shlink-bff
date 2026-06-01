@@ -1,5 +1,9 @@
 """FastAPI application entry-point."""
+from __future__ import annotations
+
 import logging
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 import structlog
 from fastapi import FastAPI, Request, status
@@ -12,7 +16,6 @@ from app.routers import admin, health, me, shlink
 # ---------------------------------------------------------------------------
 # Structured logging
 # ---------------------------------------------------------------------------
-
 structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,
@@ -27,11 +30,25 @@ structlog.configure(
 
 log = structlog.get_logger()
 
+
+# ---------------------------------------------------------------------------
+# Lifespan (replaces deprecated @app.on_event)
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
+    settings = get_settings()
+    log.info(
+        "startup",
+        http_addr=settings.http_addr,
+        shlink_url=settings.shlink_internal_url,
+    )
+    yield
+    log.info("shutdown")
+
+
 # ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
-
-
 def create_app() -> FastAPI:
     settings = get_settings()
 
@@ -42,13 +59,17 @@ def create_app() -> FastAPI:
             "(Python rewrite of the Go unified-backend)"
         ),
         version="0.1.0",
+        lifespan=lifespan,
     )
 
-    # CORS — only internal traffic expected, but useful during development
+    # CORS: allow_origins=["*"] with allow_credentials=True is invalid per spec.
+    # Internal-only service — restrict to explicit origins from settings.
+    # For local dev without a real origin list, use allow_credentials=False with "*".
+    cors_origins = settings.cors_allowed_origins
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=cors_origins,
+        allow_credentials=bool(cors_origins and cors_origins != ["*"]),
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -70,17 +91,6 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "internal server error"},
-        )
-
-    # ---------------------------------------------------------------------------
-    # Startup / shutdown
-    # ---------------------------------------------------------------------------
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        log.info(
-            "startup",
-            http_addr=settings.http_addr,
-            shlink_url=settings.shlink_internal_url,
         )
 
     return app
