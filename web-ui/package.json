@@ -5,27 +5,33 @@
   "type": "module",
   "scripts": {
     "dev":     "vite",
-    "build":   "tsc && vite build",
+    "build":   "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "lint":    "tsc --noEmit"
+    "lint":    "eslint src --max-warnings 0",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "react":                  "^18.3.1",
-    "react-dom":              "^18.3.1",
-    "react-router-dom":       "^6.28.0",
-    "@mantine/core":          "^7.15.0",
-    "@mantine/hooks":         "^7.15.0",
-    "@mantine/notifications": "^7.15.0",
-    "@mantine/dates":         "^7.15.0",
-    "dayjs":                  "^1.11.13",
-    "recharts":               "^2.13.3",
-    "@tabler/icons-react":    "^3.26.0"
+    "react":                      "^19.1.0",
+    "react-dom":                  "^19.1.0",
+    "react-router-dom":           "^7.6.0",
+    "@mantine/core":              "^7.17.8",
+    "@mantine/hooks":             "^7.17.8",
+    "@mantine/notifications":     "^7.17.8",
+    "@mantine/dates":             "^7.17.8",
+    "dayjs":                      "^1.11.13",
+    "recharts":                   "^2.15.3",
+    "@tabler/icons-react":        "^3.44.0"
   },
   "devDependencies": {
-    "@types/react":           "^18.3.12",
-    "@types/react-dom":       "^18.3.1",
-    "@vitejs/plugin-react":   "^4.3.4",
-    "typescript":             "^5.7.2",
-    "vite":                   "^6.0.5"
+    "@types/react":               "^19.1.0",
+    "@types/react-dom":           "^19.1.0",
+    "@vitejs/plugin-react":       "^4.5.2",
+    "typescript":                 "^5.8.3",
+    "vite":                       "^8.0.2",
+    "eslint":                     "^9.28.0",
+    "@eslint/js":                 "^9.28.0",
+    "typescript-eslint":          "^8.33.1",
+    "eslint-plugin-react-hooks":  "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20"
   }
 }
