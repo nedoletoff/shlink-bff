@@ -1,4 +1,4 @@
-import { Modal, Text, Group, Button, Stack, Alert } from '@mantine/core';
+import { Modal, Group, Button, Stack, Alert } from '@mantine/core';
 import { IconAlertTriangle } from '@tabler/icons-react';
 
 interface Props {

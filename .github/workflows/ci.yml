@@ -82,11 +82,10 @@ jobs:
         working-directory: unified-backend
         run: go mod download
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          working-directory: unified-backend
-
+      working-directory: unified-backend
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
+        golangci-lint run ./...
   docker:
     name: Docker Build (Go)
     runs-on: ubuntu-latest
