@@ -8,26 +8,42 @@ version = "0.1.0"
 description = "Python FastAPI backend for shlink-bff (unified-backend rewrite, SQLite edition)"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.116.0",
-    "uvicorn[standard]>=0.34.0",
-    "sqlalchemy[asyncio]>=2.0.36",
-    "aiosqlite>=0.20.0",
-    "pydantic>=2.10.0",
-    "pydantic-settings>=2.6.0",
+    # Web framework — latest stable 0.136.3 (2026-05)
+    "fastapi>=0.130.0",
+    # ASGI server — latest stable 0.48.0 (2026-05)
+    "uvicorn[standard]>=0.47.0",
+    # ORM — latest stable 2.0.50 (2026-05); 2.1.x still beta, skip
+    "sqlalchemy[asyncio]>=2.0.40",
+    # Async SQLite driver — latest stable 0.21.0 (2025-02)
+    "aiosqlite>=0.21.0",
+    # Pydantic v2 — latest stable 2.13.4 (2026-05); v3 does NOT exist yet
+    "pydantic>=2.11.0",
+    # Pydantic settings — latest stable 2.14.1 (2026-05)
+    "pydantic-settings>=2.7.0",
+    # HTTP client — latest stable 0.28.1 (2024-12)
     "httpx>=0.28.0",
-    # python-jose CVE-2024-33664 fix: requires >=3.4.0
-    "python-jose[cryptography]>=3.4.0",
-    "structlog>=24.4.0",
+    # JOSE — latest stable 3.5.0 (2025-05); CVE-2024-33664 fixed in 3.4.0
+    # CVE-2024-33663 fixed in 3.3.1; always require 3.5.0+
+    "python-jose[cryptography]>=3.5.0",
+    # Structured logging — latest stable 25.4.0 (2025-06)
+    "structlog>=25.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
+    # Test runner — latest stable 9.0.3 (2026-04)
+    "pytest>=9.0.0",
+    # Async test support — latest stable 1.1.0 (2025-07)
+    # asyncio_mode = "auto" still supported in 1.x
+    "pytest-asyncio>=1.0.0",
+    # HTTP client for tests (same as runtime dep, pinned here explicitly)
     "httpx>=0.28.0",
-    "pytest-mock>=3.14.0",
-    "ruff>=0.8.0",
-    "mypy>=1.13.0",
+    # Mock library — latest stable 3.15.1 (2025-08)
+    "pytest-mock>=3.15.0",
+    # Linter/formatter — latest stable 0.15.8 (2026-05)
+    "ruff>=0.15.0",
+    # Type checker — latest stable 2.1.0 (2026-05)
+    "mypy>=2.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
