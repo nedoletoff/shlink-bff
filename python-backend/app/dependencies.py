@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import AuditLog, AuditResult, Role, User
+from app.models import AuditLog, Role, User
 
 
 @dataclasses.dataclass

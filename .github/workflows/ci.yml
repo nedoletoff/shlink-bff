@@ -28,9 +28,7 @@ jobs:
         working-directory: python-backend
         env:
           DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
-          SECRET_KEY: test-secret-key-for-ci
-          SHLINK_API_URL: 'http://localhost:8080'
-          SHLINK_API_KEY: test-key
+                    SHLINK_INTERNAL_URL: 'http://localhost:8080'
         run: pytest tests/ -v --tb=short
 
   lint:
