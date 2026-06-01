@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
+from app.database import init_db
 from app.routers import admin, health, me, shlink
 
 # ---------------------------------------------------------------------------
@@ -27,9 +28,7 @@ structlog.configure(
     context_class=dict,
     logger_factory=structlog.PrintLoggerFactory(),
 )
-
 log = structlog.get_logger()
-
 
 # ---------------------------------------------------------------------------
 # Lifespan (replaces deprecated @app.on_event)
@@ -37,6 +36,8 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     settings = get_settings()
+    # Initialise DB schema (creates tables if not present — idempotent)
+    await init_db()
     log.info(
         "startup",
         http_addr=settings.http_addr,
@@ -45,13 +46,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     yield
     log.info("shutdown")
 
-
 # ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
 def create_app() -> FastAPI:
     settings = get_settings()
-
     app = FastAPI(
         title="Shlink BFF — Python/FastAPI Backend",
         description=(
@@ -61,10 +60,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
-
     # CORS: allow_origins=["*"] with allow_credentials=True is invalid per spec.
     # Internal-only service — restrict to explicit origins from settings.
-    # For local dev without a real origin list, use allow_credentials=False with "*".
     cors_origins = settings.cors_allowed_origins
     app.add_middleware(
         CORSMiddleware,
