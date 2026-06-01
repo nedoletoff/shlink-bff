@@ -1,4 +1,5 @@
 """Shlink API proxy with per-user isolation (short-urls & tags)."""
+
 from __future__ import annotations
 
 from typing import Annotated, Any
@@ -48,6 +49,7 @@ async def _shlink_request(
 # Short-URLs
 # ---------------------------------------------------------------------------
 
+
 @router.get("/short-urls")
 async def list_short_urls(
     user: Annotated[User, Depends(get_or_create_user)],
@@ -62,7 +64,7 @@ async def list_short_urls(
     if search_term:
         params["searchTerm"] = search_term
     if tags:
-        params["tags[]" ] = tags
+        params["tags[]"] = tags
     # Apply user slug-prefix filter if feature enabled
     if settings.feature_user_slug_prefix and user.slug_prefix:
         params["searchTerm"] = (params.get("searchTerm") or "") + user.slug_prefix
@@ -109,6 +111,7 @@ async def delete_short_url(
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
+
 
 @router.get("/tags")
 async def list_tags(

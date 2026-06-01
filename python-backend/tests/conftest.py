@@ -5,6 +5,7 @@ Strategy: all DB interaction is replaced by in-memory SQLite
 MySQL instance.  HTTP calls to Shlink API are intercepted with
 httpx.AsyncClient + a custom ASGI transport.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -68,6 +69,7 @@ USER_HEADERS = {
 # FastAPI test client
 # ---------------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession):
     """Return an AsyncClient wired to the FastAPI app.
@@ -83,15 +85,14 @@ async def client(db_session: AsyncSession):
 
     app.dependency_overrides[get_db] = _override_get_db
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
 # ---------------------------------------------------------------------------
 # Helper: pre-seed a user row
 # ---------------------------------------------------------------------------
+
 
 async def seed_user(
     session: AsyncSession,
@@ -126,4 +127,3 @@ def auth_headers():
 def admin_headers():
     """Headers simulating an authenticated admin user via oauth2-proxy."""
     return dict(ADMIN_HEADERS)
-

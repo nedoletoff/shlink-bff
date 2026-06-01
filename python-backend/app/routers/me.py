@@ -1,4 +1,5 @@
 """GET /api/me - current user profile."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends

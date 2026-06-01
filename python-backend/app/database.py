@@ -1,4 +1,5 @@
 """Async SQLAlchemy engine and session factory (SQLite / aiosqlite)."""
+
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -16,7 +17,7 @@ def _get_engine():
         url = settings.database_url
         # Normalise plain sqlite:// -> sqlite+aiosqlite://
         if url.startswith("sqlite://") and "+" not in url.split(":")[0]:
-            url = "sqlite+aiosqlite" + url[len("sqlite"):]
+            url = "sqlite+aiosqlite" + url[len("sqlite") :]
         _engine = create_async_engine(
             url,
             echo=False,
@@ -46,5 +47,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def init_db() -> None:
     """Create all tables (used in lifespan startup)."""
     from app.models import Base  # noqa: PLC0415
+
     async with _get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

@@ -1,4 +1,5 @@
 """FastAPI application entry-point."""
+
 from __future__ import annotations
 
 import logging
@@ -30,6 +31,7 @@ structlog.configure(
 )
 log = structlog.get_logger()
 
+
 # ---------------------------------------------------------------------------
 # Lifespan (replaces deprecated @app.on_event)
 # ---------------------------------------------------------------------------
@@ -45,6 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     )
     yield
     log.info("shutdown")
+
 
 # ---------------------------------------------------------------------------
 # Application factory

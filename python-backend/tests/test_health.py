@@ -1,4 +1,5 @@
 """Tests for GET /healthz endpoint."""
+
 import pytest
 
 

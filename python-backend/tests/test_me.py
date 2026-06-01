@@ -1,4 +1,5 @@
 """Tests for GET /api/me endpoint."""
+
 import pytest
 
 

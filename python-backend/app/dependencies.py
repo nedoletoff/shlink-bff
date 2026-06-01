@@ -1,4 +1,5 @@
 """FastAPI dependencies: identity extraction and RBAC."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -15,6 +16,7 @@ from app.models import AuditLog, Role, User
 @dataclasses.dataclass
 class Identity:
     """Parsed identity from oauth2-proxy headers."""
+
     sub: str
     email: str
     username: str
@@ -36,9 +38,7 @@ async def get_identity(
     x_auth_request_preferred_username: Annotated[
         str | None, Header(alias="X-Auth-Request-Preferred-Username")
     ] = None,
-    x_auth_request_groups: Annotated[
-        str | None, Header(alias="X-Auth-Request-Groups")
-    ] = None,
+    x_auth_request_groups: Annotated[str | None, Header(alias="X-Auth-Request-Groups")] = None,
 ) -> Identity:
     """Extract identity from oauth2-proxy injected headers."""
     if not x_auth_request_user:

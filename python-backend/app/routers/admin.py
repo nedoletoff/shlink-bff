@@ -1,4 +1,5 @@
 """Admin-only endpoints: user management and audit logs."""
+
 from __future__ import annotations
 
 from typing import Annotated, Any
@@ -35,6 +36,7 @@ def _user_response(u: User) -> UserResponse:
 # ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
+
 
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
@@ -80,7 +82,11 @@ async def update_user(
     await db.commit()
     await db.refresh(user)
     await write_audit_log(
-        db, admin, "update_user", sub, "success",
+        db,
+        admin,
+        "update_user",
+        sub,
+        "success",
         body.model_dump(exclude_none=True),
     )
     return _user_response(user)
@@ -145,6 +151,7 @@ async def get_user_links(
 # ---------------------------------------------------------------------------
 # Audit logs
 # ---------------------------------------------------------------------------
+
 
 @router.get("/logs", response_model=list[AuditLogResponse])
 async def list_audit_logs(

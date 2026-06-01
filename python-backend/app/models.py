@@ -1,4 +1,5 @@
 """SQLAlchemy ORM models and Pydantic response schemas."""
+
 from __future__ import annotations
 
 import uuid
@@ -75,9 +76,7 @@ class User(Base):
     slug_prefix: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), onupdate=func.now()
-    )
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
     audit_logs: Mapped[list[AuditLog]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

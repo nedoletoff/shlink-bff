@@ -1,4 +1,5 @@
 """Tests for /api/admin/* endpoints (admin-only RBAC)."""
+
 import pytest
 
 

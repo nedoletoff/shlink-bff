@@ -1,4 +1,5 @@
 """GET /healthz – liveness + DB readiness probe."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
