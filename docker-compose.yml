@@ -1,12 +1,12 @@
 # Shlink BFF — docker-compose
 #
 # Архитектура:
-#   Browser → nginx → oauth2-proxy → python-backend → shlink-api
+#   Browser -> nginx -> oauth2-proxy -> python-backend -> shlink-api
 #
 # Перед запуском:
 #   cp .env.example .env && vi .env
-#   Скопируйте nginx/nginx.conf.example → nginx/nginx.conf
-#   Скопируйте oauth2-proxy/shlink.cfg.example → oauth2-proxy/shlink.cfg
+#   Скопируйте nginx/nginx.conf.example -> nginx/nginx.conf
+#   Скопируйте oauth2-proxy/shlink.cfg.example -> oauth2-proxy/shlink.cfg
 #   Положите SSL-сертификат в nginx/ssl/cert.pem
 
 x-logging: &default-logging
@@ -38,48 +38,17 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # -- MySQL --
-  mysql:
-    image: mysql:8.4
-    container_name: mysql-shlink
-    environment:
-      MYSQL_DATABASE:      ${SHLINK_DB_NAME}
-      MYSQL_USER:          ${SHLINK_DB_USER}
-      MYSQL_PASSWORD:      ${SHLINK_DB_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${SHLINK_DB_ROOT_PASSWORD}
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./python-backend/migrations/001_init_schema.sql:/docker-entrypoint-initdb.d/001_init_schema.sql:ro
-    networks:
-      - internal
-    expose:
-      - "3306"
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "${SHLINK_DB_USER}", "-p${SHLINK_DB_PASSWORD}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    logging: *default-logging
-    restart: unless-stopped
-
   # -- Shlink API -- внутренний сервис, без публичных портов --
+  # Использует встроенный SQLite (DB_DRIVER=sqlite)
   shlink-api:
     image: shlinkio/shlink:5.0.2
     container_name: shlink-api
-    depends_on:
-      mysql:
-        condition: service_healthy
     environment:
-      DB_DRIVER:        mysql
-      DB_HOST:          mysql
-      DB_PORT:          "3306"
-      DB_NAME:          ${SHLINK_DB_NAME}
-      DB_USER:          ${SHLINK_DB_USER}
-      DB_PASSWORD:      ${SHLINK_DB_PASSWORD}
-      DEFAULT_DOMAIN:   ${DOMAIN_SHORT}
+      DB_DRIVER: sqlite
+      DEFAULT_DOMAIN: ${DOMAIN_SHORT}
       IS_HTTPS_ENABLED: "true"
-      INITIAL_API_KEY:  ${ADMIN_SHLINK_API_KEY}
-      TRUSTED_PROXIES:  nginx
+      INITIAL_API_KEY: ${ADMIN_SHLINK_API_KEY}
+      TRUSTED_PROXIES: nginx
     volumes:
       - shlink_data:/data
     networks:
@@ -94,27 +63,28 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # -- Python Backend (FastAPI) --
+  # -- Python Backend (FastAPI + SQLite) --
   python-backend:
     build:
       context: ./python-backend
       dockerfile: Dockerfile
     container_name: python-backend
     environment:
-      HTTP_HOST:            "0.0.0.0"
-      HTTP_PORT:            "8080"
-      DATABASE_URL:         "mysql+aiomysql://${SHLINK_DB_USER}:${SHLINK_DB_PASSWORD}@mysql:3306/${SHLINK_DB_NAME}"
-      SHLINK_INTERNAL_URL:  "http://shlink-api:8080"
-      SHLINK_API_KEY:       ${ADMIN_SHLINK_API_KEY}
-      FEATURE_USER_SLUG_PREFIX:     ${FEATURE_USER_SLUG_PREFIX:-false}
+      HTTP_HOST: "0.0.0.0"
+      HTTP_PORT: "8080"
+      # SQLite file inside container; persist via volume
+      DATABASE_URL: "sqlite+aiosqlite:////data/shlink_bff.db"
+      SHLINK_INTERNAL_URL: "http://shlink-api:8080"
+      SHLINK_API_KEY: ${ADMIN_SHLINK_API_KEY}
+      FEATURE_USER_SLUG_PREFIX: ${FEATURE_USER_SLUG_PREFIX:-false}
       FEATURE_USER_TAG_INTERNAL_ID: ${FEATURE_USER_TAG_INTERNAL_ID:-false}
+    volumes:
+      - python_backend_data:/data
     networks:
       - internal
     expose:
       - "8080"
     depends_on:
-      mysql:
-        condition: service_healthy
       shlink-api:
         condition: service_healthy
     healthcheck:
@@ -164,8 +134,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  mysql_data:
   shlink_data:
+  python_backend_data:
 
 networks:
   internal:
