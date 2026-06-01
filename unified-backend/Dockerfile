@@ -3,11 +3,8 @@ FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
 WORKDIR /build
 
-# Кешируем зависимости отдельным слоем
-COPY go.mod go.sum ./
-RUN go mod download
-
 COPY . .
+RUN go mod tidy
 
 # ARG TARGETARCH позволяет собирать под linux/arm64 через --platform
 ARG TARGETARCH=amd64

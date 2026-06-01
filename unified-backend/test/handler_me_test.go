@@ -12,7 +12,7 @@ import (
 	"unified-backend/internal/middleware"
 
 	"github.com/google/uuid"
-}
+)
 
 // TestMeHandler_ReturnsCorrectFields — /api/me не возвращает shlink_api_key
 func TestMeHandler_ReturnsCorrectFields(t *testing.T) {
