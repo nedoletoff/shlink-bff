@@ -5,7 +5,7 @@ WORKDIR /build
 
 # Кешируем зависимости отдельным слоем
 COPY go.mod go.sum ./
-RUN go mod tidy
+RUN go mod download
 
 COPY . .
 

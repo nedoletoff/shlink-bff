@@ -1,7 +1,6 @@
 package test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,20 +19,6 @@ func (h *stubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// buildRequestWithIdentity создаёт http.Request с Identity в контексте
-func buildRequestWithIdentity(role string) *http.Request {
-	r := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
-	ctx := context.WithValue(r.Context(), ctxKey("sub"), "test-sub")
-	ctx = context.WithValue(ctx, ctxKey("email"), "test@example.com")
-	ctx = context.WithValue(ctx, ctxKey("username"), "testuser")
-	ctx = context.WithValue(ctx, ctxKey("role"), role)
-	ctx = context.WithValue(ctx, ctxKey("groups"), []string{})
-	return r.WithContext(ctx)
-}
-
-type ctxKey string
-
-// TestExtractIdentity_MissingHeader — при отсутствии X-Auth-Request-User возвращает 401
 func TestExtractIdentity_MissingHeader(t *testing.T) {
 	stub := &stubHandler{}
 	handler := middleware.ExtractIdentity(stub)

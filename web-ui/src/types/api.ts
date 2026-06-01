@@ -106,3 +106,14 @@ export interface AuditLogsResponse {
   logs:  AuditLog[];
   total: number;
 }
+
+// Admin Users
+export interface AdminUser {
+  sub:        string;
+  username:   string;
+  email:      string;
+  role:       string;
+  slugPrefix: string | null;
+  status:     string;
+  hasApiKey:  boolean;
+}

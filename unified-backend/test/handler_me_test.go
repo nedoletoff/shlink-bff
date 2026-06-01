@@ -1,7 +1,6 @@
 package test
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,12 +12,6 @@ import (
 	"unified-backend/internal/middleware"
 
 	"github.com/google/uuid"
-)
-
-func buildUserContext(user *domain.User) context.Context {
-	ctx := context.Background()
-	ctx = middleware.WithUser(ctx, user)
-	return ctx
 }
 
 // TestMeHandler_ReturnsCorrectFields — /api/me не возвращает shlink_api_key
