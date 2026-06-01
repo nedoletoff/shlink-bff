@@ -10,8 +10,11 @@ WORKDIR /build
 # Install build tools
 RUN pip install --no-cache-dir hatchling pip --upgrade
 
-# Copy project manifest and install deps into /install
+# Copy project manifest AND application source so hatchling can build the wheel
 COPY pyproject.toml ./
+COPY app/ ./app/
+
+# Build and install into /install prefix
 RUN pip install --no-cache-dir --prefix=/install .
 
 # ---------------------------------------------------------------------------
