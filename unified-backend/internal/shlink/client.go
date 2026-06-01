@@ -146,10 +146,12 @@ func (c *Client) DeleteTags(ctx context.Context, apiKey string, tags []string) e
 
 func (c *Client) GetVisitsSummary(ctx context.Context, apiKey string) (map[string]any, error) {
 	url := c.baseURL + "/rest/v3/visits"
-	return doRequest[map[string]any](ctx, c, http.MethodGet, url, apiKey, nil)
+	res, err := doRequest[map[string]any](ctx, c, http.MethodGet, url, apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	return *res, nil
 }
-
-// GetHealth calls the canonical /rest/health endpoint (no version prefix, works in all Shlink versions).
 func (c *Client) GetHealth(ctx context.Context) (map[string]any, error) {
 	url := c.baseURL + "/rest/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
