@@ -15,10 +15,10 @@ async def test_me_returns_200_with_valid_token(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_me_body_contains_sub(client, auth_headers):
+async def test_me_body_contains_id(client, auth_headers):
     response = await client.get("/api/me", headers=auth_headers)
     data = response.json()
-    assert "sub" in data
+    assert "id" in data
 
 
 @pytest.mark.asyncio
@@ -29,11 +29,18 @@ async def test_me_body_contains_email(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_me_body_contains_roles(client, auth_headers):
+async def test_me_body_contains_permissions(client, auth_headers):
     response = await client.get("/api/me", headers=auth_headers)
     data = response.json()
-    assert "roles" in data
-    assert isinstance(data["roles"], list)
+    assert "permissions" in data
+    assert isinstance(data["permissions"], list)
+
+
+@pytest.mark.asyncio
+async def test_me_body_contains_role(client, auth_headers):
+    response = await client.get("/api/me", headers=auth_headers)
+    data = response.json()
+    assert "role" in data
 
 
 @pytest.mark.asyncio
