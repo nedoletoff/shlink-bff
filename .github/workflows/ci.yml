@@ -97,6 +97,7 @@ jobs:
       - name: Build Docker image
         run: docker build -t shlink-bff-go:ci ./unified-backend
 
+  
   web-ui:
     name: Build & Lint (Web UI)
     runs-on: ubuntu-latest
@@ -111,7 +112,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-              - name: Install dependencies
+
+      - name: Install dependencies
         run: npm install
 
       - name: Lint
