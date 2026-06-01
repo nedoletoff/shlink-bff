@@ -87,3 +87,22 @@ export interface DashboardResponse {
   topTags:       TagCount[];
   clicksOverTime: ClickPoint[];
 }
+
+
+// Audit Logs
+export interface AuditLog {
+  id:         number;
+  createdAt:  string;
+  action:     string;
+  username:   string | null;
+  userSub:    string | null;
+  result:     string;
+  role:       string | null;
+  resource:   string | null;
+  ipAddress:  string | null;
+}
+
+export interface AuditLogsResponse {
+  logs:  AuditLog[];
+  total: number;
+}

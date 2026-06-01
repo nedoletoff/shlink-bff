@@ -60,6 +60,7 @@ export function AuditLogs() {
       .finally(() => setLoading(false));
   };
 
+// eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchLogs(); }, [page, username, action, result, dateFrom, dateTo]);
 
   const resultColor = (r: string) =>
