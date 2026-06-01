@@ -76,8 +76,8 @@ class User(Base):
     )
 
         audit_logs: Mapped[list[AuditLog]] = relationship(
-                    back_populates="user", cascade="all, delete-orphan"
-                        )
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class UserTag(Base):
