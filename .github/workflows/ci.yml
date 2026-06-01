@@ -12,15 +12,16 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      mysql:
-        image: mysql:8
+      postgres:
+        image: postgres:16-alpine
         env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: shlink_bff_test
+          POSTGRES_DB: shlink_bff_test
+          POSTGRES_USER: bff
+          POSTGRES_PASSWORD: bff_test_password
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping"
+          --health-cmd="pg_isready -U bff -d shlink_bff_test"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -32,7 +33,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
           cache-dependency-path: unified-backend/go.sum
 
       - name: Download dependencies
@@ -50,16 +51,17 @@ jobs:
       - name: Run migrations
         working-directory: unified-backend
         env:
-          DB_DSN: root:root@tcp(127.0.0.1:3306)/shlink_bff_test?parseTime=true
+          PGPASSWORD: bff_test_password
         run: |
           for f in migrations/*.sql; do
-            mysql -h 127.0.0.1 -u root -proot shlink_bff_test < "$f"
+            psql -h 127.0.0.1 -U bff -d shlink_bff_test -f "$f"
           done
 
       - name: Test
         working-directory: unified-backend
         env:
-          DB_DSN: root:root@tcp(127.0.0.1:3306)/shlink_bff_test?parseTime=true
+          DATABASE_URL: postgres://bff:bff_test_password@127.0.0.1:5432/shlink_bff_test?sslmode=disable
+          SHLINK_INTERNAL_URL: http://localhost:8080
         run: go test -v -race ./...
 
   lint:
@@ -72,7 +74,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
           cache-dependency-path: unified-backend/go.sum
 
       - name: golangci-lint
