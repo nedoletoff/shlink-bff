@@ -38,7 +38,7 @@ jobs:
 
       - name: Download dependencies
         working-directory: unified-backend
-        run: go mod download
+        run: go mod tidy
 
       - name: Vet
         working-directory: unified-backend
@@ -79,7 +79,7 @@ jobs:
 
       - name: Download dependencies
         working-directory: unified-backend
-        run: go mod download
+        run: go mod tidy
 
       - name: Install golangci-lint
         run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin latest
