@@ -1,4 +1,4 @@
-name: CI — Go Backend
+name: CI - Go Backend
 
 on:
   push:
@@ -77,15 +77,17 @@ jobs:
           go-version: '1.24'
           cache-dependency-path: unified-backend/go.sum
 
-
       - name: Download dependencies
         working-directory: unified-backend
         run: go mod download
-      - name: golangci-lint
-      working-directory: unified-backend
-      run: |
-        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
-        golangci-lint run ./...
+
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin latest
+
+      - name: Run golangci-lint
+        working-directory: unified-backend
+        run: golangci-lint run ./...
+
   docker:
     name: Docker Build (Go)
     runs-on: ubuntu-latest
@@ -96,7 +98,6 @@ jobs:
       - name: Build Docker image
         run: docker build -t shlink-bff-go:ci ./unified-backend
 
-  
   web-ui:
     name: Build & Lint (Web UI)
     runs-on: ubuntu-latest
