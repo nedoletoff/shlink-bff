@@ -1,9 +1,9 @@
 """SQLAlchemy ORM models and Pydantic response schemas."""
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from enum import StrEnum
-import uuid
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import (
@@ -75,7 +75,9 @@ class User(Base):
         server_default=func.now(), onupdate=func.now()
     )
 
-    audit_logs: Mapped[list[AuditLog]] = relationship(back_populates="user", cascade="all, delete-orphan")
+        audit_logs: Mapped[list[AuditLog]] = relationship(
+                    back_populates="user", cascade="all, delete-orphan"
+                        )
 
 
 class UserTag(Base):
@@ -86,7 +88,9 @@ class UserTag(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+        user_id: Mapped[str] = mapped_column(
+                    String(36), ForeignKey("users.id"), ondelete="CASCADE", nullable=False
+                        )
     tag_name: Mapped[str] = mapped_column(String(255), nullable=False)
     internal_id: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -107,7 +111,9 @@ class AuditLog(Base):
     user_agent: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+        user_id: Mapped[str | None] = mapped_column(
+                    String(36), ForeignKey("users.id"), ondelete="SET NULL"
+                        )
     user: Mapped[User | None] = relationship(back_populates="audit_logs")
 
 

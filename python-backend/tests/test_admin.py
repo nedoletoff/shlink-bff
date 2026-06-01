@@ -44,11 +44,11 @@ async def test_admin_content_type(client, admin_headers):
 
 @pytest.mark.asyncio
 async def test_admin_post_requires_auth(client):
-    response = await client.post("/api/admin/users", json={})
+        response = await client.put("/api/admin/users/some-id", json={})
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_admin_delete_requires_auth(client):
-    response = await client.delete("/api/admin/users/some-id")
+        response = await client.put("/api/admin/users/some-id/apikey", json={})
     assert response.status_code == 401

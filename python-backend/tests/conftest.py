@@ -41,9 +41,8 @@ async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
     """Wrap every test in a savepoint that is rolled back afterwards."""
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with factory() as session:
-        async with session.begin():
-            yield session
-            await session.rollback()
+        yield session
+        await session.rollback()
 
 
 # ---------------------------------------------------------------------------
