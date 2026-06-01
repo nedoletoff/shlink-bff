@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     # Server
     http_addr: str = ":8080"
 
-    # Database
-    database_url: str
+    # Database — defaults to a local SQLite file for zero-config development
+    database_url: str = "sqlite+aiosqlite:///./shlink_bff.db"
 
     # Shlink internal API
     shlink_internal_url: str
@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Feature flags
     feature_user_slug_prefix: bool = False
     feature_user_tag_internal_id: bool = False
+
+    # Optional: CORS allowed origins (comma-separated or JSON list)
+    cors_allowed_origins: list[str] = ["*"]
 
     @property
     def host(self) -> str:
