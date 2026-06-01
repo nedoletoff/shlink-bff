@@ -31,10 +31,10 @@ async def test_shlink_proxy_forbidden_without_role(client):
 @pytest.mark.asyncio
 async def test_shlink_proxy_post_requires_auth(client):
     response = await client.post("/api/shlink/short-urls", json={})
-    assert response.status_code == (401, 502)
+    assert response.status_code in (401, 502)
 
 
 @pytest.mark.asyncio
 async def test_shlink_proxy_delete_requires_auth(client):
     response = await client.delete("/api/shlink/short-urls/abc")
-    assert response.status_code == (401, 502)
+    assert response.status_code in (401, 502)
