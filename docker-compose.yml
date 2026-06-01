@@ -1,12 +1,12 @@
 # Shlink BFF — docker-compose
 #
 # Архитектура:
-#   Browser → nginx → oauth2-proxy → unified-backend → shlink-api
+#   Browser -> nginx -> oauth2-proxy -> python-backend -> shlink-api
 #
 # Перед запуском:
 #   cp .env.example .env && vi .env
-#   Скопируйте nginx/nginx.conf.example → nginx/nginx.conf
-#   Скопируйте oauth2-proxy/shlink.cfg.example → oauth2-proxy/shlink.cfg
+#   Скопируйте nginx/nginx.conf.example -> nginx/nginx.conf
+#   Скопируйте oauth2-proxy/shlink.cfg.example -> oauth2-proxy/shlink.cfg
 #   Положите SSL-сертификат в nginx/ssl/cert.pem
 
 x-logging: &default-logging
@@ -16,7 +16,6 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-
   # -- Nginx -- точка входа --
   nginx:
     image: nginx:1.30-alpine
@@ -30,7 +29,7 @@ services:
     networks:
       - internal
     depends_on:
-      unified-backend:
+      python-backend:
         condition: service_healthy
       web-ui:
         condition: service_healthy
@@ -39,47 +38,17 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # -- PostgreSQL --
-  postgres:
-    image: postgres:17-alpine
-    container_name: postgres-shlink
-    environment:
-      POSTGRES_DB:       ${SHLINK_DB_NAME}
-      POSTGRES_USER:     ${SHLINK_DB_USER}
-      POSTGRES_PASSWORD: ${SHLINK_DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./unified-backend/migrations/001_init_schema.sql:/docker-entrypoint-initdb.d/001_init_schema.sql:ro
-    networks:
-      - internal
-    expose:
-      - "5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${SHLINK_DB_USER} -d ${SHLINK_DB_NAME}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    logging: *default-logging
-    restart: unless-stopped
-
   # -- Shlink API -- внутренний сервис, без публичных портов --
+  # Использует встроенный SQLite (DB_DRIVER=sqlite)
   shlink-api:
     image: shlinkio/shlink:5.0.2
     container_name: shlink-api
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      DB_DRIVER:        postgres
-      DB_HOST:          postgres
-      DB_NAME:          ${SHLINK_DB_NAME}
-      DB_USER:          ${SHLINK_DB_USER}
-      DB_PASSWORD:      ${SHLINK_DB_PASSWORD}
-      DEFAULT_DOMAIN:   ${DOMAIN_SHORT}
+      DB_DRIVER: sqlite
+      DEFAULT_DOMAIN: ${DOMAIN_SHORT}
       IS_HTTPS_ENABLED: "true"
-      INITIAL_API_KEY:  ${ADMIN_SHLINK_API_KEY}
-      # v5: auto-detect trusted proxies removed; nginx is the single proxy in front
-      TRUSTED_PROXIES:  nginx
+      INITIAL_API_KEY: ${ADMIN_SHLINK_API_KEY}
+      TRUSTED_PROXIES: nginx
     volumes:
       - shlink_data:/data
     networks:
@@ -94,29 +63,32 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # -- Unified Backend (Go) --
-  unified-backend:
+  # -- Python Backend (FastAPI + SQLite) --
+  python-backend:
     build:
-      context: ./unified-backend
+      context: ./python-backend
       dockerfile: Dockerfile
-    container_name: unified-backend
+    container_name: python-backend
     environment:
-      HTTP_ADDR:                  ":8080"
-      DATABASE_URL:               "postgres://${SHLINK_DB_USER}:${SHLINK_DB_PASSWORD}@postgres:5432/${SHLINK_DB_NAME}?sslmode=disable"
-      SHLINK_INTERNAL_URL:        "http://shlink-api:8080"
-      FEATURE_USER_SLUG_PREFIX:   ${FEATURE_USER_SLUG_PREFIX:-false}
+      HTTP_HOST: "0.0.0.0"
+      HTTP_PORT: "8080"
+      # SQLite file inside container; persist via volume
+      DATABASE_URL: "sqlite+aiosqlite:////data/shlink_bff.db"
+      SHLINK_INTERNAL_URL: "http://shlink-api:8080"
+      SHLINK_API_KEY: ${ADMIN_SHLINK_API_KEY}
+      FEATURE_USER_SLUG_PREFIX: ${FEATURE_USER_SLUG_PREFIX:-false}
       FEATURE_USER_TAG_INTERNAL_ID: ${FEATURE_USER_TAG_INTERNAL_ID:-false}
+    volumes:
+      - python_backend_data:/data
     networks:
       - internal
     expose:
       - "8080"
     depends_on:
-      postgres:
-        condition: service_healthy
       shlink-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -141,7 +113,7 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  # -- oauth2-proxy для shlink-create --
+  # -- oauth2-proxy --
   # SECURITY: зафиксирован тег, не использовать latest
   oauth2-proxy-shlink:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.2
@@ -162,8 +134,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
   shlink_data:
+  python_backend_data:
 
 networks:
   internal:
