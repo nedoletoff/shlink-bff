@@ -75,7 +75,7 @@ class User(Base):
         server_default=func.now(), onupdate=func.now()
     )
 
-        audit_logs: Mapped[list[AuditLog]] = relationship(
+        t_logs: Mapped[list[AuditLog]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
