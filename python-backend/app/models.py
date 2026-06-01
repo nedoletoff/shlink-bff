@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models and Pydantic response schemas (MySQL edition)."""
+"""SQLAlchemy ORM models and Pydantic response schemas."""
 from __future__ import annotations
 
 import uuid
@@ -8,8 +8,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import (
-    CHAR,
-    JSON,
     BigInteger,
     CheckConstraint,
     ForeignKey,
@@ -19,6 +17,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -50,7 +49,6 @@ class Base(DeclarativeBase):
 
 
 def _new_uuid() -> str:
-    """Generate a UUID string (MySQL stores UUIDs as CHAR(36))."""
     return str(uuid.uuid4())
 
 
@@ -64,11 +62,11 @@ class User(Base):
         Index("idx_users_status", "status"),
     )
 
-    # MySQL: UUID stored as CHAR(36)
-    id: Mapped[str] = mapped_column(CHAR(36), primary_key=True, default=_new_uuid)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
     sub: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     username: Mapped[str] = mapped_column(Text, nullable=False)
     email: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
     shlink_api_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
     slug_prefix: Mapped[str | None] = mapped_column(String(128))
@@ -78,25 +76,21 @@ class User(Base):
         server_default=func.now(), onupdate=func.now()
     )
 
-    tags: Mapped[list[UserTag]] = relationship(back_populates="user", cascade="all, delete")
+    audit_logs: Mapped[list[AuditLog]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class UserTag(Base):
     __tablename__ = "user_tags"
     __table_args__ = (
+        Index("uq_user_tags_user_tag", "user_id", "tag_name", unique=True),
         Index("idx_user_tags_user_id", "user_id"),
-        Index("idx_user_tags_internal_id", "internal_id"),
     )
 
-    id: Mapped[str] = mapped_column(CHAR(36), primary_key=True, default=_new_uuid)
-    user_id: Mapped[str] = mapped_column(
-        CHAR(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     tag_name: Mapped[str] = mapped_column(String(255), nullable=False)
     internal_id: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-    user: Mapped[User] = relationship(back_populates="tags")
 
 
 class AuditLog(Base):
@@ -108,59 +102,31 @@ class AuditLog(Base):
     role: Mapped[str | None] = mapped_column(Text)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     resource: Mapped[str | None] = mapped_column(Text)
-    result: Mapped[str] = mapped_column(
-        String(16),
-        CheckConstraint("result IN ('success', 'denied', 'error')"),
-        nullable=False,
-    )
-    # MySQL: JSON column (available since MySQL 5.7.8)
-    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    result: Mapped[str] = mapped_column(String(16), nullable=False)
+    details: Mapped[str | None] = mapped_column(Text)  # JSON stored as text
     ip_address: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+    user: Mapped[User | None] = relationship(back_populates="audit_logs")
 
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
 
-class Permissions(BaseModel):
-    can_create_short_url: bool
-    can_edit_own_links: bool
-    can_delete_own_links: bool
-    can_manage_own_tags: bool
-    can_view_audit_logs: bool
-    can_manage_users: bool
-
-    model_config = ConfigDict(populate_by_name=True)
-
-
-def compute_permissions(role: str) -> Permissions:
-    is_admin = role == Role.ADMIN
-    return Permissions(
-        can_create_short_url=True,
-        can_edit_own_links=True,
-        can_delete_own_links=True,
-        can_manage_own_tags=True,
-        can_view_audit_logs=is_admin,
-        can_manage_users=is_admin,
-    )
-
-
 class UserResponse(BaseModel):
-    """Public user profile (no shlink_api_key)."""
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    sub: str
-    username: str
     email: str
+    display_name: str = ""
     role: str
-    slug_prefix: str | None
-    status: str
+    is_active: bool = True
     created_at: datetime
     updated_at: datetime
-    permissions: Permissions | None = None
+    permissions: list[str] = []
 
 
 class UserUpdateRequest(BaseModel):
@@ -173,7 +139,7 @@ class ApiKeyUpdateRequest(BaseModel):
 
 
 class PrefixUpdateRequest(BaseModel):
-    prefix: str
+    prefix: str | None = None
 
 
 class AuditLogResponse(BaseModel):
@@ -181,10 +147,19 @@ class AuditLogResponse(BaseModel):
 
     id: int
     user_sub: str
-    username: str | None
-    role: str | None
     action: str
-    resource: str | None
+    resource: str | None = None
     result: str
-    details: dict[str, Any] | None
+    details: str | None = None
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def compute_permissions(role: str) -> list[str]:
+    """Return permission list based on role string."""
+    if role == Role.ADMIN:
+        return ["read", "write", "admin"]
+    return ["read", "write"]
