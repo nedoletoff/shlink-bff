@@ -1,4 +1,4 @@
-# Shlink BFF — Unified Backend + Web UI
+# Shlink BFF — Python Backend + Web UI
 
 ## Архитектура
 
