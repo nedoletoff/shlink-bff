@@ -17,10 +17,12 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          mantine: ['@mantine/core', '@mantine/hooks', '@mantine/notifications'],
-          charts: ['recharts'],
+manualChunks: (id: string) => {
+          if (id.includes('node_modules')) {
+            if (['react', 'react-dom', 'react-router-dom'].some((p) => id.includes(p))) return 'vendor';
+            if (['@mantine/core', '@mantine/hooks', '@mantine/notifications'].some((p) => id.includes(p))) return 'mantine';
+            if (id.includes('recharts')) return 'charts';
+          }
         },
       },
     },
