@@ -17,10 +17,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
+
 
 class Role(StrEnum):
     ADMIN = "admin"
@@ -43,6 +43,7 @@ class AuditResult(StrEnum):
 # ORM
 # ---------------------------------------------------------------------------
 
+
 class Base(DeclarativeBase):
     pass
 
@@ -55,7 +56,10 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint("role IN ('admin', 'user')", name="ck_users_role"),
-        CheckConstraint("status IN ('active', 'disabled', 'pending')", name="ck_users_status"),
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'pending')",
+            name="ck_users_status",
+        ),
         Index("idx_users_sub", "sub", unique=True),
         Index("idx_users_role", "role"),
         Index("idx_users_status", "status"),
@@ -74,8 +78,7 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now()
     )
-
-        t_logs: Mapped[list[AuditLog]] = relationship(
+    audit_logs: Mapped[list[AuditLog]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -89,8 +92,8 @@ class UserTag(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
     user_id: Mapped[str] = mapped_column(
-                String(36), ForeignKey("users.id"), ondelete="CASCADE", nullable=False
-                    )
+        String(36), ForeignKey("users.id"), ondelete="CASCADE", nullable=False
+    )
     tag_name: Mapped[str] = mapped_column(String(255), nullable=False)
     internal_id: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -110,16 +113,16 @@ class AuditLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
     user_id: Mapped[str | None] = mapped_column(
-                String(36), ForeignKey("users.id"), ondelete="SET NULL"
-                    )
+        String(36), ForeignKey("users.id"), ondelete="SET NULL"
+    )
     user: Mapped[User | None] = relationship(back_populates="audit_logs")
 
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
+
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -162,6 +165,7 @@ class AuditLogResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def compute_permissions(role: str) -> list[str]:
     """Return permission list based on role string."""
