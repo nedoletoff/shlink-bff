@@ -12,9 +12,9 @@ from app.config import get_settings
 from app.database import get_db
 from app.dependencies import require_admin, write_audit_log
 from app.models import (
+    ApiKeyUpdateRequest,
     AuditLog,
     AuditLogResponse,
-    ApiKeyUpdateRequest,
     PrefixUpdateRequest,
     User,
     UserResponse,
