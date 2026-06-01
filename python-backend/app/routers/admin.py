@@ -25,6 +25,13 @@ from app.models import (
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
+def _user_response(u: User) -> UserResponse:
+    """Build UserResponse with computed permissions (Pydantic v2 safe)."""
+    return UserResponse.model_validate(u).model_copy(
+        update={"permissions": compute_permissions(u.role)}
+    )
+
+
 # ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
@@ -39,12 +46,7 @@ async def list_users(
     offset = (page - 1) * page_size
     result = await db.execute(select(User).offset(offset).limit(page_size))
     users = result.scalars().all()
-    return [
-        UserResponse.model_validate(u).model_copy(
-            update={"permissions": compute_permissions(u.role)}
-        )
-        for u in users
-    ]
+    return [_user_response(u) for u in users]
 
 
 @router.get("/users/{sub}", response_model=UserResponse)
@@ -57,9 +59,7 @@ async def get_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
-    resp = UserResponse.model_validate(user)
-    resp.permissions = compute_permissions(user.role)
-    return resp
+    return _user_response(user)
 
 
 @router.put("/users/{sub}", response_model=UserResponse)
@@ -79,10 +79,11 @@ async def update_user(
         user.status = body.status
     await db.commit()
     await db.refresh(user)
-    await write_audit_log(db, admin, "update_user", sub, "success", body.model_dump(exclude_none=True))
-    resp = UserResponse.model_validate(user)
-    resp.permissions = compute_permissions(user.role)
-    return resp
+    await write_audit_log(
+        db, admin, "update_user", sub, "success",
+        body.model_dump(exclude_none=True),
+    )
+    return _user_response(user)
 
 
 @router.put("/users/{sub}/apikey", response_model=UserResponse)
@@ -100,7 +101,7 @@ async def update_apikey(
     await db.commit()
     await db.refresh(user)
     await write_audit_log(db, admin, "update_apikey", sub, "success")
-    return UserResponse.model_validate(user)
+    return _user_response(user)
 
 
 @router.put("/users/{sub}/prefix", response_model=UserResponse)
@@ -118,7 +119,7 @@ async def update_prefix(
     await db.commit()
     await db.refresh(user)
     await write_audit_log(db, admin, "update_prefix", sub, "success")
-    return UserResponse.model_validate(user)
+    return _user_response(user)
 
 
 @router.get("/users/{sub}/links")
