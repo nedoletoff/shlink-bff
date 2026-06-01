@@ -10,8 +10,8 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 
-import pytest_asyncio
 import pytest
+import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 

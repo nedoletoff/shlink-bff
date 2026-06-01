@@ -20,7 +20,7 @@ async def get_me(
             "email": user.email,
             "display_name": user.display_name,
             "role": user.role,
-            "is_active": user.is_active,
+            "is_active": user.status == "active",
             "created_at": user.created_at,
             "updated_at": user.updated_at,
             "permissions": compute_permissions(user.role),

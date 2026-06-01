@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
-from collections.abc import AsyncGenerator
 
-import structlog
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import structlog
 
 from app.config import get_settings
 from app.database import init_db
