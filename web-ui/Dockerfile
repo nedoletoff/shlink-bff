@@ -14,8 +14,10 @@ FROM nginx:1.27-alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # SPA fallback: все пути → index.html
+# listen [::]:80 нужен т.к. wget в Alpine резолвит localhost в ::1 (IPv6)
 RUN printf 'server {\n\
     listen 80;\n\
+    listen [::]:80;\n\
     root /usr/share/nginx/html;\n\
     location / {\n\
         try_files $uri $uri/ /index.html;\n\
