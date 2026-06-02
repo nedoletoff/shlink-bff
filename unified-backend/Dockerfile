@@ -12,9 +12,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -ldflags="-w -s -extldflags=-static" \
     -o /unified-backend ./cmd/server
 
-# Финальный образ — минимальный scratch
-FROM scratch
+# Финальный образ — alpine (нужен wget для healthcheck в docker-compose)
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates wget
 COPY --from=builder /unified-backend /unified-backend
-# CA-сертификаты для HTTPS-запросов к Keycloak/Shlink
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 ENTRYPOINT ["/unified-backend"]
