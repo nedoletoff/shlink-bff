@@ -1,4 +1,4 @@
-name: CI - Go Backend
+name: CI - Shlink Backend for Frontend
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: shlink_bff_test
           POSTGRES_USER: bff
@@ -38,7 +38,7 @@ jobs:
 
       - name: Download dependencies
         working-directory: unified-backend
-        run: go mod tidy
+        run: go mod download
 
       - name: Vet
         working-directory: unified-backend
@@ -79,7 +79,7 @@ jobs:
 
       - name: Download dependencies
         working-directory: unified-backend
-        run: go mod tidy
+        run: go mod download
 
       - name: Install golangci-lint
         run: |
@@ -89,22 +89,13 @@ jobs:
         working-directory: unified-backend
         run: golangci-lint run ./...
 
-  docker:
-    name: Docker Build (Go)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Build Docker image
-        run: docker build -t shlink-bff-go:ci ./unified-backend
-
   web-ui:
     name: Build & Lint (Web UI)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web-ui
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -113,9 +104,11 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Lint
         run: npm run lint
@@ -125,3 +118,94 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Upload web-ui build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-ui-dist
+          path: web-ui/dist
+          if-no-files-found: error
+
+  docker-backend:
+    name: Docker Build & Push (Go)
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set backend image names
+        id: meta
+        run: |
+          IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/shlink-bff-go
+          echo "image=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            -f unified-backend/Dockerfile \
+            -t ${{ steps.meta.outputs.sha_tag }} \
+            -t ${{ steps.meta.outputs.latest_tag }} \
+            ./unified-backend
+
+      - name: Push backend Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push ${{ steps.meta.outputs.sha_tag }}
+          docker push ${{ steps.meta.outputs.latest_tag }}
+
+  docker-web-ui:
+    name: Docker Build & Push (Web UI)
+    runs-on: ubuntu-latest
+    needs: [web-ui]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set web-ui image names
+        id: meta
+        run: |
+          IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/shlink-bff-web-ui
+          echo "image=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build web-ui Docker image
+        run: |
+          docker build \
+            -f web-ui/Dockerfile \
+            -t ${{ steps.meta.outputs.sha_tag }} \
+            -t ${{ steps.meta.outputs.latest_tag }} \
+            ./web-ui
+
+      - name: Push web-ui Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push ${{ steps.meta.outputs.sha_tag }}
+          docker push ${{ steps.meta.outputs.latest_tag }}
