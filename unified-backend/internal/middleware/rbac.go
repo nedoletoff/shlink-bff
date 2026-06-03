@@ -47,6 +47,10 @@ func AdminOnly(auditRepo *postgres.AuditRepository) func(http.Handler) http.Hand
 
 // RequireActiveUser загружает пользователя из БД, проверяет статус active
 // и кладёт *domain.User в контекст для последующих хендлеров.
+//
+// Auto-provision: если пользователь впервые логинится (нет записи в БД),
+// создаём её автоматически на основе заголовков oauth2-proxy.
+// Роль берётся из resolveRole (ADMIN_GROUPS), статус = active.
 func RequireActiveUser(userRepo *postgres.UserRepository, auditRepo *postgres.AuditRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,8 +62,37 @@ func RequireActiveUser(userRepo *postgres.UserRepository, auditRepo *postgres.Au
 				jsonError(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			if user == nil || user.Status != domain.StatusActive {
-				jsonError(w, "forbidden: user not provisioned or inactive", http.StatusForbidden)
+
+			// Первый логин — провизионируем пользователя автоматически
+			if user == nil {
+				role := domain.Role(id.Role)
+				if role != domain.RoleAdmin && role != domain.RoleUser {
+					role = domain.RoleUser
+				}
+				newUser := &domain.User{
+					Sub:      id.Sub,
+					Username: id.Username,
+					Email:    id.Email,
+					Role:     role,
+					Status:   domain.StatusActive,
+				}
+				if upsertErr := userRepo.Upsert(r.Context(), newUser); upsertErr != nil {
+					slog.Error("rbac: failed to auto-provision user", "sub", id.Sub, "err", upsertErr)
+					jsonError(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				slog.Info("rbac: auto-provisioned new user", "sub", id.Sub, "username", id.Username, "role", string(role))
+				// Перечитываем, чтобы получить id и created_at из БД
+				user, err = userRepo.GetBySub(r.Context(), id.Sub)
+				if err != nil || user == nil {
+					slog.Error("rbac: failed to reload user after provision", "sub", id.Sub, "err", err)
+					jsonError(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+			}
+
+			if user.Status != domain.StatusActive {
+				jsonError(w, "forbidden: user inactive", http.StatusForbidden)
 				return
 			}
 
