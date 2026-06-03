@@ -1,116 +1,70 @@
 # oauth2-proxy config для shlink-create.example.com
-#
-# Скопируйте в oauth2-proxy/shlink.cfg и заполните значения.
+# Скопируйте в shlink.cfg и заполните значения.
 # Секреты OAUTH2_CLIENT_SECRET и OAUTH2_COOKIE_SECRET задаются через env в docker-compose.yml.
 # Документация: https://oauth2-proxy.github.io/oauth2-proxy/docs/configuration/overview
 
-# ---------------------------------------------------------------------------
-# OIDC Provider
-# ---------------------------------------------------------------------------
-# oauth2-proxy выполняет OIDC Discovery при старте:
-# загружает {oidc_issuer_url}/.well-known/openid-configuration
-# и оттуда берёт адреса authorization_endpoint, token_endpoint, jwks_uri.
-# Если Keycloak недоступен по имени изнутри Docker — добавь extra_hosts в docker-compose.yml.
-provider        = "oidc"
-oidc_issuer_url = "https://YOUR_KEYCLOAK_HOST/realms/YOUR_REALM"  # <-- заменить
-client_id       = "shlink-bff"                                    # <-- client_id в Keycloak
-client_secret   = "OAUTH2_CLIENT_SECRET"                          # выдаётся через env
+provider            = "oidc"
+oidc_issuer_url     = "https://YOUR_KEYCLOAK_HOST/realms/YOUR_REALM"  # <-- заменить
+client_id           = "shlink-bff"                                    # <-- client_id в Keycloak
+client_secret       = "OAUTH2_CLIENT_SECRET"                          # задаётся через env OAUTH2_PROXY_CLIENT_SECRET
 
-# redirect_url — адрес, на который Keycloak вернёт пользователя после логина.
-# Обязательно добавить этот URL в список Valid Redirect URIs клиента Keycloak.
-redirect_url    = "https://shlink-create.example.com/oauth2/callback"  # <-- заменить
+redirect_url        = "https://shlink-create.example.com/oauth2/callback"  # <-- заменить
 
-# ---------------------------------------------------------------------------
-# HTTP-сервер
-# ---------------------------------------------------------------------------
-# oauth2-proxy слушает на этом адресе внутри Docker-сети.
-# nginx обращается к нему по имени контейнера oauth2-proxy-shlink:4180.
-http_address = "0.0.0.0:4180"
+# Слушаем на 4180
+http_address        = "0.0.0.0:4180"
 
-# ---------------------------------------------------------------------------
-# Cookie-сессия
-# ---------------------------------------------------------------------------
-# oauth2-proxy хранит сессию целиком в зашифрованном cookie (session_store_type=cookie).
-# Содержит: access_token, id_token, refresh_token, время создания/истечения.
-#
-# cookie_secret — служит для AES-шифрования cookie. Должен быть 16, 24 или 32 байта (без паддинга).
-# Генерация: python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
-#
-# cookie_expire — полное время жизни сессии. По истечении пользователь
-#   выходит из системы и должен заново логиниться.
-#
-# cookie_refresh — период, по истечении которого oauth2-proxy автоматически
-#   обновляет токен через refresh_token без выхода пользователя.
-#   Требует offline_access в scope. Рекомендуется значение < cookie_expire.
-#
-# cookie_samesite = "lax" — защищает от CSRF, позволяет работать
-#   при навигации с внешнего сайта. Используйте "none" только если
-#   Keycloak и приложение на разных доменах (требует cookie_secure=true).
-#
-# ВАЖНО: НЕ используй session_cookie_minimal = true.
-# Этот режим исключает refresh_token из cookie. Если Keycloak
-# выдаёт короткоживущие токены (по умолчанию 5 минут), сессия
-# будет истекать и refresh невозможен — пользователь будет постоянно
-# перебрасываться на страницу логина.
-cookie_name     = "_shlink_session"
-cookie_secret   = "OAUTH2_COOKIE_SECRET"  # выдаётся через env
-cookie_secure   = true
-cookie_httponly = true
-cookie_samesite = "lax"
-cookie_expire   = "8h"
-cookie_refresh  = "1h"
+# Cookie настройки
+# cookie_name — имя сессионной cookie. Используйте уникальное имя, если
+#               несколько экземпляров oauth2-proxy работают на одном домене.
+# cookie_expire — срок жизни сессии (рекомендуется не менее 1h)
+# cookie_refresh — как часто обновлять токен (должен быть < cookie_expire)
+# cookie_samesite = "lax" подходит для большинства случаев;
+#                  используйте "none" только если oauth2-proxy и приложение
+#                  на разных доменах (требует cookie_secure = true).
+cookie_name         = "_shlink_session"
+cookie_secret       = "OAUTH2_COOKIE_SECRET"  # задаётся через env OAUTH2_PROXY_COOKIE_SECRET
+cookie_secure       = true
+cookie_httponly     = true
+cookie_samesite     = "lax"
+cookie_expire       = "8h"
+cookie_refresh      = "1h"
+# session_cookie_minimal НЕ включать: при коротком access_token Keycloak
+# это приводит к потере refresh_token и немедленному вылету из сессии.
+# session_cookie_minimal = true  # НЕ включать
 
-# ---------------------------------------------------------------------------
-# Identity Headers (заголовки для nginx + unified-backend)
-# ---------------------------------------------------------------------------
-# set_xauthrequest = true — oauth2-proxy добавляет в ответ на /oauth2/auth:
-#   X-Auth-Request-User               — UUID пользователя (subject из JWT)
-#   X-Auth-Request-Email              — email из claims
-#   X-Auth-Request-Preferred-Username — логин
-#   X-Auth-Request-Groups             — группы через запятую ("shlink-admins,users")
-#
-# nginx извлекает эти заголовки через auth_request_set и прокидывает
-# в unified-backend, который на их основе определяет роль (admin/user) через RBAC.
-#
-# pass_access_token = false — Bearer-токен Keycloak НЕ передаётся в upstream.
-# Токен остаётся внутри oauth2-proxy — браузер его не видит.
-set_xauthrequest          = true
-pass_access_token         = false
-pass_authorization_header = false
+# Identity headers — oauth2-proxy добавит к каждому ответу на /oauth2/auth:
+#   X-Auth-Request-User               — уникальный ID пользователя (sub)
+#   X-Auth-Request-Email              — e-mail
+#   X-Auth-Request-Preferred-Username — username
+#   X-Auth-Request-Groups             — список групп Keycloak (через запятую)
+# nginx читает эти заголовки через auth_request_set и пробрасывает в backend.
+set_xauthrequest            = true
+pass_access_token           = false  # токен не покидает oauth2-proxy
+pass_authorization_header   = false  # Bearer не идёт в backend
 
-# ---------------------------------------------------------------------------
-# Группы из Keycloak (RBAC)
-# ---------------------------------------------------------------------------
-# oidc_groups_claim — название claim в JWT, из которого oauth2-proxy читает группы.
-# По умолчанию Keycloak НЕ включает группы в токен. Необходимо создать
-# Protocol Mapper типа "Group Membership" с Token Claim Name = "groups".
-# См. секцию Настройка Keycloak в README.
-oidc_groups_claim = "groups"
+# Группы из Keycloak
+# oauth2-proxy возьмёт claim "groups" из OIDC-токена и поместит его
+# в заголовок X-Auth-Request-Groups.
+# Для этого в Keycloak необходимо настроить mapper:
+#   Client → Mappers → Add mapper → Group Membership
+#   Token Claim Name = groups
+oidc_groups_claim           = "groups"
 
-# scope — запрашиваемые при обмене кода. "offline_access" нужен
-# для получения refresh_token и работы cookie_refresh.
-scope = "openid profile email offline_access"
+# Разрешённые email-домены (раскомментировать если нужно)
+# email_domains = ["example.com"]
 
-# ---------------------------------------------------------------------------
-# Reverse Proxy
-# ---------------------------------------------------------------------------
-# reverse_proxy = true — oauth2-proxy доверяет X-Forwarded-* заголовкам,
-# которые прокидывает nginx. Без этого oauth2-proxy будет считать
-# протоколом http вместо https, что сломает проверку cookie_secure.
-reverse_proxy = true
-
-# ---------------------------------------------------------------------------
 # Logging
-# ---------------------------------------------------------------------------
-request_logging  = true
-auth_logging     = true
-standard_logging = true
+request_logging   = true
+auth_logging      = true
+standard_logging  = true
 
-# ---------------------------------------------------------------------------
-# Session store
-# ---------------------------------------------------------------------------
-# cookie-сессия проста в настройке, но размер cookie растёт вместе с токеном.
-# Для prod среды с большим JWT рекомендуется Redis:
-# session_store_type = "redis"
-# redis_connection_url = "redis://redis:6379"
+# Trusted reverse proxy (nginx — доверяем внутренней сети)
+# Укажите CIDR вашей docker-сети или диапазон IP вашего nginx.
+trusted_ips_config = "172.0.0.0/8,10.0.0.0/8,192.168.0.0/16"
+
+# Пропускаем auth для healthcheck
+skip_auth_routes = ["^/healthz$"]
+
+# Сессия хранится целиком в cookie (без Redis).
+# Для production с большим числом пользователей рекомендуется Redis.
 session_store_type = "cookie"

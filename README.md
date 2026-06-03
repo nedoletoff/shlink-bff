@@ -20,120 +20,239 @@ Browser → nginx (HTTPS) → oauth2-proxy → unified-backend (Go) → shlink-a
 
 ---
 
-## Настройка Keycloak
+## Настройка с нуля
 
-### Роли пользователей (RBAC)
+### Предусловия
 
-Backend (`unified-backend`) читает роль пользователя из JWT-токена Keycloak. Без правильно настроенных ролей запросы к `/api/me` вернут `500` с ошибкой `rbac: db error on user lookup`.
+- Docker + docker compose
+- Keycloak (локальный контейнер или внешний) с созданным realm
+- DNS или `/etc/hosts` для двух доменов:
+  - `shlink.example.com` — публичный редиректор ссылок (без auth)
+  - `shlink-create.example.com` — защищённый UI и API
 
-#### 1. Создать роли в Realm
-
-В Keycloak Admin Console → **Realm Roles** → **Create role**:
-
-| Role name | Описание |
-|---|---|
-| `admin` | Полный доступ: создание/удаление ссылок, управление пользователями |
-| `user` | Создание ссылок от своего имени |
-
-#### 2. Назначить роль пользователю
-
-**Users** → выбрать пользователя → **Role mapping** → **Assign role** → выбрать `admin` или `user`.
-
-#### 3. Добавить роли в токен (Role Mapper)
-
-По умолчанию Keycloak **не включает** realm roles в access token. Необходимо добавить mapper:
-
-1. **Clients** → `shlink` → **Client scopes** → `shlink-dedicated`
-2. **Add mapper** → **By configuration** → **User Realm Role**
-3. Настройки mapper:
-   - **Name**: `realm_roles`
-   - **Token Claim Name**: `roles` _(должно совпадать с тем, что читает backend)_
-   - **Claim JSON Type**: `String`
-   - **Add to ID token**: `ON`
-   - **Add to access token**: `ON`
-   - **Multivalued**: `ON`
-
-> **Проверка**: после логина декодируй access token на [jwt.io](https://jwt.io) — в payload должен быть массив `"roles": ["user"]` или `"roles": ["admin"]`.
-
-#### 4. Миграции БД
-
-При первом запуске `unified-backend` таблица `users` создаётся автоматически через GORM AutoMigrate. Если таблица отсутствует (`relation "users" does not exist`), убедись что:
+### Шаг 1. Клонировать репозиторий и скопировать примеры конфигов
 
 ```bash
-# Контейнер postgres-bff поднялся раньше unified-backend
-docker compose logs postgres-bff | tail -5
-docker compose restart unified-backend
+git clone https://github.com/nedoletoff/shlink-bff.git
+cd shlink-bff
+
+cp .env.example .env
+cp nginx/nginx.conf.example nginx/nginx.conf
+cp oauth2-proxy/shlink.cfg.example oauth2-proxy/shlink.cfg
 ```
+
+### Шаг 2. Заполнить `.env`
+
+Минимально необходимые переменные:
+
+```dotenv
+# Домены
+DOMAIN_SHORT=shlink.example.com
+DOMAIN_SHORT_CREATE=shlink-create.example.com
+
+# PostgreSQL для Shlink
+SHLINK_DB_NAME=shlink
+SHLINK_DB_USER=shlink
+SHLINK_DB_PASSWORD=changeme
+
+# PostgreSQL для BFF
+DB_USER=bff
+DB_PASSWORD=changeme
+
+# Shlink API ключ (генерируется при первом запуске или задаётся вручную)
+SHLINK_API_KEY=your-shlink-api-key
+ADMIN_SHLINK_API_KEY=your-admin-shlink-api-key
+
+# Keycloak (extra_hosts в docker compose: имя → IP)
+KEYCLOAK_HOST=keycloak.example.com
+KEYCLOAK_IP=192.168.1.100
+
+# oauth2-proxy секреты
+OAUTH2_CLIENT_SECRET_SHLINK=client-secret-from-keycloak
+# Cookie secret — случайная строка 32+ байт, base64:
+# python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+OAUTH2_COOKIE_SECRET=your-32-byte-base64-secret
+```
+
+Полный список параметров см. в `.env.example`.
+
+### Шаг 3. Настроить Keycloak
+
+#### 3.1. Создать client
+
+1. **Clients** → **Create client**
+2. `Client ID`: `shlink-bff` (или любое — укажи то же в `oauth2-proxy/shlink.cfg`)
+3. `Client authentication`: ON (confidential)
+4. `Valid redirect URIs`: `https://shlink-create.example.com/oauth2/callback`
+5. После создания: **Credentials** → скопировать `Client secret` в `.env` → `OAUTH2_CLIENT_SECRET_SHLINK`
+
+#### 3.2. Создать группу для admin-доступа
+
+1. **Groups** → **Create group** → имя `shlink-admins`
+2. Добавить нужных пользователей в группу:
+   **Users** → выбрать пользователя → **Groups** → **Join group** → `shlink-admins`
+
+> Группа `shlink-admins` — дефолтное имя admin-группы в backend.
+> При необходимости можно изменить через `ADMIN_GROUPS` в `.env`.
+
+#### 3.3. Добавить mapper для groups в токен
+
+По умолчанию Keycloak **не включает** группы в OIDC-токен. Необходимо добавить mapper:
+
+1. **Clients** → `shlink-bff` → **Client scopes** → `shlink-bff-dedicated`
+2. **Add mapper** → **By configuration** → **Group Membership**
+3. Настройки mapper:
+   - **Name**: `groups`
+   - **Token Claim Name**: `groups`
+   - **Full group path**: OFF (чтобы был просто `shlink-admins`, а не `/shlink-admins`)
+   - **Add to ID token**: ON
+   - **Add to access token**: ON
+
+> **Проверка**: после логина декодируй access token на [jwt.io](https://jwt.io) — в payload должен быть массив `"groups": ["shlink-admins"]`.
+
+### Шаг 4. Заполнить конфиг oauth2-proxy
+
+Отредактировать `oauth2-proxy/shlink.cfg`:
+
+```cfg
+oidc_issuer_url = "https://keycloak.example.com/realms/YOUR_REALM"
+client_id       = "shlink-bff"
+redirect_url    = "https://shlink-create.example.com/oauth2/callback"
+```
+
+Остальные настройки уже правильно выставлены в примере:
+- `set_xauthrequest = true` — включает заголовки `X-Auth-Request-*`
+- `oidc_groups_claim = "groups"` — берёт группы из claim `groups` в токене
+- `session_cookie_minimal` — не включать (см. ниже)
+
+### Шаг 5. Отредактировать nginx.conf
+
+В `nginx/nginx.conf` заменить домены:
+
+```nginx
+server_name shlink-create.example.com;  # ваш домен
+server_name shlink.example.com;         # ваш публичный домен
+```
+
+Сертификат положить в `nginx/ssl/cert.pem` (cert + key в одном PEM).
+
+### Шаг 6. Запустить
+
+```bash
+docker compose up -d
+```
+
+### Шаг 7. Проверить
+
+```bash
+# Статус контейнеров
+docker compose ps
+
+# Логи oauth2-proxy (должны быть AuthSuccess и /oauth2/auth 200)
+docker logs oauth2-proxy-shlink -f
+
+# Проверить роль текущего пользователя
+curl -sk https://shlink-create.example.com/api/me  # в браузере (после логина)
+```
+
+Если пользователь в группе `shlink-admins` — ответ `/api/me` будет содержать `"role": "admin"`.
+
+---
+
+## RBAC и роль admin
+
+`unified-backend` не читает JWT напрямую. Идентичность пользователя приходит уже распакованной из `oauth2-proxy` через HTTP-заголовки, которые nginx пробрасывает из ответа на `auth_request`:
+
+| Заголовок | Содержимое |
+|---|---|
+| `X-Auth-Request-User` | Уникальный ID пользователя (sub из JWT) |
+| `X-Auth-Request-Email` | E-mail |
+| `X-Auth-Request-Preferred-Username` | Username |
+| `X-Auth-Request-Groups` | Группы Keycloak через запятую: `shlink-admins,developers` |
+
+Функция `resolveRole` в `unified-backend/internal/middleware/identity.go` сравнивает группы пользователя со списком admin-групп:
+
+- список берётся из env `ADMIN_GROUPS` (comma-separated)
+- если `ADMIN_GROUPS` не задан, дефолт: `shlink-admins,admin`
+- сравнение **case-insensitive**
+- если хотя бы одна группа совпадает — роль `admin`, иначе `user`
+
+### Кастомизация admin-групп
+
+```dotenv
+# .env
+ADMIN_GROUPS=shadmin,superusers
+```
+
+После изменения — перезапустить `unified-backend`.
 
 ---
 
 ## Nginx + OAuth2 Proxy
 
-### Передача Cookie в `auth_request`
+### Как работает auth_request
 
-При использовании `auth_request` nginx **не передаёт** Cookie-заголовок в subrequest по умолчанию. Без явной передачи oauth2-proxy не видит сессионный cookie и возвращает `401`, что вызывает бесконечный цикл редиректов на страницу авторизации.
+Каждый запрос к защищённому ресурсу (`/api/`, `/`) проходит через следующую цепочку:
 
-**Обязательно добавить** `proxy_set_header Cookie $http_cookie;` в `location /oauth2/auth { internal; ... }`:
+```
+browser → nginx → /_oauth2_auth (internal)
+                        ↓
+               oauth2-proxy /oauth2/auth
+                        ↓
+             200 OK: запрос идёт дальше
+             401:    редирект на /oauth2/sign_in
+```
+
+После получения `200` nginx читает из ответа oauth2-proxy заголовки `X-Auth-Request-*` (через `auth_request_set`) и пробрасывает их в `unified-backend`.
+
+### Передача Cookie в auth subrequest
+
+При использовании `auth_request` nginx **по умолчанию не передаёт** Cookie-заголовок во внутренний subrequest. Без явной передачи oauth2-proxy не видит сессионный cookie и возвращает `401`.
+
+Это приводит к бесконечному циклу редиректов, который выглядит так в логах:
+
+```
+[AuthSuccess] user@example.com ...  # логин прошёл
+GET /oauth2/auth → 202              # первый auth_request — ок
+GET /oauth2/auth → 401              # второй — cookie не дошёл
+GET /oauth2/sign_in → 200           # снова на логин ← цикл
+```
+
+**Обязательно в блоке `/_oauth2_auth`:**
 
 ```nginx
-location /oauth2/auth {
+location = /_oauth2_auth {
     internal;
-    proxy_pass http://oauth2-proxy-shlink:4180;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Content-Length "";
-    proxy_set_header Cookie $http_cookie;   # обязательно
+    proxy_pass              http://oauth2_proxy_shlink/oauth2/auth;
     proxy_pass_request_body off;
+    proxy_set_header        Content-Length    "";
+    proxy_set_header        X-Forwarded-Proto $scheme;
+    proxy_set_header        Cookie            $http_cookie;  # обязательно
 }
 ```
 
-### `session_cookie_minimal`
+### session_cookie_minimal
 
-Параметр `session_cookie_minimal = true` в конфиге oauth2-proxy записывает в cookie только минимальный набор данных — **без refresh_token**. Если Keycloak выдаёт короткоживущие access token (по умолчанию 5 минут, но может быть настроен меньше), сессия истекает и refresh невозможен.
+Параметр `session_cookie_minimal = true` в конфиге oauth2-proxy убирает из cookie `refresh_token`. При коротком `Access Token Lifespan` в Keycloak (по умолчанию 5 минут) токен истекает, обновить его нельзя — пользователь вылетает из сессии.
 
-**Рекомендация**: отключить `session_cookie_minimal` или увеличить `Access Token Lifespan` в Keycloak (Realm Settings → Tokens → Access Token Lifespan, минимум 5 минут).
+**Рекомендации:**
+- не включать `session_cookie_minimal`
+- или увеличить `Access Token Lifespan` в Keycloak: **Realm Settings → Tokens → Access Token Lifespan** (минимум 5 минут)
 
-```cfg
-# oauth2-proxy/shlink.cfg
-# session_cookie_minimal = true   # закомментировать или удалить
-```
+### Logout
 
-### Диагностика цикла редиректов
+`/oauth2/sign_out` с GET-запросом без активной сессии уходит в цикл редиректов. Решение — делать logout через POST:
 
-Симптом: пользователь успешно логинится (`[AuthSuccess]` в логах oauth2-proxy), но тут же снова попадает на `/oauth2/sign_in`.
-
-Проверить последовательность в `docker logs oauth2-proxy-shlink`:
-
-```
-[AuthSuccess] ...          # логин прошёл
-GET /oauth2/auth → 202     # первый auth_request — ок
-GET /oauth2/auth → 401     # второй auth_request — cookie не читается
-GET /oauth2/sign_in → 200  # снова на логин
-```
-
-Если такая последовательность воспроизводится — отсутствует `proxy_set_header Cookie $http_cookie;`.
-
----
-
-## Logout
-
-`/oauth2/sign_out` при GET-запросе без активной сессии (например, сессия протухла) уходит в цикл редиректов: oauth2-proxy не может прочитать сессию → редиректит на `/oauth2/sign_in` → браузер снова GET `/oauth2/sign_out`.
-
-**Решение**: logout выполняется через POST с CSRF-токеном, либо через промежуточную страницу.
-
-Добавь в `nginx.conf` для `shlink-create.local` (перед `location /oauth2/`):
+Добавить в `nginx.conf` (перед `location /oauth2/`):
 
 ```nginx
 location = /logout {
     default_type text/html;
-    return 200 '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Выход</title></head><body><form id="f" method="POST" action="/oauth2/sign_out"><input type="hidden" name="rd" value="/oauth2/sign_in"></form><script>document.getElementById("f").submit();</script></body></html>';
+    return 200 '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><form id="f" method="POST" action="/oauth2/sign_out"><input type="hidden" name="rd" value="/oauth2/sign_in"></form><script>document.getElementById("f").submit();</script></body></html>';
 }
 ```
 
-В UI используй ссылку `href="/logout"` вместо прямого перехода на `/oauth2/sign_out`.
-
-После POST oauth2-proxy корректно чистит cookie и редиректит на `/oauth2/sign_in` через Keycloak.
+В UI использовать `href="/logout"` вместо `/oauth2/sign_out`.
 
 ---
 
@@ -167,38 +286,24 @@ unified-backend/
 └── go.mod
 ```
 
-### Локальная разработка
+### Миграции БД
 
-#### 1. Переменные окружения
-
-```bash
-cp .env.example .env
-# Отредактируйте .env — минимальный набор для локального запуска:
-```
-
-```dotenv
-DOMAIN_SHORT=localhost
-SHLINK_DB_NAME=shlink
-SHLINK_DB_USER=shlink
-SHLINK_DB_PASSWORD=secret
-ADMIN_SHLINK_API_KEY=test-key
-KEYCLOAK_HOST=keycloak.example.com
-KEYCLOAK_IP=127.0.0.1
-OAUTH2_CLIENT_SECRET_SHLINK=test-secret
-OAUTH2_COOKIE_SECRET=test-cookie-secret-32bytes!
-```
-
-#### 2. Запуск через Docker Compose
+При первом запуске `unified-backend` таблица `users` создаётся автоматически через GORM AutoMigrate. Если таблица отсутствует (`relation "users" does not exist`), убедись что postgres-bff поднялся раньше:
 
 ```bash
-# Скопируйте конфиги nginx и oauth2-proxy
-cp nginx/nginx.conf.example nginx/nginx.conf
-cp oauth2-proxy/shlink.cfg.example oauth2-proxy/shlink.cfg
-
-docker compose up -d
+docker compose logs postgres-bff | tail -5
+docker compose restart unified-backend
 ```
 
-#### 3. Запуск тестов (Go)
+### Переменные окружения (полный список)
+
+См. `.env.example` в корне репозитория.
+
+---
+
+## Локальная разработка
+
+### Запуск тестов (Go)
 
 ```bash
 cd unified-backend
@@ -215,10 +320,6 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 Триггер: push/PR в `main`.
 
-### Переменные окружения (полный список)
-
-См. `.env.example` в корне репозитория.
-
 ---
 
 ## Тестирование
@@ -232,7 +333,7 @@ go test -v -race ./test/...
 
 ### `audit_sanitize_test.go` — sanitize чувствительных полей аудита
 
-Проверяет, что функция `sanitizeDetails` (используется в audit-репозитории) корректно удаляет чувствительные ключи перед записью в БД.
+Проверяет, что функция `sanitizeDetails` корректно удаляет чувствительные ключи перед записью в БД.
 
 | Тест | Что проверяет |
 |---|---|
@@ -271,7 +372,7 @@ go test -v -race ./test/...
 
 ### `service_test.go` — бизнес-логика ShlinkService
 
-Проверяет `EnforceSlugPrefix` (принудительный prefix для коротких ссылок) и `FilterShortURLsByUser`.
+Проверяет `EnforceSlugPrefix` и `FilterShortURLsByUser`.
 
 | Тест | Что проверяет |
 |---|---|
