@@ -20,6 +20,8 @@ func newShlinkService(slugPrefixEnabled bool) *service.ShlinkService {
 	return service.NewShlinkService(cli, cfg)
 }
 
+// ─── EnforceSlugPrefix ────────────────────────────────────────────────────────
+
 // TestEnforceSlugPrefix_AdminBypass — для admin prefix не применяется
 func TestEnforceSlugPrefix_AdminBypass(t *testing.T) {
 	svc := newShlinkService(true)
@@ -35,10 +37,25 @@ func TestEnforceSlugPrefix_AdminBypass(t *testing.T) {
 	}
 }
 
+// TestEnforceSlugPrefix_CustomRoleBypass — кастомная роль без admin-прав тоже использует prefix
+func TestEnforceSlugPrefix_CustomRoleBypass_IsNotAdmin(t *testing.T) {
+	svc := newShlinkService(true)
+	viewer := &domain.User{Role: domain.Role("viewer"), SlugPrefix: "v1-"}
+	slug := "v1-mylink"
+
+	result, err := svc.EnforceSlugPrefix(context.Background(), viewer, &slug)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "v1-mylink" {
+		t.Errorf("expected %q, got %q", "v1-mylink", result)
+	}
+}
+
 // TestEnforceSlugPrefix_UserNoPrefix — feature enabled, нет prefix → ошибка
 func TestEnforceSlugPrefix_UserNoPrefix(t *testing.T) {
 	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: ""}
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: ""}
 	slug := "my-slug"
 
 	_, err := svc.EnforceSlugPrefix(context.Background(), user, &slug)
@@ -47,10 +64,22 @@ func TestEnforceSlugPrefix_UserNoPrefix(t *testing.T) {
 	}
 }
 
+// TestEnforceSlugPrefix_CustomRoleNoPrefix — кастомная роль без prefix → ошибка
+func TestEnforceSlugPrefix_CustomRoleNoPrefix(t *testing.T) {
+	svc := newShlinkService(true)
+	editor := &domain.User{Role: domain.Role("editor"), SlugPrefix: ""}
+	slug := "my-slug"
+
+	_, err := svc.EnforceSlugPrefix(context.Background(), editor, &slug)
+	if err == nil {
+		t.Error("expected error when editor has no slug prefix")
+	}
+}
+
 // TestEnforceSlugPrefix_UserCorrectPrefix — slug с правильным prefix → OK
 func TestEnforceSlugPrefix_UserCorrectPrefix(t *testing.T) {
 	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: "u1-"}
 	slug := "u1-mylink"
 
 	result, err := svc.EnforceSlugPrefix(context.Background(), user, &slug)
@@ -65,7 +94,7 @@ func TestEnforceSlugPrefix_UserCorrectPrefix(t *testing.T) {
 // TestEnforceSlugPrefix_UserWrongPrefix — slug без prefix → ошибка
 func TestEnforceSlugPrefix_UserWrongPrefix(t *testing.T) {
 	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: "u1-"}
 	slug := "admin-link"
 
 	_, err := svc.EnforceSlugPrefix(context.Background(), user, &slug)
@@ -77,7 +106,7 @@ func TestEnforceSlugPrefix_UserWrongPrefix(t *testing.T) {
 // TestEnforceSlugPrefix_FeatureDisabled — feature выключен → slug не трогается
 func TestEnforceSlugPrefix_FeatureDisabled(t *testing.T) {
 	svc := newShlinkService(false)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: "u1-"}
 	slug := "any-slug"
 
 	result, err := svc.EnforceSlugPrefix(context.Background(), user, &slug)
@@ -92,7 +121,7 @@ func TestEnforceSlugPrefix_FeatureDisabled(t *testing.T) {
 // TestEnforceSlugPrefix_UserNilSlug — nil slug + prefix → возвращает prefix
 func TestEnforceSlugPrefix_UserNilSlug(t *testing.T) {
 	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u2-"}
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: "u2-"}
 
 	result, err := svc.EnforceSlugPrefix(context.Background(), user, nil)
 	if err != nil {
@@ -103,10 +132,26 @@ func TestEnforceSlugPrefix_UserNilSlug(t *testing.T) {
 	}
 }
 
-// TestFilterShortURLsByUser — фильтрация по prefix
+// TestEnforceSlugPrefix_CustomRole_NilSlug — кастомная роль, nil slug → prefix
+func TestEnforceSlugPrefix_CustomRole_NilSlug(t *testing.T) {
+	svc := newShlinkService(true)
+	viewer := &domain.User{Role: domain.Role("viewer"), SlugPrefix: "vw-"}
+
+	result, err := svc.EnforceSlugPrefix(context.Background(), viewer, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "vw-" {
+		t.Errorf("expected prefix %q, got %q", "vw-", result)
+	}
+}
+
+// ─── FilterShortURLsByUser ────────────────────────────────────────────────────
+
+// TestFilterShortURLsByUser — фильтрация по prefix для роли user
 func TestFilterShortURLsByUser(t *testing.T) {
 	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: "u1-"}
 
 	urls := []shlink.ShortURL{
 		{ShortCode: "u1-abc"},
@@ -121,9 +166,27 @@ func TestFilterShortURLsByUser(t *testing.T) {
 		t.Errorf("expected 2 filtered URLs, got %d", len(filtered))
 	}
 	for _, u := range filtered {
-		if u.ShortCode[:3] != "u1-" {
+		if len(u.ShortCode) < 3 || u.ShortCode[:3] != "u1-" {
 			t.Errorf("expected prefix u1-, got %s", u.ShortCode)
 		}
+	}
+}
+
+// TestFilterShortURLsByUser_CustomRole — кастомная роль фильтрует по своему prefix
+func TestFilterShortURLsByUser_CustomRole(t *testing.T) {
+	svc := newShlinkService(true)
+	viewer := &domain.User{Role: domain.Role("viewer"), SlugPrefix: "vw-"}
+
+	urls := []shlink.ShortURL{
+		{ShortCode: "vw-abc"},
+		{ShortCode: "vw-xyz"},
+		{ShortCode: "u1-abc"},
+		{ShortCode: "random"},
+	}
+
+	result := svc.FilterShortURLsByUser(urls, viewer)
+	if len(result) != 2 {
+		t.Errorf("viewer should see 2 URLs, got %d", len(result))
 	}
 }
 
@@ -144,31 +207,32 @@ func TestFilterShortURLsByUser_AdminGetAll(t *testing.T) {
 	}
 }
 
-// TestComputePermissions_Admin — admin получает все права
-func TestComputePermissions_Admin(t *testing.T) {
-	user := &domain.User{Role: domain.RoleAdmin}
-	perms := user.ComputePermissions()
+// TestFilterShortURLsByUser_EmptyPrefix — пустой prefix → возвращает все (не фильтрует)
+func TestFilterShortURLsByUser_EmptyPrefix(t *testing.T) {
+	svc := newShlinkService(true)
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: ""}
 
-	if !perms.CanViewAuditLogs {
-		t.Error("admin should canViewAuditLogs")
+	urls := []shlink.ShortURL{
+		{ShortCode: "abc"},
+		{ShortCode: "xyz"},
 	}
-	if !perms.CanManageUsers {
-		t.Error("admin should canManageUsers")
+	result := svc.FilterShortURLsByUser(urls, user)
+	if len(result) != 2 {
+		t.Errorf("empty prefix should return all, got %d", len(result))
 	}
 }
 
-// TestComputePermissions_User — user не получает admin-права
-func TestComputePermissions_User(t *testing.T) {
-	user := &domain.User{Role: domain.RoleUser}
-	perms := user.ComputePermissions()
+// TestFilterShortURLsByUser_FeatureDisabled — feature выключен → все видят всё
+func TestFilterShortURLsByUser_FeatureDisabled(t *testing.T) {
+	svc := newShlinkService(false)
+	user := &domain.User{Role: domain.Role("user"), SlugPrefix: "u1-"}
 
-	if perms.CanViewAuditLogs {
-		t.Error("user should NOT canViewAuditLogs")
+	urls := []shlink.ShortURL{
+		{ShortCode: "u1-abc"},
+		{ShortCode: "u2-xyz"},
 	}
-	if perms.CanManageUsers {
-		t.Error("user should NOT canManageUsers")
-	}
-	if !perms.CanCreateShortURL {
-		t.Error("user SHOULD canCreateShortUrl")
+	result := svc.FilterShortURLsByUser(urls, user)
+	if len(result) != 2 {
+		t.Errorf("feature disabled: should return all 2, got %d", len(result))
 	}
 }

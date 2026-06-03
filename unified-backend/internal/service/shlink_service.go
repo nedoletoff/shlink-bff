@@ -19,15 +19,14 @@ func NewShlinkService(client *shlink.Client, cfg *config.Config) *ShlinkService 
 	return &ShlinkService{client: client, cfg: cfg}
 }
 
-// EnforceSlugPrefix добавляет/валидирует prefix для роли user.
-// Для admin — пропускает без изменений.
-// Возвращает итоговый slug (может быть пустым → Shlink генерирует сам).
+// EnforceSlugPrefix добавляет/валидирует prefix для непривилегированных ролей.
+// Для admin (IsAdminRole) — пропускает без изменений.
 func (s *ShlinkService) EnforceSlugPrefix(
 	ctx context.Context,
 	user *domain.User,
 	customSlug *string,
 ) (string, error) {
-	if !s.cfg.UserSlugPrefixEnabled || user.Role == domain.RoleAdmin {
+	if !s.cfg.UserSlugPrefixEnabled || domain.IsAdminRole(user.Role) {
 		if customSlug != nil {
 			return *customSlug, nil
 		}
@@ -40,7 +39,6 @@ func (s *ShlinkService) EnforceSlugPrefix(
 	}
 
 	if customSlug == nil || *customSlug == "" {
-		// Пустой slug → вернём только префикс, Shlink добавит суффикс
 		return prefix, nil
 	}
 
@@ -51,13 +49,12 @@ func (s *ShlinkService) EnforceSlugPrefix(
 	return slug, nil
 }
 
-// FilterShortURLsByUser фильтрует ссылки по slug_prefix для роли user.
-// Работает только если feature flag включён.
+// FilterShortURLsByUser фильтрует ссылки по slug_prefix для непривилегированных ролей.
 func (s *ShlinkService) FilterShortURLsByUser(
 	urls []shlink.ShortURL,
 	user *domain.User,
 ) []shlink.ShortURL {
-	if !s.cfg.UserSlugPrefixEnabled || user.Role == domain.RoleAdmin {
+	if !s.cfg.UserSlugPrefixEnabled || domain.IsAdminRole(user.Role) {
 		return urls
 	}
 	prefix := user.SlugPrefix

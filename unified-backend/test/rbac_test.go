@@ -55,7 +55,7 @@ func TestExtractIdentity_WithHeader(t *testing.T) {
 	}
 }
 
-// --- Вспомогательная функция: подаёт запрос, возвращает role
+// captureRole подаёт запрос с заданным X-Auth-Request-Groups, возвращает role из Identity
 func captureRole(groups string) string {
 	var id *middleware.Identity
 	handler := middleware.ExtractIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +73,7 @@ func captureRole(groups string) string {
 	return id.Role
 }
 
-// --- Дефолтные группы ---
+// ─── Дефолтные группы ────────────────────────────────────────────────────────
 
 func TestExtractIdentity_AdminGroup_Default(t *testing.T) {
 	os.Unsetenv("ADMIN_GROUPS")
@@ -107,7 +107,7 @@ func TestExtractIdentity_UserRole_EmptyGroups(t *testing.T) {
 	}
 }
 
-// --- Кастомные группы через ADMIN_GROUPS ---
+// ─── Кастомные группы через ADMIN_GROUPS ─────────────────────────────────────
 
 func TestExtractIdentity_CustomAdminGroup(t *testing.T) {
 	os.Setenv("ADMIN_GROUPS", "shadmin,superusers")
@@ -124,8 +124,11 @@ func TestExtractIdentity_CustomAdminGroup(t *testing.T) {
 		{"shadmin", "admin"},
 		{"superusers,devs", "admin"},
 		{"shlink-admins", "user"}, // старое имя больше не работает с кастомным ADMIN_GROUPS
-		{"admin", "user"},          // аналогично
+		{"admin", "user"},         // аналогично
 		{"developers", "user"},
+		{"editor", "user"},        // кастомная непривилегированная роль → user
+		{"viewer", "user"},
+		{"", "user"},
 	}
 	for _, tc := range tests {
 		got := captureRole(tc.groups)
@@ -147,7 +150,7 @@ func TestExtractIdentity_CaseInsensitive(t *testing.T) {
 	}
 }
 
-// --- Заполнение полей Identity ---
+// ─── Заполнение полей Identity ────────────────────────────────────────────────
 
 func TestExtractIdentity_FieldsPopulated(t *testing.T) {
 	os.Unsetenv("ADMIN_GROUPS")
@@ -181,7 +184,7 @@ func TestExtractIdentity_FieldsPopulated(t *testing.T) {
 	}
 }
 
-// --- context helpers ---
+// ─── context helpers ──────────────────────────────────────────────────────────
 
 func TestUserFromCtx_NilSafe(t *testing.T) {
 	ctx := context.Background()
@@ -210,5 +213,41 @@ func TestWithUser_RoundTrip(t *testing.T) {
 	}
 	if got.Role != expected.Role {
 		t.Errorf("Role: expected %s, got %s", expected.Role, got.Role)
+	}
+}
+
+// TestWithUser_RoundTrip_CustomRole — кастомная роль сохраняется в контексте без искажений
+func TestWithUser_RoundTrip_CustomRole(t *testing.T) {
+	for _, roleName := range []string{"viewer", "editor", "moderator", "power-user"} {
+		expected := &domain.User{
+			Sub:    "sub-" + roleName,
+			Role:   domain.Role(roleName),
+			Status: domain.StatusActive,
+		}
+		ctx := middleware.WithUser(context.Background(), expected)
+		got := middleware.UserFromCtx(ctx)
+		if got == nil {
+			t.Fatalf("user not found in context for role %q", roleName)
+		}
+		if got.Role != domain.Role(roleName) {
+			t.Errorf("role %q: round-trip failed, got %q", roleName, got.Role)
+		}
+	}
+}
+
+// TestIsAdminRole_ViaMiddlewareIdentity — resolveRole возвращает "user" для кастомных групп
+func TestIsAdminRole_ViaMiddlewareIdentity(t *testing.T) {
+	os.Unsetenv("ADMIN_GROUPS")
+	middleware.ReloadAdminGroups()
+
+	for _, grp := range []string{"viewer", "editor", "moderator", "power-user", "readonly"} {
+		role := captureRole(grp)
+		if role != "user" {
+			t.Errorf("group=%q: expected user role from middleware, got %s", grp, role)
+		}
+		// domain.IsAdminRole должна вернуть false для таких ролей
+		if domain.IsAdminRole(domain.Role(role)) {
+			t.Errorf("role=%q (from group %q) must NOT be admin", role, grp)
+		}
 	}
 }
