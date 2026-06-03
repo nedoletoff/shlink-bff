@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -23,6 +24,31 @@ type Identity struct {
 	Username string
 	Role     string
 	Groups   []string
+}
+
+// adminGroups — множество имён групп, которым присваивается роль admin.
+// Загружается из переменной окружения ADMIN_GROUPS (comma-separated).
+// Дефолт: "shlink-admins,admin"
+var adminGroups = loadAdminGroups()
+
+func loadAdminGroups() map[string]struct{} {
+	raw := os.Getenv("ADMIN_GROUPS")
+	if raw == "" {
+		raw = "shlink-admins,admin"
+	}
+	m := make(map[string]struct{})
+	for _, g := range strings.Split(raw, ",") {
+		if t := strings.ToLower(strings.TrimSpace(g)); t != "" {
+			m[t] = struct{}{}
+		}
+	}
+	return m
+}
+
+// ReloadAdminGroups перечитывает ADMIN_GROUPS из env.
+// Используется только в тестах для изоляции состояния между кейсами.
+func ReloadAdminGroups() {
+	adminGroups = loadAdminGroups()
 }
 
 // ExtractIdentity читает X-Auth-Request-* заголовки от oauth2-proxy
@@ -69,11 +95,11 @@ func groupsFromCtx(ctx context.Context) []string {
 	return v
 }
 
-// resolveRole: группа "shlink-admins" или "admin" → admin, иначе user
+// resolveRole проверяет группы пользователя против adminGroups.
+// Сравнение case-insensitive. Если совпадение найдено — возвращает "admin", иначе "user".
 func resolveRole(groups []string) string {
 	for _, g := range groups {
-		g = strings.ToLower(strings.TrimSpace(g))
-		if g == "shlink-admins" || g == "admin" {
+		if _, ok := adminGroups[strings.ToLower(strings.TrimSpace(g))]; ok {
 			return "admin"
 		}
 	}
