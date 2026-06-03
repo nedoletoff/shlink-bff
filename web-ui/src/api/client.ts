@@ -41,16 +41,16 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   });
 
   if (resp.status === 401) {
-    // Сессия истекла — редирект через oauth2-proxy start (не sign_in напрямую)
-    // Используем replace чтобы не ломать history
-    window.location.replace('/oauth2/start?rd=' + encodeURIComponent(window.location.pathname));
-    throw new APIError(401, 'Unauthorized — redirecting to login');
+    // Не делаем редирект здесь — nginx обрабатывает 401 через error_page → @oauth2_redirect.
+    // Самостоятельный редирект из JS создаёт бесконечный цикл: фронт редиректит на
+    // /oauth2/start, oauth2-proxy успешно аутентифицирует, но BFF снова возвращает 401
+    // (не получает X-Auth-Request-* заголовки), и цикл повторяется.
+    throw new APIError(401, 'Unauthorized');
   }
 
   if (resp.status === 403) {
     const body = await resp.json().catch(() => ({ error: 'Forbidden' }));
     const msg = (body as { error?: string })?.error ?? 'Forbidden';
-    // НЕ редиректим при 403 — выбрасываем ошибку, AuthContext поймает
     throw new APIError(403, msg);
   }
 
