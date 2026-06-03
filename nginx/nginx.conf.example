@@ -6,6 +6,19 @@
 #   - SSL-сертификат в nginx/ssl/cert.pem (формат: cert + key в одном PEM-файле)
 #   - Записи в /etc/hosts или DNS: shlink.example.com, shlink-create.example.com
 #   - Запущен oauth2-proxy (см. oauth2-proxy/shlink.cfg.example)
+#
+# Как работает аутентификация:
+#   1. Браузер → GET /  (любой защищённый URL)
+#   2. nginx делает внутренний subrequest GET /_oauth2_auth → oauth2-proxy
+#   3. oauth2-proxy проверяет сессионный cookie (_shlink_session)
+#      - cookie валиден  → 202 Accepted  → nginx пропускает запрос в upstream
+#      - cookie отсутствует / истёк → 401 → nginx редиректит на /oauth2/sign_in
+#   4. oauth2-proxy выполняет OIDC-flow с Keycloak, устанавливает cookie
+#   5. После успешного логина браузер редиректится обратно на исходный URL
+#
+# ВАЖНО: nginx по умолчанию НЕ передаёт Cookie в subrequest (auth_request).
+# Без явного proxy_set_header Cookie $http_cookie oauth2-proxy не видит сессию
+# и возвращает 401 на каждый запрос → бесконечный цикл редиректов на логин.
 
 worker_processes auto;
 
@@ -24,11 +37,13 @@ http {
 
     server_tokens off;
 
-    # Security headers
+    # Security headers (применяются ко всем server-блокам)
     add_header X-Frame-Options DENY always;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
 
+    # Upstream-пулы с keepalive — переиспользуем TCP-соединения внутри Docker-сети.
+    # keepalive — максимум idle-соединений в пуле на worker-процесс.
     upstream unified_backend {
         server unified-backend:8080;
         keepalive 32;
@@ -44,10 +59,12 @@ http {
         keepalive 16;
     }
 
-    # -- shlink-create.example.com -- защищённый интерфейс --
+    # =========================================================================
+    # shlink-create.example.com — защищённый интерфейс управления ссылками
+    # =========================================================================
     server {
         listen 443 ssl;
-        server_name shlink-create.example.com;  # <-- заменить
+        server_name shlink-create.example.com;  # <-- заменить на свой домен
 
         ssl_certificate     /etc/nginx/ssl/cert.pem;
         ssl_certificate_key /etc/nginx/ssl/cert.pem;  # cert+key в одном PEM
@@ -56,13 +73,22 @@ http {
         ssl_prefer_server_ciphers off;
         ssl_session_cache   shared:SSL:10m;
 
-        # Публичный healthcheck
+        # --- Healthcheck (публичный, без auth) ---
+        # Используется docker-compose healthcheck и мониторингом.
+        # Проксируется в unified-backend, который отвечает 200 OK без обращения к БД.
         location = /healthz {
             proxy_pass http://unified_backend/healthz;
             access_log off;
         }
 
-        # oauth2-proxy callback
+        # --- OAuth2 Proxy — публичные эндпоинты ---
+        # /oauth2/sign_in   — страница логина (HTML-форма)
+        # /oauth2/callback  — Keycloak редиректит сюда после аутентификации
+        # /oauth2/sign_out  — выход (очищает cookie, редиректит на Keycloak logout)
+        # /oauth2/static/   — CSS/JS страницы логина
+        #
+        # Эти URL НЕ защищены auth_request — иначе возникнет рекурсия:
+        # auth_request → 401 → redirect /oauth2/sign_in → auth_request → 401 → ...
         location /oauth2/ {
             proxy_pass          http://oauth2_proxy_shlink;
             proxy_set_header    Host              $host;
@@ -71,19 +97,61 @@ http {
             proxy_set_header    X-Forwarded-Proto $scheme;
         }
 
-        # Внутренний auth endpoint
+        # --- Внутренний auth endpoint (subrequest) ---
+        # Директива `internal` означает: доступен только через auth_request,
+        # прямой GET /_oauth2_auth вернёт 404.
+        #
+        # oauth2-proxy при получении этого запроса:
+        #   - читает сессионный cookie из заголовка Cookie
+        #   - возвращает 202 (валид) или 401 (невалид/отсутствует)
+        #   - при 202 добавляет заголовки X-Auth-Request-* с данными пользователя
+        #
+        # КРИТИЧНО: proxy_set_header Cookie $http_cookie — обязательно.
+        # nginx не прокидывает Cookie в subrequest автоматически. Без этой строки
+        # oauth2-proxy не видит сессию → всегда 401 → бесконечный цикл редиректов.
+        #
+        # proxy_pass_request_body off + Content-Length "" — тело запроса не нужно
+        # для проверки сессии, отсекаем его чтобы не гонять лишние байты.
         location = /_oauth2_auth {
             internal;
             proxy_pass              http://oauth2_proxy_shlink/oauth2/auth;
             proxy_pass_request_body off;
-            proxy_set_header        Content-Length   "";
-            proxy_set_header        X-Original-URI   $request_uri;
-            proxy_set_header        X-Real-IP        $remote_addr;
-            proxy_set_header        X-Forwarded-For  $proxy_add_x_forwarded_for;
+            proxy_set_header        Content-Length    "";
+            proxy_set_header        Cookie            $http_cookie;   # обязательно — см. комментарий выше
+            proxy_set_header        X-Original-URI    $request_uri;
+            proxy_set_header        X-Real-IP         $remote_addr;
+            proxy_set_header        X-Forwarded-For   $proxy_add_x_forwarded_for;
             proxy_set_header        X-Forwarded-Proto $scheme;
         }
 
-        # API Backend
+        # --- Logout через POST (обход цикла редиректов) ---
+        # Прямой GET /oauth2/sign_out при протухшей сессии вызывает цикл:
+        # oauth2-proxy не может прочитать сессию → редирект на /oauth2/sign_in →
+        # браузер снова идёт на /oauth2/sign_out → цикл.
+        #
+        # Решение: промежуточная HTML-страница, которая делает POST автоматически.
+        # POST /oauth2/sign_out с CSRF-токеном oauth2-proxy обрабатывает корректно:
+        # чистит cookie и редиректит на страницу логина Keycloak.
+        # В UI используйте ссылку href="/logout", не href="/oauth2/sign_out".
+        location = /logout {
+            default_type text/html;
+            return 200 '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Выход...</title></head><body><form id="f" method="POST" action="/oauth2/sign_out"><input type="hidden" name="rd" value="/oauth2/sign_in"></form><script>document.getElementById("f").submit();</script></body></html>';
+        }
+
+        # --- API Backend (защищён) ---
+        # auth_request делает subrequest на /_oauth2_auth перед каждым запросом.
+        # Если 202 — запрос проходит дальше; если 401 — срабатывает error_page.
+        #
+        # auth_request_set извлекает заголовки из ответа oauth2-proxy (202)
+        # и кладёт их в nginx-переменные. Затем proxy_set_header прокидывает
+        # их в unified-backend, который использует эти данные для RBAC:
+        #   X-Auth-Request-User               — UUID пользователя (subject из JWT)
+        #   X-Auth-Request-Email              — email
+        #   X-Auth-Request-Preferred-Username — логин (PreferredUsername из Keycloak)
+        #   X-Auth-Request-Groups             — группы через запятую (напр. "shlink-admins,users")
+        #
+        # proxy_hide_header X-Shlink-API-Key — гарантирует, что API-ключ shlink
+        # никогда не попадёт в браузер даже если backend случайно его вернёт.
         location /api/ {
             auth_request /_oauth2_auth;
             error_page 401 = @oauth2_redirect;
@@ -107,7 +175,10 @@ http {
             proxy_connect_timeout 5s;
         }
 
-        # Web UI SPA
+        # --- Web UI SPA (защищён) ---
+        # React SPA отдаётся web-ui (nginx внутри контейнера).
+        # Все JS/CSS/assets — статика, тоже защищены auth_request.
+        # API-запросы SPA идут на /api/ — отдельный location выше.
         location / {
             auth_request /_oauth2_auth;
             error_page 401 = @oauth2_redirect;
@@ -118,11 +189,17 @@ http {
             proxy_set_header X-Forwarded-Proto $scheme;
         }
 
+        # Редирект на страницу логина при 401
         location @oauth2_redirect {
             return 302 /oauth2/sign_in;
         }
 
-        # Запрет прямого доступа к shlink REST API
+        # --- Блокировка прямого доступа к Shlink REST API ---
+        # shlink-api работает в той же Docker-сети. Эти эндпоинты НЕ должны
+        # быть доступны через браузер — только через unified-backend.
+        # /rest/      — REST API shlink (содержит операции с API-ключами)
+        # /bootstrap/ — внутренние эндпоинты shlink
+        # /servers.json — файл с API-ключами для shlink-web-client (удалён)
         location ~ ^/(rest|bootstrap)/ {
             return 404 '{"error":"not found"}';
             add_header Content-Type application/json;
@@ -133,7 +210,12 @@ http {
         }
     }
 
-    # -- shlink.example.com -- публичный редиректор (без auth) --
+    # =========================================================================
+    # shlink.example.com — публичный редиректор коротких ссылок (без auth)
+    # =========================================================================
+    # Этот vhost доступен без аутентификации — короткие ссылки должны работать
+    # для всех. Прямой доступ к /rest/ заблокирован — API-ключ не должен
+    # быть доступен через публичный домен.
     server {
         listen 443 ssl;
         server_name shlink.example.com;  # <-- заменить
