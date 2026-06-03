@@ -108,14 +108,16 @@ function EditUserModal({
   opened: boolean; user: AdminUser | null;
   onClose: () => void; onSaved: () => void;
 }) {
-  const [prefix,  setPrefix]  = useState('');
-  const [newKey,  setNewKey]  = useState('');
-  const [loading, setLoading] = useState(false);
+  const [prefix,     setPrefix]     = useState('');
+  const [newKey,     setNewKey]     = useState('');
+  const [confirmKey, setConfirmKey] = useState('');
+  const [loading,    setLoading]    = useState(false);
 
   useEffect(() => {
     if (user) {
       setPrefix(user.slugPrefix ?? '');
       setNewKey('');
+      setConfirmKey('');
     }
   }, [user]);
 
@@ -134,13 +136,21 @@ function EditUserModal({
     }
   };
 
+  const keysMatch = newKey.trim() !== '' && newKey === confirmKey;
+
   const saveApiKey = async () => {
     if (!newKey.trim()) return;
+    // Подтверждение: опечатка в API-ключе заблокирует пользователя без диагностики (#12).
+    if (newKey !== confirmKey) {
+      notifications.show({ message: 'Ключи не совпадают — проверьте ввод', color: 'red' });
+      return;
+    }
     setLoading(true);
     try {
       await api.put(`/api/admin/users/${encodeURIComponent(user.sub)}/apikey`, { apiKey: newKey });
       notifications.show({ message: 'API-ключ обновлён', color: 'green' });
       setNewKey('');
+      setConfirmKey('');
       onSaved();
     } catch {
       // handled
@@ -181,19 +191,27 @@ function EditUserModal({
             Текущий ключ не отображается из соображений безопасности.
             Введите новый значение чтобы обновить.
           </Text>
-          <Group>
+          <TextInput
+            type="password"
+            placeholder="Новый Shlink API ключ"
+            value={newKey}
+            onChange={e => setNewKey(e.currentTarget.value)}
+          />
+          <Group align="flex-end">
             <TextInput
               type="password"
-              placeholder="Новый Shlink API ключ"
-              value={newKey}
-              onChange={e => setNewKey(e.currentTarget.value)}
+              label="Повторите ключ"
+              placeholder="Повторный ввод ключа"
+              value={confirmKey}
+              onChange={e => setConfirmKey(e.currentTarget.value)}
+              error={confirmKey !== '' && newKey !== confirmKey ? 'Ключи не совпадают' : undefined}
               style={{ flex: 1 }}
             />
             <Button
               color="orange"
               onClick={saveApiKey}
               loading={loading}
-              disabled={!newKey.trim()}
+              disabled={!keysMatch}
               leftSection={<IconKey size={14} />}
             >
               Обновить

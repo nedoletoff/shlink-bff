@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -151,6 +153,25 @@ func (c *Client) GetVisitsSummary(ctx context.Context, apiKey string) (map[strin
 		return nil, err
 	}
 	return *res, nil
+}
+
+// GetNonOrphanVisits возвращает реальные визиты по всем ссылкам в заданном диапазоне дат.
+// Используется для построения реального графика clicksOverTime (#2, #3) вместо захардкоженных данных.
+// startDate/endDate — в формате ISO-8601 (например "2006-01-02").
+func (c *Client) GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endDate string, itemsPerPage int) (*VisitsResponse, error) {
+	if itemsPerPage <= 0 {
+		itemsPerPage = 1000
+	}
+	q := neturl.Values{}
+	if startDate != "" {
+		q.Set("startDate", startDate)
+	}
+	if endDate != "" {
+		q.Set("endDate", endDate)
+	}
+	q.Set("itemsPerPage", strconv.Itoa(itemsPerPage))
+	url := c.baseURL + "/rest/v3/visits/non-orphan?" + q.Encode()
+	return doRequest[VisitsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 func (c *Client) GetHealth(ctx context.Context) (map[string]any, error) {
 	url := c.baseURL + "/rest/health"

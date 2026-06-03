@@ -85,7 +85,8 @@ func main() {
 		r.Delete("/api/shlink/short-urls/{shortCode}", proxyH.DeleteShortURL)
 
 		r.Get("/api/shlink/tags", proxyH.ListTags)
-		r.Post("/api/shlink/tags", proxyH.CreateTag)
+		// POST /api/shlink/tags убран (#1): Shlink v5 создаёт теги автоматически
+		// при добавлении к ссылке — отдельного endpoint создания нет.
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
 		r.Delete("/api/shlink/tags/{tagId}", proxyH.DeleteTag)
 

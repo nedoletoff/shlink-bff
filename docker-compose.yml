@@ -7,7 +7,7 @@
 #   cp .env.example .env && vi .env
 #   Скопируйте nginx/nginx.conf.example -> nginx/nginx.conf
 #   Скопируйте oauth2-proxy/shlink.cfg.example -> oauth2-proxy/shlink.cfg
-#   Положите SSL-сертификат в nginx/ssl/cert.pem
+#   Положите SSL раздельно: nginx/ssl/fullchain.pem и nginx/ssl/privkey.pem
 
 x-logging: &default-logging
   driver: "json-file"

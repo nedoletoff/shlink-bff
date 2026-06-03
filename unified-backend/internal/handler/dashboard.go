@@ -3,10 +3,15 @@ package handler
 import (
 	"log/slog"
 	"net/http"
+	"sort"
+	"time"
 
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
 )
+
+// daysWindow — сколько дней назад показывать в графике clicksOverTime.
+const daysWindow = 7
 
 type DashboardHandler struct {
 	shlinkSvc *service.ShlinkService
@@ -63,16 +68,9 @@ func (h *DashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Топ-5 тегов
 	topTags := topNTags(tagCountMap, 5)
 
-	// Заглушка для clicksOverTime — в production подключить visits API
-	clicksOverTime := []ClickPoint{
-		{Date: "2026-05-22", Clicks: totalClicks / 7},
-		{Date: "2026-05-23", Clicks: totalClicks / 6},
-		{Date: "2026-05-24", Clicks: totalClicks / 5},
-		{Date: "2026-05-25", Clicks: totalClicks / 4},
-		{Date: "2026-05-26", Clicks: totalClicks / 3},
-		{Date: "2026-05-27", Clicks: totalClicks / 2},
-		{Date: "2026-05-28", Clicks: totalClicks},
-	}
+	// Реальный график кликов за последние daysWindow дней (#2, #3):
+	// динамические даты + бакетирование реальных визитов из Shlink visits API.
+	clicksOverTime := h.buildClicksOverTime(r, user.ShlinkAPIKey)
 
 	resp := DashboardResponse{
 		TotalClicks:    totalClicks,
@@ -84,23 +82,69 @@ func (h *DashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp, http.StatusOK)
 }
 
+// buildClicksOverTime строит реальный временной ряд кликов за последние daysWindow дней.
+//
+// Даты вычисляются динамически от текущей даты, а клики — это реальные визиты
+// из Shlink visits API, сгруппированные по дням. Если visits API недоступен,
+// возвращаем ряд с нулями (честное "нет данных"), а не выдуманные числа.
+func (h *DashboardHandler) buildClicksOverTime(r *http.Request, apiKey string) []ClickPoint {
+	const dayFmt = "2006-01-02"
+	now := time.Now()
+
+	// Инициализируем бакеты последних daysWindow дней нулями.
+	buckets := make(map[string]int, daysWindow)
+	ordered := make([]string, 0, daysWindow)
+	for i := daysWindow - 1; i >= 0; i-- {
+		d := now.AddDate(0, 0, -i).Format(dayFmt)
+		buckets[d] = 0
+		ordered = append(ordered, d)
+	}
+
+	startDate := now.AddDate(0, 0, -(daysWindow - 1)).Format(dayFmt)
+	endDate := now.Format(dayFmt)
+
+	visitsResp, err := h.shlinkSvc.Client().GetNonOrphanVisits(r.Context(), apiKey, startDate, endDate, 0)
+	if err != nil {
+		slog.Warn("dashboard: visits API unavailable, returning empty series", "err", err)
+	} else {
+		for _, v := range visitsResp.Visits.Data {
+			// v.Date — ISO-8601 с временем; берём только день.
+			t, perr := time.Parse(time.RFC3339, v.Date)
+			if perr != nil {
+				if len(v.Date) >= len(dayFmt) {
+					if _, ok := buckets[v.Date[:len(dayFmt)]]; ok {
+						buckets[v.Date[:len(dayFmt)]]++
+					}
+				}
+				continue
+			}
+			day := t.Format(dayFmt)
+			if _, ok := buckets[day]; ok {
+				buckets[day]++
+			}
+		}
+	}
+
+	points := make([]ClickPoint, 0, daysWindow)
+	for _, d := range ordered {
+		points = append(points, ClickPoint{Date: d, Clicks: buckets[d]})
+	}
+	return points
+}
+
 func topNTags(m map[string]int, n int) []TagCount {
 	type kv struct {
 		Key string
 		Val int
 	}
-	var sorted []kv
+	sorted := make([]kv, 0, len(m))
 	for k, v := range m {
 		sorted = append(sorted, kv{k, v})
 	}
-	// Простая сортировка пузырьком для малых наборов
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].Val > sorted[i].Val {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	// Сортировка по убыванию частоты (#31: замена O(n²) пузырька).
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Val > sorted[j].Val
+	})
 	if len(sorted) > n {
 		sorted = sorted[:n]
 	}

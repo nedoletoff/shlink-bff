@@ -3,7 +3,12 @@
 # Скопируйте в nginx/nginx.conf и отредактируйте под свой домен.
 #
 # Требуется:
-#   - SSL-сертификат в nginx/ssl/cert.pem (формат: cert + key в одном PEM-файле)
+#   - SSL-сертификат и приватный ключ РАЗДЕЛЬНО:
+#       nginx/ssl/fullchain.pem  — цепочка сертификатов
+#       nginx/ssl/privkey.pem    — приватный ключ
+#     Если есть combined PEM (cert+key в одном файле), разделите его:
+#       openssl x509 -in cert.pem -out nginx/ssl/fullchain.pem
+#       openssl pkey -in cert.pem -out nginx/ssl/privkey.pem
 #   - Записи в /etc/hosts или DNS: shlink.example.com, shlink-create.example.com
 #   - Запущен oauth2-proxy (см. oauth2-proxy/shlink.cfg.example)
 
@@ -49,8 +54,8 @@ http {
         listen 443 ssl;
         server_name shlink-create.example.com;  # <-- заменить
 
-        ssl_certificate     /etc/nginx/ssl/cert.pem;
-        ssl_certificate_key /etc/nginx/ssl/cert.pem;  # cert+key в одном PEM
+        ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+        ssl_certificate_key /etc/nginx/ssl/privkey.pem;  # отдельный приватный ключ (#9)
         ssl_protocols       TLSv1.2 TLSv1.3;
         ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
         ssl_prefer_server_ciphers off;
@@ -155,8 +160,8 @@ http {
         listen 443 ssl;
         server_name shlink.example.com;  # <-- заменить
 
-        ssl_certificate     /etc/nginx/ssl/cert.pem;
-        ssl_certificate_key /etc/nginx/ssl/cert.pem;
+        ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+        ssl_certificate_key /etc/nginx/ssl/privkey.pem;  # отдельный приватный ключ (#9)
         ssl_protocols       TLSv1.2 TLSv1.3;
 
         location / {

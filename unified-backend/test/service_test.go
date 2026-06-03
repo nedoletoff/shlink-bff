@@ -172,3 +172,48 @@ func TestComputePermissions_User(t *testing.T) {
 		t.Error("user SHOULD canCreateShortUrl")
 	}
 }
+
+// TestCanModifyShortCode_AdminAlways — admin может изменять любые ссылки
+func TestCanModifyShortCode_AdminAlways(t *testing.T) {
+	svc := newShlinkService(true)
+	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
+	if !svc.CanModifyShortCode(admin, "someone-else-link") {
+		t.Error("admin should be able to modify any short code")
+	}
+}
+
+// TestCanModifyShortCode_FeatureDisabled — при выключенном feature изоляция не применяется
+func TestCanModifyShortCode_FeatureDisabled(t *testing.T) {
+	svc := newShlinkService(false)
+	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	if !svc.CanModifyShortCode(user, "u2-foreign") {
+		t.Error("when feature disabled, ownership is not enforced")
+	}
+}
+
+// TestCanModifyShortCode_UserOwn — свои ссылки разрешены
+func TestCanModifyShortCode_UserOwn(t *testing.T) {
+	svc := newShlinkService(true)
+	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	if !svc.CanModifyShortCode(user, "u1-mylink") {
+		t.Error("user should be able to modify own short code")
+	}
+}
+
+// TestCanModifyShortCode_UserForeign — чужие ссылки запрещены (#8)
+func TestCanModifyShortCode_UserForeign(t *testing.T) {
+	svc := newShlinkService(true)
+	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	if svc.CanModifyShortCode(user, "u2-foreign") {
+		t.Error("user must NOT be able to modify foreign short code")
+	}
+}
+
+// TestCanModifyShortCode_UserNoPrefix — feature включён, префикса нет → запрет
+func TestCanModifyShortCode_UserNoPrefix(t *testing.T) {
+	svc := newShlinkService(true)
+	user := &domain.User{Role: domain.RoleUser, SlugPrefix: ""}
+	if svc.CanModifyShortCode(user, "any-code") {
+		t.Error("user with no prefix and feature enabled must be denied")
+	}
+}

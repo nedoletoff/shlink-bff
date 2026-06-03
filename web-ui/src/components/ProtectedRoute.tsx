@@ -19,8 +19,11 @@ export function ProtectedRoute({ children, requiredRole }: Props) {
   }
 
   if (!user && !error) {
-    // Нет пользователя и нет ошибки — редирект на oauth2
-    window.location.href = '/oauth2/start?rd=' + encodeURIComponent(window.location.pathname);
+    // Нет пользователя и нет ошибки — редирект на oauth2.
+    // rd должен включать search и hash, иначе после логина теряются query-параметры (#11).
+    const returnTo =
+      window.location.pathname + window.location.search + window.location.hash;
+    window.location.href = '/oauth2/start?rd=' + encodeURIComponent(returnTo);
     return null;
   }
 

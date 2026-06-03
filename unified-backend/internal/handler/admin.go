@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -22,6 +23,16 @@ type AdminHandler struct {
 
 func NewAdminHandler(userRepo *postgres.UserRepository, auditRepo *postgres.AuditRepository) *AdminHandler {
 	return &AdminHandler{userRepo: userRepo, auditRepo: auditRepo}
+}
+
+// recordAuditAsync — запись аудита в горутине с ДЕТАЧНУТЫМ контекстом (#4):
+// r.Context() отменяется после возврата handler, и запись терялась.
+func (h *AdminHandler) recordAuditAsync(entry *domain.AuditEntry) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.auditRepo.Record(ctx, entry)
+	}()
 }
 
 // AdminUserResponse — публичный контракт пользователя для admin UI.
@@ -117,14 +128,16 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caller := middleware.UserFromCtx(r.Context())
-	go h.auditRepo.Record(r.Context(), &domain.AuditEntry{
-		UserSub:  caller.Sub,
-		Username: caller.Username,
-		Role:     string(caller.Role),
-		Action:   "admin_update_user",
-		Resource: r.URL.Path,
-		Result:   "success",
-		Details:  map[string]any{"target_sub": sub, "fields": fields},
+	h.recordAuditAsync(&domain.AuditEntry{
+		UserSub:   caller.Sub,
+		Username:  caller.Username,
+		Role:      string(caller.Role),
+		Action:    "admin_update_user",
+		Resource:  r.URL.Path,
+		Result:    "success",
+		Details:   map[string]any{"target_sub": sub, "fields": fields},
+		IPAddress: r.RemoteAddr,
+		UserAgent: r.Header.Get("User-Agent"),
 	})
 
 	writeJSON(w, map[string]string{"status": "updated"}, http.StatusOK)
@@ -149,15 +162,17 @@ func (h *AdminHandler) UpdateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caller := middleware.UserFromCtx(r.Context())
-	go h.auditRepo.Record(r.Context(), &domain.AuditEntry{
-		UserSub:  caller.Sub,
-		Username: caller.Username,
-		Role:     string(caller.Role),
-		Action:   "admin_update_apikey",
-		Resource: r.URL.Path,
-		Result:   "success",
+	h.recordAuditAsync(&domain.AuditEntry{
+		UserSub:   caller.Sub,
+		Username:  caller.Username,
+		Role:      string(caller.Role),
+		Action:    "admin_update_apikey",
+		Resource:  r.URL.Path,
+		Result:    "success",
 		// Новый ключ в аудит НЕ пишем — sanitizeDetails уберёт его в любом случае
-		Details: map[string]any{"target_sub": sub},
+		Details:    map[string]any{"target_sub": sub},
+		IPAddress:  r.RemoteAddr,
+		UserAgent:  r.Header.Get("User-Agent"),
 	})
 
 	writeJSON(w, map[string]string{"status": "updated"}, http.StatusOK)
@@ -182,14 +197,16 @@ func (h *AdminHandler) UpdateSlugPrefix(w http.ResponseWriter, r *http.Request) 
 	}
 
 	caller := middleware.UserFromCtx(r.Context())
-	go h.auditRepo.Record(r.Context(), &domain.AuditEntry{
-		UserSub:  caller.Sub,
-		Username: caller.Username,
-		Role:     string(caller.Role),
-		Action:   "admin_update_prefix",
-		Resource: r.URL.Path,
-		Result:   "success",
-		Details:  map[string]any{"target_sub": sub, "prefix": payload.Prefix},
+	h.recordAuditAsync(&domain.AuditEntry{
+		UserSub:   caller.Sub,
+		Username:  caller.Username,
+		Role:      string(caller.Role),
+		Action:    "admin_update_prefix",
+		Resource:  r.URL.Path,
+		Result:    "success",
+		Details:   map[string]any{"target_sub": sub, "prefix": payload.Prefix},
+		IPAddress: r.RemoteAddr,
+		UserAgent: r.Header.Get("User-Agent"),
 	})
 
 	writeJSON(w, map[string]string{"status": "updated"}, http.StatusOK)

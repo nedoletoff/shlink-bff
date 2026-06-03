@@ -1,12 +1,24 @@
 package middleware
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"unified-backend/internal/domain"
 	"unified-backend/internal/repository/postgres"
 )
+
+// recordAuditAsync пишет запись аудита в горутине с ДЕТАЧНУТЫМ контекстом.
+// r.Context() отменяется после возврата handler, из-за чего запись терялась (#10).
+func recordAuditAsync(auditRepo *postgres.AuditRepository, entry *domain.AuditEntry) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		auditRepo.Record(ctx, entry)
+	}()
+}
 
 // RequireRole возвращает middleware, проверяющий роль пользователя.
 // При нарушении: 403 + асинхронная запись в аудит.
@@ -23,14 +35,16 @@ func RequireRole(role domain.Role, auditRepo *postgres.AuditRepository) func(htt
 					"path",     r.URL.Path,
 					"method",   r.Method,
 				)
-				go auditRepo.Record(r.Context(), &domain.AuditEntry{
-					UserSub:  id.Sub,
-					Username: id.Username,
-					Role:     id.Role,
-					Action:   "rbac_denied",
-					Resource: r.URL.Path,
-					Result:   "denied",
-					Details:  map[string]any{"method": r.Method, "required_role": string(role)},
+				recordAuditAsync(auditRepo, &domain.AuditEntry{
+					UserSub:   id.Sub,
+					Username:  id.Username,
+					Role:      id.Role,
+					Action:    "rbac_denied",
+					Resource:  r.URL.Path,
+					Result:    "denied",
+					Details:   map[string]any{"method": r.Method, "required_role": string(role)},
+					IPAddress: r.RemoteAddr,
+					UserAgent: r.Header.Get("User-Agent"),
 				})
 				jsonError(w, "forbidden", http.StatusForbidden)
 				return
