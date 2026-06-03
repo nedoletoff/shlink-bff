@@ -37,7 +37,22 @@ export function ProtectedRoute({ children, requiredRole }: Props) {
               : `Не удалось получить данные профиля: ${error}`
             }
           </Text>
-          <Button variant="light" onClick={() => { window.location.href = '/oauth2/sign_out'; }}>
+          <Button
+            variant="light"
+            onClick={() => {
+              // POST-форма: GET /oauth2/sign_out без сессии уходит в цикл редиректов
+              const form = document.createElement('form');
+              form.method = 'POST';
+              form.action = '/oauth2/sign_out';
+              const rd = document.createElement('input');
+              rd.type = 'hidden';
+              rd.name = 'rd';
+              rd.value = '/oauth2/sign_in';
+              form.appendChild(rd);
+              document.body.appendChild(form);
+              form.submit();
+            }}
+          >
             Выйти
           </Button>
         </Stack>
