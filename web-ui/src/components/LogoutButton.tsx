@@ -7,17 +7,23 @@ interface Props {
 /**
  * LogoutButton — выход через oauth2-proxy /oauth2/sign_out.
  *
- * oauth2-proxy при запросе на /oauth2/sign_out:
- *   1. Удаляет сессионный cookie.
- *   2. Редиректит на Keycloak end_session (если настроен OIDC logout).
- *   3. После выхода редиректит на rd-адрес (должен быть в whitelist_domains).
- *
- * Настройка rd в docker-compose: убедись, что shlink-create.local
- * находится в whitelist_domains в oauth2-proxy/shlink.cfg.
+ * oauth2-proxy требует POST на /oauth2/sign_out для инвалидации cookie.
+ * GET-редирект не удаляет сессию — используем скрытую форму.
  */
 const LogoutButton: FC<Props> = ({ username }) => {
   const handleLogout = () => {
-    window.location.href = '/oauth2/sign_out?rd=%2F'
+    const form = document.createElement('form')
+    form.method = 'POST'
+    form.action = '/oauth2/sign_out'
+
+    const rd = document.createElement('input')
+    rd.type = 'hidden'
+    rd.name = 'rd'
+    rd.value = '/oauth2/sign_in'
+    form.appendChild(rd)
+
+    document.body.appendChild(form)
+    form.submit()
   }
 
   return (
