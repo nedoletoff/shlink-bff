@@ -20,6 +20,74 @@ Browser → nginx (HTTPS) → oauth2-proxy → unified-backend (Go) → shlink-a
 
 ---
 
+## Настройка Keycloak
+
+### Роли пользователей (RBAC)
+
+Backend (`unified-backend`) читает роль пользователя из JWT-токена Keycloak. Без правильно настроенных ролей запросы к `/api/me` вернут `500` с ошибкой `rbac: db error on user lookup`.
+
+#### 1. Создать роли в Realm
+
+В Keycloak Admin Console → **Realm Roles** → **Create role**:
+
+| Role name | Описание |
+|---|---|
+| `admin` | Полный доступ: создание/удаление ссылок, управление пользователями |
+| `user` | Создание ссылок от своего имени |
+
+#### 2. Назначить роль пользователю
+
+**Users** → выбрать пользователя → **Role mapping** → **Assign role** → выбрать `admin` или `user`.
+
+#### 3. Добавить роли в токен (Role Mapper)
+
+По умолчанию Keycloak **не включает** realm roles в access token. Необходимо добавить mapper:
+
+1. **Clients** → `shlink` → **Client scopes** → `shlink-dedicated`
+2. **Add mapper** → **By configuration** → **User Realm Role**
+3. Настройки mapper:
+   - **Name**: `realm_roles`
+   - **Token Claim Name**: `roles` _(должно совпадать с тем, что читает backend)_
+   - **Claim JSON Type**: `String`
+   - **Add to ID token**: `ON`
+   - **Add to access token**: `ON`
+   - **Multivalued**: `ON`
+
+> **Проверка**: после логина декодируй access token на [jwt.io](https://jwt.io) — в payload должен быть массив `"roles": ["user"]` или `"roles": ["admin"]`.
+
+#### 4. Миграции БД
+
+При первом запуске `unified-backend` таблица `users` создаётся автоматически через GORM AutoMigrate. Если таблица отсутствует (`relation "users" does not exist`), убедись что:
+
+```bash
+# Контейнер postgres-bff поднялся раньше unified-backend
+docker compose logs postgres-bff | tail -5
+docker compose restart unified-backend
+```
+
+---
+
+## Logout
+
+`/oauth2/sign_out` при GET-запросе без активной сессии (например, сессия протухла) уходит в цикл редиректов: oauth2-proxy не может прочитать сессию → редиректит на `/oauth2/sign_in` → браузер снова GET `/oauth2/sign_out`.
+
+**Решение**: logout выполняется через POST с CSRF-токеном, либо через промежуточную страницу.
+
+Добавь в `nginx.conf` для `shlink-create.local` (перед `location /oauth2/`):
+
+```nginx
+location = /logout {
+    default_type text/html;
+    return 200 '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Выход</title></head><body><form id="f" method="POST" action="/oauth2/sign_out"><input type="hidden" name="rd" value="/oauth2/sign_in"></form><script>document.getElementById("f").submit();</script></body></html>';
+}
+```
+
+В UI используй ссылку `href="/logout"` вместо прямого перехода на `/oauth2/sign_out`.
+
+После POST oauth2-proxy корректно чистит cookie и редиректит на `/oauth2/sign_in` через Keycloak.
+
+---
+
 ## Go Backend (unified-backend)
 
 ### Стек
