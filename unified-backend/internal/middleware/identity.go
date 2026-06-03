@@ -98,6 +98,25 @@ func parseGroups(raw string) []string {
 	return result
 }
 
+// ClientIP возвращает IP клиента, доверяя заголовку X-Real-IP от nginx.
+//
+// Мы намеренно не используем chi RealIP (уязвим к IP-spoofing). nginx — единственная
+// точка входа и выставляет X-Real-IP из $remote_addr, поэтому ему можно доверять.
+// Fallback — r.RemoteAddr (прямое подключение без прокси, например в тестах).
+func ClientIP(r *http.Request) string {
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Первый в списке — исходный клиент.
+		if idx := strings.IndexByte(xff, ','); idx >= 0 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	return r.RemoteAddr
+}
+
 func jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

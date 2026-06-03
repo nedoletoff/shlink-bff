@@ -48,7 +48,7 @@ func RequestLogger(next http.Handler) http.Handler {
 			"sub", id.Sub,
 			"username", id.Username,
 			"role", id.Role,
-			"remote", r.RemoteAddr,
+			"remote", ClientIP(r),
 		)
 	})
 }

@@ -43,7 +43,7 @@ func RequireRole(role domain.Role, auditRepo *postgres.AuditRepository) func(htt
 					Resource:  r.URL.Path,
 					Result:    "denied",
 					Details:   map[string]any{"method": r.Method, "required_role": string(role)},
-					IPAddress: r.RemoteAddr,
+					IPAddress: ClientIP(r),
 					UserAgent: r.Header.Get("User-Agent"),
 				})
 				jsonError(w, "forbidden", http.StatusForbidden)

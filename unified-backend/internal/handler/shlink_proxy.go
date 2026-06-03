@@ -275,7 +275,7 @@ func (h *ShlinkProxyHandler) recordAudit(
 		Resource:  r.URL.Path,
 		Result:    result,
 		Details:   details,
-		IPAddress: r.RemoteAddr,
+		IPAddress: middleware.ClientIP(r),
 		UserAgent: r.Header.Get("User-Agent"),
 	}
 	go func() {

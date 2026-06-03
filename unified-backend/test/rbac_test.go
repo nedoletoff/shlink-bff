@@ -196,3 +196,31 @@ func TestWithUser_RoundTrip(t *testing.T) {
 		t.Errorf("Role: expected %s, got %s", expected.Role, got.Role)
 	}
 }
+
+// TestClientIP_PrefersXRealIP — X-Real-IP от nginx имеет приоритет
+func TestClientIP_PrefersXRealIP(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Real-IP", "203.0.113.7")
+	if got := middleware.ClientIP(req); got != "203.0.113.7" {
+		t.Errorf("expected X-Real-IP, got %q", got)
+	}
+}
+
+// TestClientIP_XForwardedForFirst — берётся первый IP из X-Forwarded-For
+func TestClientIP_XForwardedForFirst(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-For", "198.51.100.5, 10.0.0.1")
+	if got := middleware.ClientIP(req); got != "198.51.100.5" {
+		t.Errorf("expected first XFF IP, got %q", got)
+	}
+}
+
+// TestClientIP_FallbackRemoteAddr — без заголовков используется RemoteAddr
+func TestClientIP_FallbackRemoteAddr(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.9:6543"
+	if got := middleware.ClientIP(req); got != "192.0.2.9:6543" {
+		t.Errorf("expected RemoteAddr fallback, got %q", got)
+	}
+}

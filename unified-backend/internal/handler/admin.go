@@ -136,7 +136,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		Resource:  r.URL.Path,
 		Result:    "success",
 		Details:   map[string]any{"target_sub": sub, "fields": fields},
-		IPAddress: r.RemoteAddr,
+		IPAddress: middleware.ClientIP(r),
 		UserAgent: r.Header.Get("User-Agent"),
 	})
 
@@ -171,7 +171,7 @@ func (h *AdminHandler) UpdateAPIKey(w http.ResponseWriter, r *http.Request) {
 		Result:   "success",
 		// Новый ключ в аудит НЕ пишем — sanitizeDetails уберёт его в любом случае
 		Details:   map[string]any{"target_sub": sub},
-		IPAddress: r.RemoteAddr,
+		IPAddress: middleware.ClientIP(r),
 		UserAgent: r.Header.Get("User-Agent"),
 	})
 
@@ -205,7 +205,7 @@ func (h *AdminHandler) UpdateSlugPrefix(w http.ResponseWriter, r *http.Request) 
 		Resource:  r.URL.Path,
 		Result:    "success",
 		Details:   map[string]any{"target_sub": sub, "prefix": payload.Prefix},
-		IPAddress: r.RemoteAddr,
+		IPAddress: middleware.ClientIP(r),
 		UserAgent: r.Header.Get("User-Agent"),
 	})
 

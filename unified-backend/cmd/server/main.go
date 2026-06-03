@@ -62,8 +62,10 @@ func main() {
 
 	r := chi.NewRouter()
 
-	// Базовые middleware
-	r.Use(chimiddleware.RealIP)
+	// Базовые middleware.
+	// chimiddleware.RealIP НЕ используем: он уязвим к IP-spoofing (GHSA-3fxj-6jh8-hvhx)
+	// и перезаписывает r.RemoteAddr из клиентских заголовков. Мы за nginx,
+	// который сам пробрасывает доверенный X-Real-IP — полагаемся на него.
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
