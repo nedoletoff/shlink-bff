@@ -132,8 +132,15 @@ function RenameTagModal({
   const [newTag,  setNewTag]  = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Сброс поля при смене редактируемого тега (#22): иначе при повторном
+  // открытии остаётся значение от предыдущей операции.
+  useEffect(() => {
+    setNewTag('');
+  }, [oldTag]);
+
   const handleRename = async () => {
-    if (!newTag.trim()) return;
+    // Гард от пустого oldTag (#28): при быстром закрытии editTarget может быть "".
+    if (!oldTag.trim() || !newTag.trim()) return;
     setLoading(true);
     try {
       await api.put(`/api/shlink/tags/${encodeURIComponent(oldTag)}`, {

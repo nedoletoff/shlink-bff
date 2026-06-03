@@ -70,5 +70,3 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, resp, http.StatusOK)
 }
-
-

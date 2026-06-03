@@ -50,18 +50,16 @@ cp oauth2-proxy/shlink.cfg.example oauth2-proxy/shlink.cfg
 DOMAIN_SHORT=shlink.example.com
 DOMAIN_SHORT_CREATE=shlink-create.example.com
 
-# PostgreSQL для Shlink
-SHLINK_DB_NAME=shlink
-SHLINK_DB_USER=shlink
-SHLINK_DB_PASSWORD=changeme
-
-# PostgreSQL для BFF
+# PostgreSQL для BFF (shlink-api в docker-compose использует SQLite, отдельная БД ему не нужна)
 DB_USER=bff
 DB_PASSWORD=changeme
 
-# Shlink API ключ (генерируется при первом запуске или задаётся вручную)
-SHLINK_API_KEY=your-shlink-api-key
+# Начальный admin API key для shlink-api (INITIAL_API_KEY).
+# unified-backend его НЕ использует — работает с per-user ключами из БД (см. #18).
 ADMIN_SHLINK_API_KEY=your-admin-shlink-api-key
+
+# Группы Keycloak с ролью admin (дефолт: shlink-admins,admin)
+ADMIN_GROUPS=shlink-admins,admin
 
 # Keycloak (extra_hosts в docker compose: имя → IP)
 KEYCLOAK_HOST=keycloak.example.com
@@ -74,7 +72,10 @@ OAUTH2_CLIENT_SECRET_SHLINK=client-secret-from-keycloak
 OAUTH2_COOKIE_SECRET=your-32-byte-base64-secret
 ```
 
-Полный список параметров см. в `.env.example`.
+> Внутренние переменные backend (`HTTP_ADDR`, `DATABASE_URL`, `SHLINK_INTERNAL_URL`)
+> задаются в `docker-compose.yml` напрямую и обычно не требуют правки.
+
+Полный список параметров см. в `.env.example` — он является источником истины.
 
 ### Шаг 3. Настроить Keycloak
 
@@ -184,7 +185,31 @@ curl -sk https://shlink-create.example.com/api/me  # в браузере (пос
 ADMIN_GROUPS=shadmin,superusers
 ```
 
-После изменения — перезапустить `unified-backend`.
+`ADMIN_GROUPS` читается один раз при старте и хранится в иммутабельном `config.Config`
+(без глобального состояния и гонок данных). После изменения — перезапустить `unified-backend`.
+
+### Управление ролями
+
+Роль назначается в два этапа:
+
+1. **Первый логин (auto-provision).** Если пользователя нет в БД, он создаётся автоматически,
+   роль берётся из групп Keycloak (`resolveRole`).
+2. **Последующие логины.** Роль в БД — источник истины и **не перезаписывается** из Keycloak
+   при каждом входе (см. `UserRepository.Upsert`, #32). Это позволяет админу вручную
+   понижать/повышать роль через `PUT /api/admin/users/{sub}` без последующего затирания.
+
+Если требуется, чтобы Keycloak всегда был источником истины для ролей, добавьте
+`role = EXCLUDED.role` в `ON CONFLICT` внутри `Upsert`.
+
+### TLS-сертификаты nginx
+
+nginx ожидает **раздельные** файлы сертификата и ключа (#9):
+
+```bash
+# Из combined PEM (cert+key в одном файле) извлекаем раздельно:
+openssl x509 -in cert.pem -out nginx/ssl/fullchain.pem   # цепочка сертификатов
+openssl pkey -in cert.pem -out nginx/ssl/privkey.pem      # приватный ключ
+```
 
 ---
 

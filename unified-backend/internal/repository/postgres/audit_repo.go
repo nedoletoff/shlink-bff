@@ -27,25 +27,46 @@ var sensitiveKeys = []string{
 	"authorization", "password", "secret", "token",
 }
 
+func isSensitiveKey(k string) bool {
+	kl := strings.ToLower(k)
+	for _, sk := range sensitiveKeys {
+		if kl == sk {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeDetails рекурсивно удаляет чувствительные ключи на всех уровнях вложенности (#15).
+// Ранее очищались только top-level поля, и {"data": {"api_key": "..."}} утекало в аудит.
 func sanitizeDetails(d map[string]any) map[string]any {
 	if d == nil {
 		return nil
 	}
 	result := make(map[string]any, len(d))
 	for k, v := range d {
-		kl := strings.ToLower(k)
-		sensitive := false
-		for _, sk := range sensitiveKeys {
-			if kl == sk {
-				sensitive = true
-				break
-			}
+		if isSensitiveKey(k) {
+			continue
 		}
-		if !sensitive {
-			result[k] = v
-		}
+		result[k] = sanitizeValue(v)
 	}
 	return result
+}
+
+// sanitizeValue рекурсивно обходит вложенные map и слайсы.
+func sanitizeValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return sanitizeDetails(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = sanitizeValue(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func (r *AuditRepository) Record(ctx context.Context, e *domain.AuditEntry) {

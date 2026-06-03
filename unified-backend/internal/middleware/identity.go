@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"net/http"
-	"os"
 	"strings"
 )
 
@@ -26,52 +25,30 @@ type Identity struct {
 	Groups   []string
 }
 
-// adminGroups — множество имён групп, которым присваивается роль admin.
-// Загружается из переменной окружения ADMIN_GROUPS (comma-separated).
-// Дефолт: "shlink-admins,admin"
-var adminGroups = loadAdminGroups()
+// ExtractIdentity — фабрика middleware: читает X-Auth-Request-* заголовки от oauth2-proxy
+// и кладёт Identity-поля в контекст. Множество admin-групп передаётся явно
+// (из config.Config), без глобального мутабельного состояния — поэтому гонок данных нет (#13, #33).
+func ExtractIdentity(adminGroups map[string]struct{}) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sub := r.Header.Get("X-Auth-Request-User")
+			if sub == "" {
+				jsonError(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 
-func loadAdminGroups() map[string]struct{} {
-	raw := os.Getenv("ADMIN_GROUPS")
-	if raw == "" {
-		raw = "shlink-admins,admin"
+			groups := parseGroups(r.Header.Get("X-Auth-Request-Groups"))
+			role := resolveRole(groups, adminGroups)
+
+			ctx := context.WithValue(r.Context(), CtxKeySub, sub)
+			ctx = context.WithValue(ctx, CtxKeyEmail, r.Header.Get("X-Auth-Request-Email"))
+			ctx = context.WithValue(ctx, CtxKeyUsername, r.Header.Get("X-Auth-Request-Preferred-Username"))
+			ctx = context.WithValue(ctx, CtxKeyRole, role)
+			ctx = context.WithValue(ctx, CtxKeyGroups, groups)
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
-	m := make(map[string]struct{})
-	for _, g := range strings.Split(raw, ",") {
-		if t := strings.ToLower(strings.TrimSpace(g)); t != "" {
-			m[t] = struct{}{}
-		}
-	}
-	return m
-}
-
-// ReloadAdminGroups перечитывает ADMIN_GROUPS из env.
-// Используется только в тестах для изоляции состояния между кейсами.
-func ReloadAdminGroups() {
-	adminGroups = loadAdminGroups()
-}
-
-// ExtractIdentity читает X-Auth-Request-* заголовки от oauth2-proxy
-// и кладёт Identity-поля в контекст.
-func ExtractIdentity(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sub := r.Header.Get("X-Auth-Request-User")
-		if sub == "" {
-			jsonError(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		groups := parseGroups(r.Header.Get("X-Auth-Request-Groups"))
-		role := resolveRole(groups)
-
-		ctx := context.WithValue(r.Context(), CtxKeySub, sub)
-		ctx = context.WithValue(ctx, CtxKeyEmail, r.Header.Get("X-Auth-Request-Email"))
-		ctx = context.WithValue(ctx, CtxKeyUsername, r.Header.Get("X-Auth-Request-Preferred-Username"))
-		ctx = context.WithValue(ctx, CtxKeyRole, role)
-		ctx = context.WithValue(ctx, CtxKeyGroups, groups)
-
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
 }
 
 // IdentityFromCtx извлекает Identity из контекста запроса
@@ -95,9 +72,9 @@ func groupsFromCtx(ctx context.Context) []string {
 	return v
 }
 
-// resolveRole проверяет группы пользователя против adminGroups.
+// resolveRole проверяет группы пользователя против переданного множества adminGroups.
 // Сравнение case-insensitive. Если совпадение найдено — возвращает "admin", иначе "user".
-func resolveRole(groups []string) string {
+func resolveRole(groups []string, adminGroups map[string]struct{}) string {
 	for _, g := range groups {
 		if _, ok := adminGroups[strings.ToLower(strings.TrimSpace(g))]; ok {
 			return "admin"
@@ -119,6 +96,25 @@ func parseGroups(raw string) []string {
 		}
 	}
 	return result
+}
+
+// ClientIP возвращает IP клиента, доверяя заголовку X-Real-IP от nginx.
+//
+// Мы намеренно не используем chi RealIP (уязвим к IP-spoofing). nginx — единственная
+// точка входа и выставляет X-Real-IP из $remote_addr, поэтому ему можно доверять.
+// Fallback — r.RemoteAddr (прямое подключение без прокси, например в тестах).
+func ClientIP(r *http.Request) string {
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Первый в списке — исходный клиент.
+		if idx := strings.IndexByte(xff, ','); idx >= 0 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	return r.RemoteAddr
 }
 
 func jsonError(w http.ResponseWriter, msg string, code int) {

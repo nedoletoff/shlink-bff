@@ -15,16 +15,20 @@ const COLORS = ['#4dabf7', '#51cf66', '#ff6b6b', '#ffd43b', '#cc5de8'];
 export function Dashboard() {
   const [data,    setData]    = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
 
   useEffect(() => {
     api.get<DashboardResponse>('/api/dashboard')
       .then(setData)
-      .catch(() => setData(null))
+      // Сохраняем причину ошибки, а не глушим её (#23)
+      .catch((e: unknown) =>
+        setLoadErr(e instanceof Error ? e.message : 'Неизвестная ошибка'))
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <Center h={400}><Loader /></Center>;
-  if (!data)   return <Text c="red">Ошибка загрузки дашборда</Text>;
+  if (loadErr) return <Text c="red">Ошибка загрузки дашборда: {loadErr}</Text>;
+  if (!data)   return <Text c="red">Нет данных дашборда</Text>;
 
   return (
     <Stack gap="lg">

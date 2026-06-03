@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Stack, Title, Table, Text, Badge, Group, Select,
   TextInput, Center, Loader, Pagination,
@@ -42,7 +42,8 @@ export function AuditLogs() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo,   setDateTo]   = useState('');
 
-  const fetchLogs = () => {
+  // useCallback вместо eslint-disable (#21): все зависимости явные.
+  const fetchLogs = useCallback(() => {
     setLoading(true);
     api.get<AuditLogsResponse>('/api/admin/logs', {
       params: {
@@ -58,10 +59,9 @@ export function AuditLogs() {
       .then(r => { setLogs(r.logs ?? []); setTotal(r.total); })
       .catch(() => { setLogs([]); setTotal(0); })
       .finally(() => setLoading(false));
-  };
+  }, [page, username, action, result, dateFrom, dateTo]);
 
-// eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchLogs(); }, [page, username, action, result, dateFrom, dateTo]);
+  useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   const resultColor = (r: string) =>
     r === 'success' ? 'green' : r === 'denied' ? 'red' : 'orange';
@@ -127,8 +127,11 @@ export function AuditLogs() {
                     </Text>
                   </Table.Td>
                   <Table.Td>
-                    <Text size="sm">{log.username}</Text>
-                    <Text size="xs" c="dimmed" ff="monospace">{log.userSub?.slice(0, 8)}…</Text>
+                    {/* fallback '—' при null (#34) */}
+                    <Text size="sm">{log.username ?? '—'}</Text>
+                    <Text size="xs" c="dimmed" ff="monospace">
+                      {log.userSub ? `${log.userSub.slice(0, 8)}…` : '—'}
+                    </Text>
                   </Table.Td>
                   <Table.Td>
                     <Badge size="sm" color={log.role === 'admin' ? 'red' : 'blue'} variant="light">
@@ -161,12 +164,20 @@ export function AuditLogs() {
             </Table.Tbody>
           </Table>
 
-          <Pagination
-            total={Math.max(1, Math.ceil(total / PAGE_SIZE))}
-            value={page}
-            onChange={setPage}
-            siblings={1}
-          />
+          {/* Счётчик "записей X из Y" рядом с пагинацией (#27) */}
+          <Group justify="space-between" align="center">
+            <Text size="sm" c="dimmed">
+              {total === 0
+                ? 'Нет записей'
+                : `Записи ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, total)} из ${total}`}
+            </Text>
+            <Pagination
+              total={Math.max(1, Math.ceil(total / PAGE_SIZE))}
+              value={page}
+              onChange={setPage}
+              siblings={1}
+            />
+          </Group>
         </>
       )}
     </Stack>

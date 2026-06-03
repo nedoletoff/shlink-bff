@@ -7,7 +7,7 @@
 #   cp .env.example .env && vi .env
 #   Скопируйте nginx/nginx.conf.example -> nginx/nginx.conf
 #   Скопируйте oauth2-proxy/shlink.cfg.example -> oauth2-proxy/shlink.cfg
-#   Положите SSL-сертификат в nginx/ssl/cert.pem
+#   Положите SSL раздельно: nginx/ssl/fullchain.pem и nginx/ssl/privkey.pem
 
 x-logging: &default-logging
   driver: "json-file"
@@ -94,7 +94,10 @@ services:
       HTTP_ADDR: "0.0.0.0:8080"
       DATABASE_URL: "postgres://${DB_USER:-bff}:${DB_PASSWORD}@postgres:5432/shlink_bff?sslmode=disable"
       SHLINK_INTERNAL_URL: "http://shlink-api:8080"
-      SHLINK_API_KEY: ${ADMIN_SHLINK_API_KEY}
+      # SHLINK_API_KEY убран (#18): backend использует per-user ключ из БД (X-Api-Key),
+      # а не глобальный ключ. ADMIN_SHLINK_API_KEY нужен только shlink-api (INITIAL_API_KEY).
+      # ADMIN_GROUPS — имена Keycloak-групп с ролью admin (дефолт: shlink-admins,admin).
+      ADMIN_GROUPS: ${ADMIN_GROUPS:-shlink-admins,admin}
       FEATURE_USER_SLUG_PREFIX: ${FEATURE_USER_SLUG_PREFIX:-false}
       FEATURE_USER_TAG_INTERNAL_ID: ${FEATURE_USER_TAG_INTERNAL_ID:-false}
     networks:

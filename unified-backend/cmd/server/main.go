@@ -40,23 +40,32 @@ func main() {
 	defer pool.Close()
 
 	// Репозитории
-	userRepo  := postgres.NewUserRepository(pool)
+	userRepo := postgres.NewUserRepository(pool)
 	auditRepo := postgres.NewAuditRepository(pool)
 
 	// Shlink клиент и сервис
 	shlinkClient := shlink.NewClient(cfg.ShlinkURL)
-	shlinkSvc    := service.NewShlinkService(shlinkClient, cfg)
+	shlinkSvc := service.NewShlinkService(shlinkClient, cfg)
+
+	// Валидация версии Shlink API на старте (#16): минимум v5.
+	// Shlink может ещё подниматься — делаем несколько попыток с задержкой.
+	if err := shlinkClient.ValidateVersion(ctx, 5, 10, 3*time.Second); err != nil {
+		slog.Error("shlink version validation failed", "err", err)
+		os.Exit(1)
+	}
 
 	// Хендлеры
-	meH        := handler.NewMeHandler(cfg)
-	dashH      := handler.NewDashboardHandler(shlinkSvc)
-	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
-	adminH     := handler.NewAdminHandler(userRepo, auditRepo)
+	meH := handler.NewMeHandler(cfg)
+	dashH := handler.NewDashboardHandler(shlinkSvc)
+	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
+	adminH := handler.NewAdminHandler(userRepo, auditRepo)
 
 	r := chi.NewRouter()
 
-	// Базовые middleware
-	r.Use(chimiddleware.RealIP)
+	// Базовые middleware.
+	// chimiddleware.RealIP НЕ используем: он уязвим к IP-spoofing (GHSA-3fxj-6jh8-hvhx)
+	// и перезаписывает r.RemoteAddr из клиентских заголовков. Мы за nginx,
+	// который сам пробрасывает доверенный X-Real-IP — полагаемся на него.
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
@@ -68,7 +77,7 @@ func main() {
 
 	// Все /api/* — за identity extraction + request logging + active user check
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.ExtractIdentity)
+		r.Use(middleware.ExtractIdentity(cfg.AdminGroups))
 		r.Use(middleware.RequestLogger)
 		r.Use(middleware.RequireActiveUser(userRepo, auditRepo))
 
@@ -85,7 +94,8 @@ func main() {
 		r.Delete("/api/shlink/short-urls/{shortCode}", proxyH.DeleteShortURL)
 
 		r.Get("/api/shlink/tags", proxyH.ListTags)
-		r.Post("/api/shlink/tags", proxyH.CreateTag)
+		// POST /api/shlink/tags убран (#1): Shlink v5 создаёт теги автоматически
+		// при добавлении к ссылке — отдельного endpoint создания нет.
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
 		r.Delete("/api/shlink/tags/{tagId}", proxyH.DeleteTag)
 

@@ -2,6 +2,7 @@ import { AppShell, Burger, Group, Text } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
+import LogoutButton from '../LogoutButton';
 import { useAuth } from '../../contexts/AuthContext';
 
 export function AppLayout() {
@@ -19,9 +20,13 @@ export function AppLayout() {
           <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
           <Text fw={700} size="lg">Shlink Manager</Text>
           {user && (
-            <Text size="sm" c="dimmed" ml="auto">
-              {user.username} · <b>{user.role}</b>
-            </Text>
+            <Group ml="auto" gap="sm">
+              <Text size="sm" c="dimmed">
+                {user.username} · <b>{user.role}</b>
+              </Text>
+              {/* Кнопка выхода подключена (#25): ранее LogoutButton был реализован, но не использовался */}
+              <LogoutButton />
+            </Group>
           )}
         </Group>
       </AppShell.Header>

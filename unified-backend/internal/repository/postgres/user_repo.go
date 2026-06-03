@@ -3,7 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
-	"time"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -83,6 +84,12 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 	return users, rows.Err()
 }
 
+// Upsert вставляет пользователя или обновляет username/email при повторном логине.
+//
+// ВАЖНО (#32): role НЕ обновляется при повторном логине намеренно — роль в БД
+// является источником истины после первого провизионирования, чтобы админ мог
+// понижать/повышать роль вручную, а Keycloak не затирал это при каждом входе.
+// См. раздел README "Управление ролями".
 func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 	const q = `
 		INSERT INTO users (sub, username, email, role, shlink_api_key, status)
@@ -90,6 +97,7 @@ func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 		ON CONFLICT (sub) DO UPDATE SET
 			username   = EXCLUDED.username,
 			email      = EXCLUDED.email,
+			-- role НЕ обновляется намеренно (#32)
 			updated_at = NOW()`
 	_, err := r.pool.Exec(ctx, q,
 		u.Sub, u.Username, u.Email, u.Role, u.ShlinkAPIKey, u.Status,
@@ -97,35 +105,36 @@ func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 	return err
 }
 
+// UpdateBySubFields обновляет разрешённые поля пользователя ОДНИМ атомарным UPDATE (#14).
+//
+// Прежняя реализация выполняла до трёх отдельных UPDATE без транзакции,
+// что давало inconsistent-состояние между запросами.
 func (r *UserRepository) UpdateBySubFields(ctx context.Context, sub string, fields map[string]any) error {
-	// Обновляем только разрешённые поля
-	allowed := map[string]bool{
-		"role": true, "status": true, "slug_prefix": true,
-	}
-	for k := range fields {
-		if !allowed[k] {
-			delete(fields, k)
-		}
-	}
-	fields["updated_at"] = time.Now()
+	// Белый список колонок — защита от SQL-инъекции в имена полей.
+	allowed := []string{"role", "status", "slug_prefix"}
 
-	// Простое поле-за-полем (для production стоит использовать squirrel/bun)
-	if v, ok := fields["role"]; ok {
-		if _, err := r.pool.Exec(ctx, `UPDATE users SET role=$1, updated_at=NOW() WHERE sub=$2`, v, sub); err != nil {
-			return err
+	setClauses := make([]string, 0, len(allowed))
+	args := make([]any, 0, len(allowed)+1)
+	argIdx := 1
+	for _, col := range allowed {
+		if v, ok := fields[col]; ok {
+			setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col, argIdx))
+			args = append(args, v)
+			argIdx++
 		}
 	}
-	if v, ok := fields["status"]; ok {
-		if _, err := r.pool.Exec(ctx, `UPDATE users SET status=$1, updated_at=NOW() WHERE sub=$2`, v, sub); err != nil {
-			return err
-		}
+
+	if len(setClauses) == 0 {
+		return nil // нечего обновлять
 	}
-	if v, ok := fields["slug_prefix"]; ok {
-		if _, err := r.pool.Exec(ctx, `UPDATE users SET slug_prefix=$1, updated_at=NOW() WHERE sub=$2`, v, sub); err != nil {
-			return err
-		}
-	}
-	return nil
+
+	args = append(args, sub)
+	query := fmt.Sprintf(
+		"UPDATE users SET %s, updated_at = NOW() WHERE sub = $%d",
+		strings.Join(setClauses, ", "), argIdx,
+	)
+	_, err := r.pool.Exec(ctx, query, args...)
+	return err
 }
 
 func (r *UserRepository) UpdateAPIKey(ctx context.Context, sub, newKey string) error {

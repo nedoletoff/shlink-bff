@@ -2,10 +2,12 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -121,6 +123,14 @@ func (h *ShlinkProxyHandler) UpdateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Проверка владельца: role=user не может изменять чужие ссылки (#8)
+	if !h.shlinkSvc.CanModifyShortCode(user, shortCode) {
+		slog.Warn("proxy: update denied — not owner", "sub", user.Sub, "shortCode", shortCode)
+		h.recordAudit(r, user, "update_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "not owner"})
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
+
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
@@ -155,6 +165,14 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Проверка владельца: role=user не может удалять чужие ссылки (#8)
+	if !h.shlinkSvc.CanModifyShortCode(user, shortCode) {
+		slog.Warn("proxy: delete denied — not owner", "sub", user.Sub, "shortCode", shortCode)
+		h.recordAudit(r, user, "delete_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "not owner"})
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
+
 	if err := h.shlinkSvc.Client().DeleteShortURL(r.Context(), user.ShlinkAPIKey, shortCode); err != nil {
 		slog.Error("proxy: delete short-url failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
 		h.recordAudit(r, user, "delete_short_url", "error", map[string]any{"shortCode": shortCode, "err": err.Error()})
@@ -184,30 +202,11 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp, http.StatusOK)
 }
 
-// POST /api/shlink/tags — создаёт тег через Shlink (Shlink создаёт теги при добавлении к ссылке)
-// Здесь используем rename как "создание" нового тега
-func (h *ShlinkProxyHandler) CreateTag(w http.ResponseWriter, r *http.Request) {
-	user := middleware.UserFromCtx(r.Context())
-	if user == nil {
-		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
-		return
-	}
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
-		return
-	}
-
-	if err := h.shlinkSvc.Client().RenameTag(r.Context(), user.ShlinkAPIKey, bytes.NewReader(bodyBytes)); err != nil {
-		slog.Error("proxy: create tag failed", "sub", user.Sub, "err", err)
-		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadGateway)
-		return
-	}
-
-	h.recordAudit(r, user, "create_tag", "success", nil)
-	w.WriteHeader(http.StatusCreated)
-}
+// Примечание по #1: отдельного endpoint "создание тега" нет.
+// Shlink v5 не имеет API для явного создания тега: теги создаются автоматически
+// при создании/обновлении ссылки с новым тегом (POST/PATCH /rest/v3/short-urls).
+// PUT /rest/v3/tags — только переименование ({oldName, newName}).
+// Прежний CreateTag вызывал RenameTag и падал в runtime — endpoint удалён.
 
 // PUT /api/shlink/tags/{tagId} — переименование тега
 func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
@@ -257,14 +256,18 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recordAudit — вспомогательная запись в аудит
+// recordAudit — вспомогательная запись в аудит.
+//
+// Запись выполняется в отдельной горутине с ДЕТАЧНУТЫМ контекстом.
+// Использовать r.Context() здесь нельзя: после возврата HTTP-handler
+// контекст запроса отменяется, и pool.Exec молча теряет запись аудита (#4, #10).
 func (h *ShlinkProxyHandler) recordAudit(
 	r *http.Request,
 	user *domain.User,
 	action, result string,
 	details map[string]any,
 ) {
-	go h.auditRepo.Record(r.Context(), &domain.AuditEntry{
+	entry := &domain.AuditEntry{
 		UserSub:   user.Sub,
 		Username:  user.Username,
 		Role:      string(user.Role),
@@ -272,7 +275,12 @@ func (h *ShlinkProxyHandler) recordAudit(
 		Resource:  r.URL.Path,
 		Result:    result,
 		Details:   details,
-		IPAddress: r.RemoteAddr,
+		IPAddress: middleware.ClientIP(r),
 		UserAgent: r.Header.Get("User-Agent"),
-	})
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.auditRepo.Record(ctx, entry)
+	}()
 }

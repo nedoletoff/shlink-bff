@@ -9,8 +9,8 @@ RUN if [ -f package-lock.json ]; then npm ci --prefer-offline; else npm install;
 COPY . .
 RUN npm run build
 
-# Финальный образ — только статика, отдаётся через nginx
-FROM nginx:1.27-alpine
+# Финальный образ — только статика, отдаётся через nginx (выровнено с docker-compose: 1.30)
+FROM nginx:1.30-alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # SPA fallback: все пути → index.html

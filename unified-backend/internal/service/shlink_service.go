@@ -73,6 +73,28 @@ func (s *ShlinkService) FilterShortURLsByUser(
 	return filtered
 }
 
+// CanModifyShortCode проверяет, вправе ли пользователь изменять/удалять ссылку с данным shortCode.
+//
+// Модель владения здесь основана на slug-префиксе (так же, как Filter/Enforce):
+//   - admin — может всё;
+//   - при выключенном feature flag изоляция не применяется;
+//   - role=user с префиксом — только свои ссылки (shortCode начинается с префикса).
+//
+// Без этой проверки пользователь мог бы изменить/удалить чужую ссылку, зная её shortCode (#8).
+func (s *ShlinkService) CanModifyShortCode(user *domain.User, shortCode string) bool {
+	if user.Role == domain.RoleAdmin {
+		return true
+	}
+	if !s.cfg.UserSlugPrefixEnabled {
+		return true
+	}
+	if user.SlugPrefix == "" {
+		// feature включён, но префикс не задан — изменять нечего безопасного, запрещаем.
+		return false
+	}
+	return strings.HasPrefix(shortCode, user.SlugPrefix)
+}
+
 // Client exposes the shlink client for use in handlers
 func (s *ShlinkService) Client() *shlink.Client {
 	return s.client
