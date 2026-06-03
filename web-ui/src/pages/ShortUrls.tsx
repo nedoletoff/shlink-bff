@@ -1,34 +1,55 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Stack, Title, Button, TextInput, Table, ActionIcon, Group,
-  Badge, Text, Loader, Center, Modal, Tooltip,
+  Badge, Text, Loader, Center, Modal, Tooltip, Pagination,
 } from '@mantine/core';
-import { useDisclosure } from '@mantine/hooks';
+import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconTrash, IconSearch, IconExternalLink, IconEdit } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
-import type { ShortURL, ShortURLsListResponse } from '../types/api';
+import type { Pagination as PaginationInfo, ShortURL, ShortURLsListResponse } from '../types/api';
+
+const ITEMS_PER_PAGE = 20;
 
 export function ShortUrls() {
   const { user }  = useAuth();
   const [urls,          setUrls]          = useState<ShortURL[]>([]);
+  const [pagination,    setPagination]    = useState<PaginationInfo | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [search,        setSearch]        = useState('');
+  const [page,          setPage]          = useState(1);
   const [deleteTarget,  setDeleteTarget]  = useState<ShortURL | null>(null);
   const [editTarget,    setEditTarget]    = useState<ShortURL | null>(null);
   const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure(false);
 
-  const fetchUrls = () => {
-    setLoading(true);
-    api.get<ShortURLsListResponse>('/api/shlink/short-urls')
-      .then(r => setUrls(r.shortUrls.data))
-      .catch(() => setUrls([]))
-      .finally(() => setLoading(false));
-  };
+  // Дебаунс поиска, чтобы не бить в API на каждый символ.
+  const [debouncedSearch] = useDebouncedValue(search, 350);
 
-  useEffect(() => { fetchUrls(); }, []);
+  // Серверная пагинация + поиск (#24): ранее загружалась только первая страница,
+  // pagination из ответа игнорировался, а поиск работал только по загруженным записям.
+  const fetchUrls = useCallback(() => {
+    setLoading(true);
+    api.get<ShortURLsListResponse>('/api/shlink/short-urls', {
+      params: {
+        searchTerm:   debouncedSearch || undefined,
+        page,
+        itemsPerPage: ITEMS_PER_PAGE,
+      },
+    })
+      .then(r => {
+        setUrls(r.shortUrls.data);
+        setPagination(r.shortUrls.pagination);
+      })
+      .catch(() => { setUrls([]); setPagination(null); })
+      .finally(() => setLoading(false));
+  }, [debouncedSearch, page]);
+
+  useEffect(() => { fetchUrls(); }, [fetchUrls]);
+
+  // При смене поискового запроса возвращаемся на первую страницу.
+  useEffect(() => { setPage(1); }, [debouncedSearch]);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -42,11 +63,6 @@ export function ShortUrls() {
     }
   };
 
-  const filtered = urls.filter(u =>
-    u.shortCode.toLowerCase().includes(search.toLowerCase()) ||
-    u.longUrl.toLowerCase().includes(search.toLowerCase()) ||
-    (u.title ?? '').toLowerCase().includes(search.toLowerCase()),
-  );
 
   return (
     <Stack gap="lg">
@@ -81,7 +97,7 @@ export function ShortUrls() {
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {filtered.map(url => (
+            {urls.map(url => (
               <Table.Tr key={url.shortCode}>
                 <Table.Td>
                   <Group gap={4}>
@@ -134,7 +150,7 @@ export function ShortUrls() {
                 </Table.Td>
               </Table.Tr>
             ))}
-            {filtered.length === 0 && (
+            {urls.length === 0 && (
               <Table.Tr>
                 <Table.Td colSpan={6}>
                   <Center p="xl">
@@ -145,6 +161,21 @@ export function ShortUrls() {
             )}
           </Table.Tbody>
         </Table>
+      )}
+
+      {/* Серверная пагинация (#24) */}
+      {pagination && pagination.pagesCount > 1 && (
+        <Group justify="space-between" align="center">
+          <Text size="sm" c="dimmed">
+            Всего: {pagination.totalItems}
+          </Text>
+          <Pagination
+            total={pagination.pagesCount}
+            value={page}
+            onChange={setPage}
+            siblings={1}
+          />
+        </Group>
       )}
 
       {/* Форма создания */}
@@ -250,7 +281,8 @@ function EditShortUrlModal({
     try {
       await api.patch(`/api/shlink/short-urls/${url.shortCode}`, {
         longUrl: longUrl.trim(),
-        title:   title.trim() || undefined,
+        // null явно очищает title в Shlink; undefined оставил бы старое значение (#36)
+        title:   title.trim() || null,
       });
       notifications.show({ message: 'Ссылка обновлена', color: 'green' });
       onSaved();

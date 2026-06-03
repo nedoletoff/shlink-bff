@@ -15,6 +15,9 @@ export interface FeatureFlags {
 
 export type UserRole = 'admin' | 'user';
 
+// Статус пользователя — union вместо string (#35)
+export type UserStatus = 'active' | 'disabled' | 'pending';
+
 export interface MeResponse {
   sub:         string;
   username:    string;
@@ -112,8 +115,8 @@ export interface AdminUser {
   sub:        string;
   username:   string;
   email:      string;
-  role:       string;
+  role:       UserRole;
   slugPrefix: string | null;
-  status:     string;
+  status:     UserStatus; // union вместо string (#35)
   hasApiKey:  boolean;
 }

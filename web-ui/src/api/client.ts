@@ -33,11 +33,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   const resp = await fetch(url, {
     credentials: 'include', // cookie-based session через oauth2-proxy
+    ...init,
     headers: {
-      'Content-Type': 'application/json',
+      // Content-Type только для запросов с телом (#26): DELETE без тела + Content-Type
+      // на некоторых серверах даёт 400 Bad Request.
+      ...(init.body !== undefined && init.body !== null
+        ? { 'Content-Type': 'application/json' }
+        : {}),
       ...init.headers,
     },
-    ...init,
   });
 
   if (resp.status === 401) {
