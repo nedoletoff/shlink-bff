@@ -9,30 +9,49 @@ import (
 // (функция приватная, поэтому проверяем косвенно через Record с известными полями).
 // Для чистого unit-теста — выносим логику в отдельный экспортируемый хелпер.
 
-// SanitizeForTest — копия sanitizeDetails для тестов (дублирует логику из audit_repo.go)
-func SanitizeForTest(d map[string]any) map[string]any {
-	sensitiveKeys := []string{
-		"shlink_api_key", "api_key", "apikey", "x-api-key",
-		"authorization", "password", "secret", "token",
+// SanitizeForTest — копия sanitizeDetails для тестов (рекурсивная, как в audit_repo.go, #15)
+var testSensitiveKeys = []string{
+	"shlink_api_key", "api_key", "apikey", "x-api-key",
+	"authorization", "password", "secret", "token",
+}
+
+func testIsSensitive(k string) bool {
+	kl := strings.ToLower(k)
+	for _, sk := range testSensitiveKeys {
+		if kl == sk {
+			return true
+		}
 	}
+	return false
+}
+
+func SanitizeForTest(d map[string]any) map[string]any {
 	if d == nil {
 		return nil
 	}
 	result := make(map[string]any, len(d))
 	for k, v := range d {
-		kl := strings.ToLower(k)
-		sensitive := false
-		for _, sk := range sensitiveKeys {
-			if kl == sk {
-				sensitive = true
-				break
-			}
+		if testIsSensitive(k) {
+			continue
 		}
-		if !sensitive {
-			result[k] = v
-		}
+		result[k] = sanitizeValueForTest(v)
 	}
 	return result
+}
+
+func sanitizeValueForTest(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return SanitizeForTest(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = sanitizeValueForTest(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // TestSanitizeDetails_RemovesSensitiveKeys — API key никогда не попадает в аудит
@@ -77,6 +96,47 @@ func TestSanitizeDetails_EmptyInput(t *testing.T) {
 	result := SanitizeForTest(map[string]any{})
 	if len(result) != 0 {
 		t.Errorf("empty input should return empty map, got %d entries", len(result))
+	}
+}
+
+// TestSanitizeDetails_Nested — чувствительные ключи удаляются на вложенных уровнях (#15)
+func TestSanitizeDetails_Nested(t *testing.T) {
+	input := map[string]any{
+		"data": map[string]any{
+			"api_key":   "nested-secret",
+			"shortCode": "abc123",
+			"deeper": map[string]any{
+				"password": "deep-secret",
+				"keep":     "ok",
+			},
+		},
+		"items": []any{
+			map[string]any{"token": "list-secret", "id": 1},
+		},
+	}
+
+	result := SanitizeForTest(input)
+	data := result["data"].(map[string]any)
+	if _, ok := data["api_key"]; ok {
+		t.Error("nested api_key must be removed")
+	}
+	if data["shortCode"] != "abc123" {
+		t.Error("nested safe field shortCode must be preserved")
+	}
+	deeper := data["deeper"].(map[string]any)
+	if _, ok := deeper["password"]; ok {
+		t.Error("deeply nested password must be removed")
+	}
+	if deeper["keep"] != "ok" {
+		t.Error("deeply nested safe field must be preserved")
+	}
+	items := result["items"].([]any)
+	first := items[0].(map[string]any)
+	if _, ok := first["token"]; ok {
+		t.Error("token inside slice must be removed")
+	}
+	if first["id"] != 1 {
+		t.Error("safe field inside slice must be preserved")
 	}
 }
 

@@ -75,7 +75,7 @@ type TagsWithStatsResponse struct {
 
 // TagStats reflects Shlink v5.x response: visitsCount replaced by visitsSummary object.
 type TagStats struct {
-	Tag           string `json:"tag"`
+	Tag            string `json:"tag"`
 	ShortURLsCount int    `json:"shortUrlsCount"`
 	// v5: visitsCount (int) is replaced by visitsSummary object
 	VisitsSummary struct {
@@ -173,20 +173,77 @@ func (c *Client) GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endD
 	url := c.baseURL + "/rest/v3/visits/non-orphan?" + q.Encode()
 	return doRequest[VisitsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
 }
-func (c *Client) GetHealth(ctx context.Context) (map[string]any, error) {
+
+// HealthResponse — ответ GET /rest/health (например {"status":"pass","version":"5.0.2"}).
+type HealthResponse struct {
+	Status  string `json:"status"`
+	Version string `json:"version"`
+}
+
+func (c *Client) GetHealth(ctx context.Context) (*HealthResponse, error) {
 	url := c.baseURL + "/rest/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Accept", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var result map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&result)
-	return result, nil
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("shlink health returned %d", resp.StatusCode)
+	}
+	var result HealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ValidateVersion проверяет совместимость версии Shlink API на старте (#16).
+//
+// Делает несколько попыток (Shlink может ещё подниматься). Возвращает ошибку,
+// если сервис доступен, но мажорная версия < minMajor. Если сервис недоступен после
+// всех попыток — возвращает ошибку доступности (решение fatal/warn принимает вызывающий).
+func (c *Client) ValidateVersion(ctx context.Context, minMajor int, attempts int, delay time.Duration) error {
+	if attempts <= 0 {
+		attempts = 1
+	}
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		health, err := c.GetHealth(ctx)
+		if err != nil {
+			lastErr = err
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			continue
+		}
+		major := majorVersion(health.Version)
+		if major < minMajor {
+			return fmt.Errorf("incompatible Shlink version %q: requires major >= %d", health.Version, minMajor)
+		}
+		slog.Info("shlink_client: version validated", "version", health.Version, "status", health.Status)
+		return nil
+	}
+	return fmt.Errorf("shlink health unavailable after %d attempts: %w", attempts, lastErr)
+}
+
+// majorVersion извлекает мажорную часть из строки вида "5.0.2". При ошибке — 0.
+func majorVersion(v string) int {
+	parts := strings.SplitN(strings.TrimSpace(v), ".", 2)
+	if len(parts) == 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // doRequest — обобщённый исполнитель HTTP-запросов к Shlink.

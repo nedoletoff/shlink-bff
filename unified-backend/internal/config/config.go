@@ -4,12 +4,21 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 )
+
+// defaultAdminGroups — имена групп Keycloak, получающих роль admin, если ADMIN_GROUPS не задан.
+const defaultAdminGroups = "shlink-admins,admin"
 
 type Config struct {
 	HTTPAddr    string
 	DatabaseURL string
 	ShlinkURL   string
+
+	// AdminGroups — множество имён групп (lower-case), которым присваивается роль admin.
+	// Читается один раз при старте из ADMIN_GROUPS (comma-separated) — иммутабельно,
+	// поэтому гонки данных нет (#13, #33).
+	AdminGroups map[string]struct{}
 
 	// Feature flags
 	UserSlugPrefixEnabled    bool
@@ -21,10 +30,26 @@ func Load() *Config {
 		HTTPAddr:                 getEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL:              mustGetEnv("DATABASE_URL"),
 		ShlinkURL:                mustGetEnv("SHLINK_INTERNAL_URL"),
+		AdminGroups:              ParseAdminGroups(os.Getenv("ADMIN_GROUPS")),
 		UserSlugPrefixEnabled:    getBool("FEATURE_USER_SLUG_PREFIX", false),
 		UserTagInternalIdEnabled: getBool("FEATURE_USER_TAG_INTERNAL_ID", false),
 	}
 	return cfg
+}
+
+// ParseAdminGroups разбирает comma-separated список в множество имён в lower-case.
+// Пустая строка — дефолт defaultAdminGroups.
+func ParseAdminGroups(raw string) map[string]struct{} {
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultAdminGroups
+	}
+	m := make(map[string]struct{})
+	for _, g := range strings.Split(raw, ",") {
+		if t := strings.ToLower(strings.TrimSpace(g)); t != "" {
+			m[t] = struct{}{}
+		}
+	}
+	return m
 }
 
 func mustGetEnv(key string) string {

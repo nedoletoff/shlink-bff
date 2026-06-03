@@ -22,10 +22,10 @@ func NewDashboardHandler(svc *service.ShlinkService) *DashboardHandler {
 }
 
 type DashboardResponse struct {
-	TotalClicks    int            `json:"totalClicks"`
-	ActiveLinks    int            `json:"activeLinks"`
-	TopTags        []TagCount     `json:"topTags"`
-	ClicksOverTime []ClickPoint   `json:"clicksOverTime"`
+	TotalClicks    int          `json:"totalClicks"`
+	ActiveLinks    int          `json:"activeLinks"`
+	TopTags        []TagCount   `json:"topTags"`
+	ClicksOverTime []ClickPoint `json:"clicksOverTime"`
 }
 
 type TagCount struct {

@@ -4,12 +4,17 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
+	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
 )
+
+// defaultAdminGroups — дефолтное множество admin-групп для тестов (как в проде без ADMIN_GROUPS).
+func defaultAdminGroups() map[string]struct{} {
+	return config.ParseAdminGroups("")
+}
 
 // stubHandler — stub handler, записывает был ли вызван
 type stubHandler struct {
@@ -23,7 +28,7 @@ func (h *stubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func TestExtractIdentity_MissingHeader(t *testing.T) {
 	stub := &stubHandler{}
-	handler := middleware.ExtractIdentity(stub)
+	handler := middleware.ExtractIdentity(defaultAdminGroups())(stub)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	rr := httptest.NewRecorder()
@@ -40,7 +45,7 @@ func TestExtractIdentity_MissingHeader(t *testing.T) {
 
 func TestExtractIdentity_WithHeader(t *testing.T) {
 	stub := &stubHandler{}
-	handler := middleware.ExtractIdentity(stub)
+	handler := middleware.ExtractIdentity(defaultAdminGroups())(stub)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	req.Header.Set("X-Auth-Request-User", "sub-123")
@@ -56,9 +61,9 @@ func TestExtractIdentity_WithHeader(t *testing.T) {
 }
 
 // --- Вспомогательная функция: подаёт запрос, возвращает role
-func captureRole(groups string) string {
+func captureRole(groups string, adminGroups map[string]struct{}) string {
 	var id *middleware.Identity
-	handler := middleware.ExtractIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := middleware.ExtractIdentity(adminGroups)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id = middleware.IdentityFromCtx(r.Context())
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -76,33 +81,25 @@ func captureRole(groups string) string {
 // --- Дефолтные группы ---
 
 func TestExtractIdentity_AdminGroup_Default(t *testing.T) {
-	os.Unsetenv("ADMIN_GROUPS")
-	middleware.ReloadAdminGroups()
-	if role := captureRole("shlink-admins,developers"); role != "admin" {
+	if role := captureRole("shlink-admins,developers", defaultAdminGroups()); role != "admin" {
 		t.Errorf("expected admin, got %s", role)
 	}
 }
 
 func TestExtractIdentity_AdminGroup_LegacyAdmin(t *testing.T) {
-	os.Unsetenv("ADMIN_GROUPS")
-	middleware.ReloadAdminGroups()
-	if role := captureRole("admin"); role != "admin" {
+	if role := captureRole("admin", defaultAdminGroups()); role != "admin" {
 		t.Errorf("expected admin (legacy group), got %s", role)
 	}
 }
 
 func TestExtractIdentity_UserRole_NoAdminGroup(t *testing.T) {
-	os.Unsetenv("ADMIN_GROUPS")
-	middleware.ReloadAdminGroups()
-	if role := captureRole("developers,readonly"); role != "user" {
+	if role := captureRole("developers,readonly", defaultAdminGroups()); role != "user" {
 		t.Errorf("expected user, got %s", role)
 	}
 }
 
 func TestExtractIdentity_UserRole_EmptyGroups(t *testing.T) {
-	os.Unsetenv("ADMIN_GROUPS")
-	middleware.ReloadAdminGroups()
-	if role := captureRole(""); role != "user" {
+	if role := captureRole("", defaultAdminGroups()); role != "user" {
 		t.Errorf("expected user for empty groups, got %s", role)
 	}
 }
@@ -110,12 +107,7 @@ func TestExtractIdentity_UserRole_EmptyGroups(t *testing.T) {
 // --- Кастомные группы через ADMIN_GROUPS ---
 
 func TestExtractIdentity_CustomAdminGroup(t *testing.T) {
-	os.Setenv("ADMIN_GROUPS", "shadmin,superusers")
-	middleware.ReloadAdminGroups()
-	defer func() {
-		os.Unsetenv("ADMIN_GROUPS")
-		middleware.ReloadAdminGroups()
-	}()
+	custom := config.ParseAdminGroups("shadmin,superusers")
 
 	tests := []struct {
 		groups string
@@ -124,11 +116,11 @@ func TestExtractIdentity_CustomAdminGroup(t *testing.T) {
 		{"shadmin", "admin"},
 		{"superusers,devs", "admin"},
 		{"shlink-admins", "user"}, // старое имя больше не работает с кастомным ADMIN_GROUPS
-		{"admin", "user"},          // аналогично
+		{"admin", "user"},         // аналогично
 		{"developers", "user"},
 	}
 	for _, tc := range tests {
-		got := captureRole(tc.groups)
+		got := captureRole(tc.groups, custom)
 		if got != tc.want {
 			t.Errorf("groups=%q: expected %s, got %s", tc.groups, tc.want, got)
 		}
@@ -136,13 +128,8 @@ func TestExtractIdentity_CustomAdminGroup(t *testing.T) {
 }
 
 func TestExtractIdentity_CaseInsensitive(t *testing.T) {
-	os.Setenv("ADMIN_GROUPS", "Shlink-Admins")
-	middleware.ReloadAdminGroups()
-	defer func() {
-		os.Unsetenv("ADMIN_GROUPS")
-		middleware.ReloadAdminGroups()
-	}()
-	if role := captureRole("SHLINK-ADMINS"); role != "admin" {
+	custom := config.ParseAdminGroups("Shlink-Admins")
+	if role := captureRole("SHLINK-ADMINS", custom); role != "admin" {
 		t.Errorf("expected admin (case-insensitive), got %s", role)
 	}
 }
@@ -150,11 +137,8 @@ func TestExtractIdentity_CaseInsensitive(t *testing.T) {
 // --- Заполнение полей Identity ---
 
 func TestExtractIdentity_FieldsPopulated(t *testing.T) {
-	os.Unsetenv("ADMIN_GROUPS")
-	middleware.ReloadAdminGroups()
-
 	var id *middleware.Identity
-	handler := middleware.ExtractIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := middleware.ExtractIdentity(defaultAdminGroups())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id = middleware.IdentityFromCtx(r.Context())
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

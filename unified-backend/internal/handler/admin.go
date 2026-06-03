@@ -163,16 +163,16 @@ func (h *AdminHandler) UpdateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	caller := middleware.UserFromCtx(r.Context())
 	h.recordAuditAsync(&domain.AuditEntry{
-		UserSub:   caller.Sub,
-		Username:  caller.Username,
-		Role:      string(caller.Role),
-		Action:    "admin_update_apikey",
-		Resource:  r.URL.Path,
-		Result:    "success",
+		UserSub:  caller.Sub,
+		Username: caller.Username,
+		Role:     string(caller.Role),
+		Action:   "admin_update_apikey",
+		Resource: r.URL.Path,
+		Result:   "success",
 		// Новый ключ в аудит НЕ пишем — sanitizeDetails уберёт его в любом случае
-		Details:    map[string]any{"target_sub": sub},
-		IPAddress:  r.RemoteAddr,
-		UserAgent:  r.Header.Get("User-Agent"),
+		Details:   map[string]any{"target_sub": sub},
+		IPAddress: r.RemoteAddr,
+		UserAgent: r.Header.Get("User-Agent"),
 	})
 
 	writeJSON(w, map[string]string{"status": "updated"}, http.StatusOK)

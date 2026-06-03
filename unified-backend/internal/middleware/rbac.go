@@ -28,12 +28,12 @@ func RequireRole(role domain.Role, auditRepo *postgres.AuditRepository) func(htt
 			id := IdentityFromCtx(r.Context())
 			if domain.Role(id.Role) != role {
 				slog.Warn("rbac: access denied",
-					"sub",      id.Sub,
+					"sub", id.Sub,
 					"username", id.Username,
-					"role",     id.Role,
+					"role", id.Role,
 					"required", string(role),
-					"path",     r.URL.Path,
-					"method",   r.Method,
+					"path", r.URL.Path,
+					"method", r.Method,
 				)
 				recordAuditAsync(auditRepo, &domain.AuditEntry{
 					UserSub:   id.Sub,

@@ -40,18 +40,25 @@ func main() {
 	defer pool.Close()
 
 	// Репозитории
-	userRepo  := postgres.NewUserRepository(pool)
+	userRepo := postgres.NewUserRepository(pool)
 	auditRepo := postgres.NewAuditRepository(pool)
 
 	// Shlink клиент и сервис
 	shlinkClient := shlink.NewClient(cfg.ShlinkURL)
-	shlinkSvc    := service.NewShlinkService(shlinkClient, cfg)
+	shlinkSvc := service.NewShlinkService(shlinkClient, cfg)
+
+	// Валидация версии Shlink API на старте (#16): минимум v5.
+	// Shlink может ещё подниматься — делаем несколько попыток с задержкой.
+	if err := shlinkClient.ValidateVersion(ctx, 5, 10, 3*time.Second); err != nil {
+		slog.Error("shlink version validation failed", "err", err)
+		os.Exit(1)
+	}
 
 	// Хендлеры
-	meH        := handler.NewMeHandler(cfg)
-	dashH      := handler.NewDashboardHandler(shlinkSvc)
-	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
-	adminH     := handler.NewAdminHandler(userRepo, auditRepo)
+	meH := handler.NewMeHandler(cfg)
+	dashH := handler.NewDashboardHandler(shlinkSvc)
+	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
+	adminH := handler.NewAdminHandler(userRepo, auditRepo)
 
 	r := chi.NewRouter()
 
@@ -68,7 +75,7 @@ func main() {
 
 	// Все /api/* — за identity extraction + request logging + active user check
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.ExtractIdentity)
+		r.Use(middleware.ExtractIdentity(cfg.AdminGroups))
 		r.Use(middleware.RequestLogger)
 		r.Use(middleware.RequireActiveUser(userRepo, auditRepo))
 

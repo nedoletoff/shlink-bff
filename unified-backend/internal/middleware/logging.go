@@ -27,14 +27,14 @@ func RequestLogger(next http.Handler) http.Handler {
 
 		id := IdentityFromCtx(r.Context())
 		slog.Info("http_request",
-			"method",   r.Method,
-			"path",     r.URL.Path,
-			"status",   rw.statusCode,
-			"latency",  time.Since(start).String(),
-			"sub",      id.Sub,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.statusCode,
+			"latency", time.Since(start).String(),
+			"sub", id.Sub,
 			"username", id.Username,
-			"role",     id.Role,
-			"remote",   r.RemoteAddr,
+			"role", id.Role,
+			"remote", r.RemoteAddr,
 		)
 	})
 }

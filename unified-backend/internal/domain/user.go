@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-type Role   string
+type Role string
 type Status string
 
 const (
