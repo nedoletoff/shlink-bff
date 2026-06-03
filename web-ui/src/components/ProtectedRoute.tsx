@@ -18,13 +18,34 @@ export function ProtectedRoute({ children, requiredRole }: Props) {
     );
   }
 
-  if (error || !user) {
-    // Редирект на oauth2-proxy login
-    window.location.href = '/oauth2/sign_in';
+  if (!user && !error) {
+    // Нет пользователя и нет ошибки — редирект на oauth2
+    window.location.href = '/oauth2/start?rd=' + encodeURIComponent(window.location.pathname);
     return null;
   }
 
-  if (requiredRole && user.role !== requiredRole) {
+  if (error) {
+    // Ошибка от /api/me (403 = не провизионирован, 500 = внутренняя)
+    // Не редиректим в бесконечный цикл — показываем страницу ошибки
+    return (
+      <Center h="100vh">
+        <Stack align="center" gap="md">
+          <Text size="xl" fw={700} c="red">Ошибка авторизации</Text>
+          <Text c="dimmed" ta="center" maw={400}>
+            {error.includes('403') || error.includes('Forbidden')
+              ? 'Ваш аккаунт не провизионирован администратором. Обратитесь к администратору системы.'
+              : `Не удалось получить данные профиля: ${error}`
+            }
+          </Text>
+          <Button variant="light" onClick={() => { window.location.href = '/oauth2/sign_out'; }}>
+            Выйти
+          </Button>
+        </Stack>
+      </Center>
+    );
+  }
+
+  if (requiredRole && user!.role !== requiredRole) {
     return (
       <Center h="100vh">
         <Stack align="center" gap="md">

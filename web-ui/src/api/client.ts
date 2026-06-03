@@ -41,18 +41,17 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   });
 
   if (resp.status === 401) {
-    // Сессия истекла — oauth2-proxy redirect
-    window.location.href = '/oauth2/sign_in';
+    // Сессия истекла — редирект через oauth2-proxy start (не sign_in напрямую)
+    // Используем replace чтобы не ломать history
+    window.location.replace('/oauth2/start?rd=' + encodeURIComponent(window.location.pathname));
     throw new APIError(401, 'Unauthorized — redirecting to login');
   }
 
   if (resp.status === 403) {
-    notifications.show({
-      title:   'Доступ запрещён',
-      message: 'У вас нет прав для выполнения этого действия.',
-      color:   'red',
-    });
-    throw new APIError(403, 'Forbidden');
+    const body = await resp.json().catch(() => ({ error: 'Forbidden' }));
+    const msg = (body as { error?: string })?.error ?? 'Forbidden';
+    // НЕ редиректим при 403 — выбрасываем ошибку, AuthContext поймает
+    throw new APIError(403, msg);
   }
 
   if (!resp.ok) {
