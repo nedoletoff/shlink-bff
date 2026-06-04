@@ -53,6 +53,16 @@ type Config struct {
 	// SHLINK_SHORT_ID_LENGTH=int (default: 0 = не передаём, shlink использует свой дефолт)
 	// Задаётся в .env, применяется глобально ко всем создаваемым ссылкам.
 	ShlinkShortIDLength int
+
+	// CLI provisioner — режим запуска shlink CLI для генерации API-ключей.
+	// SHLINK_RUNNER_MODE=docker|native (default: docker)
+	ShlinkRunnerMode string
+	// SHLINK_CONTAINER — имя docker-контейнера с shlink (используется в docker-режиме).
+	// Default: "shlink-api"
+	ShlinkContainerName string
+	// SHLINK_BIN — путь до бинаря shlink (используется в native-режиме).
+	// Default: "shlink"
+	ShlinkBin string
 }
 
 func Load() *Config {
@@ -67,6 +77,9 @@ func Load() *Config {
 		UserTagInternalIdEnabled: getBool("FEATURE_USER_TAG_INTERNAL_ID", false),
 		UserCustomSlugEnabled:    getBool("FEATURE_USER_CUSTOM_SLUG", true),
 		ShlinkShortIDLength:      getInt("SHLINK_SHORT_ID_LENGTH", 0),
+		ShlinkRunnerMode:         getEnv("SHLINK_RUNNER_MODE", "docker"),
+		ShlinkContainerName:      getEnv("SHLINK_CONTAINER", "shlink-api"),
+		ShlinkBin:                getEnv("SHLINK_BIN", "shlink"),
 	}
 	slog.Info("config loaded",
 		"role_source", cfg.RoleSource,
@@ -74,6 +87,7 @@ func Load() *Config {
 		"slug_prefix_enabled", cfg.UserSlugPrefixEnabled,
 		"user_custom_slug_enabled", cfg.UserCustomSlugEnabled,
 		"shlink_short_id_length", cfg.ShlinkShortIDLength,
+		"shlink_runner_mode", cfg.ShlinkRunnerMode,
 	)
 	return cfg
 }
