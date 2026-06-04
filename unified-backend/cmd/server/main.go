@@ -20,6 +20,7 @@ import (
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
+	"unified-backend/internal/shlinkctl"
 )
 
 func main() {
@@ -67,6 +68,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// CLI provisioner — генерация per-user API-ключей
+	var runner shlinkctl.Runner
+	if cfg.ShlinkRunnerMode == "native" {
+		runner = shlinkctl.NewNativeRunner(cfg.ShlinkBin)
+		slog.Info("shlinkctl: using native runner", "bin", cfg.ShlinkBin)
+	} else {
+		runner = shlinkctl.NewDockerRunner(cfg.ShlinkContainerName)
+		slog.Info("shlinkctl: using docker runner", "container", cfg.ShlinkContainerName)
+	}
+	provisioner := shlinkctl.NewProvisioner(pool, runner)
+
 	// Хендлеры
 	meH := handler.NewMeHandler(cfg, permsCache)
 	dashH := handler.NewDashboardHandler(shlinkSvc)
@@ -86,7 +98,7 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.ExtractIdentity(cfg.RoleGroups))
 		r.Use(middleware.RequestLogger)
-		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, cfg))
+		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, provisioner, cfg))
 
 		r.Get("/api/me", meH.ServeHTTP)
 		r.Get("/api/dashboard", dashH.ServeHTTP)
