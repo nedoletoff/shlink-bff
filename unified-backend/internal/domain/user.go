@@ -103,6 +103,7 @@ func DefaultUserPermissions(role string) RolePermissions {
 		Role:                    role,
 		CanViewOwnLinks:         true,
 		CanCreateLinks:          true,
+		CanCreateWithCustomSlug: true,
 		CanCreateWithoutSlug:    true,
 		CanEditOwnLinks:         true,
 		CanDeleteOwnLinks:       true,

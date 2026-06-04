@@ -45,6 +45,14 @@ type Config struct {
 	// Feature flags
 	UserSlugPrefixEnabled    bool
 	UserTagInternalIdEnabled bool
+
+	// FEATURE_USER_CUSTOM_SLUG=true|false (default: true)
+	// Если false — пользователи (не admin) вообще не могут задавать кастомный slug.
+	UserCustomSlugEnabled bool
+
+	// SHLINK_SHORT_ID_LENGTH=int (default: 0 = не передаём, shlink использует свой дефолт)
+	// Задаётся в .env, применяется глобально ко всем создаваемым ссылкам.
+	ShlinkShortIDLength int
 }
 
 func Load() *Config {
@@ -57,11 +65,15 @@ func Load() *Config {
 		RoleSource:               parseRoleSource(),
 		UserSlugPrefixEnabled:    getBool("FEATURE_USER_SLUG_PREFIX", false),
 		UserTagInternalIdEnabled: getBool("FEATURE_USER_TAG_INTERNAL_ID", false),
+		UserCustomSlugEnabled:    getBool("FEATURE_USER_CUSTOM_SLUG", true),
+		ShlinkShortIDLength:      getInt("SHLINK_SHORT_ID_LENGTH", 0),
 	}
 	slog.Info("config loaded",
 		"role_source", cfg.RoleSource,
 		"admin_role", cfg.AdminRole,
 		"slug_prefix_enabled", cfg.UserSlugPrefixEnabled,
+		"user_custom_slug_enabled", cfg.UserCustomSlugEnabled,
+		"shlink_short_id_length", cfg.ShlinkShortIDLength,
 	)
 	return cfg
 }
@@ -190,4 +202,16 @@ func getBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func getInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }

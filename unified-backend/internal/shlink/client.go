@@ -1,6 +1,7 @@
 package shlink
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -102,6 +103,12 @@ type VisitLocation struct {
 	CityName    string `json:"cityName"`
 }
 
+// CreateShortURLRequest используется при необходимости дополнить тело запроса
+// полями, которые BFF инжектирует сам (например shortCodeLength).
+type CreateShortURLRequest struct {
+	ShortCodeLength int `json:"shortCodeLength,omitempty"`
+}
+
 // --- Методы клиента ---
 
 func (c *Client) GetShortURLs(ctx context.Context, apiKey, rawQuery string) (*ShortURLsResponse, error) {
@@ -114,6 +121,31 @@ func (c *Client) GetShortURLs(ctx context.Context, apiKey, rawQuery string) (*Sh
 
 func (c *Client) CreateShortURL(ctx context.Context, apiKey string, body io.Reader) (*ShortURL, error) {
 	return doRequest[ShortURL](ctx, c, http.MethodPost, c.baseURL+"/rest/v3/short-urls", apiKey, body)
+}
+
+// CreateShortURLWithConfig аналогичен CreateShortURL, но вмешивается в тело запроса:
+// если shortCodeLength > 0, он вставляется в JSON перед отправкой в Shlink.
+func (c *Client) CreateShortURLWithConfig(ctx context.Context, apiKey string, body io.Reader, shortCodeLength int) (*ShortURL, error) {
+	if shortCodeLength <= 0 {
+		return c.CreateShortURL(ctx, apiKey, body)
+	}
+
+	// Декодируем входящий JSON, добавляем поле, кодируем обратно.
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("shlink_client: failed to decode create request body: %w", err)
+	}
+	lengthBytes, err := json.Marshal(shortCodeLength)
+	if err != nil {
+		return nil, err
+	}
+	payload["shortCodeLength"] = json.RawMessage(lengthBytes)
+
+	modified, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return doRequest[ShortURL](ctx, c, http.MethodPost, c.baseURL+"/rest/v3/short-urls", apiKey, bytes.NewReader(modified))
 }
 
 func (c *Client) UpdateShortURL(ctx context.Context, apiKey, shortCode string, body io.Reader) (*ShortURL, error) {

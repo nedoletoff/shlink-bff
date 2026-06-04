@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"unified-backend/internal/config"
@@ -19,10 +20,26 @@ func newTestPermissionsCache() *service.PermissionsCache {
 	return cache
 }
 
+// newShlinkService создаёт ShlinkService для тестов.
+// slugPrefixEnabled — FEATURE_USER_SLUG_PREFIX.
+// UserCustomSlugEnabled по умолчанию true (production default).
 func newShlinkService(slugPrefixEnabled bool) *service.ShlinkService {
 	cfg := &config.Config{
 		UserSlugPrefixEnabled:    slugPrefixEnabled,
 		UserTagInternalIdEnabled: false,
+		UserCustomSlugEnabled:    true,
+		ShlinkURL:                "http://shlink-api:8080",
+	}
+	cli := shlink.NewClient(cfg.ShlinkURL)
+	return service.NewShlinkService(cli, cfg, newTestPermissionsCache())
+}
+
+// newShlinkServiceFull создаёт ShlinkService с полным контролем флагов.
+func newShlinkServiceFull(slugPrefixEnabled, userCustomSlugEnabled bool) *service.ShlinkService {
+	cfg := &config.Config{
+		UserSlugPrefixEnabled:    slugPrefixEnabled,
+		UserTagInternalIdEnabled: false,
+		UserCustomSlugEnabled:    userCustomSlugEnabled,
 		ShlinkURL:                "http://shlink-api:8080",
 	}
 	cli := shlink.NewClient(cfg.ShlinkURL)
@@ -109,6 +126,38 @@ func TestEnforceSlugPrefix_UserNilSlug(t *testing.T) {
 	}
 	if result != "u2-" {
 		t.Errorf("expected prefix %q, got %q", "u2-", result)
+	}
+}
+
+// TestEnforceSlugPrefix_UserCustomSlugFeatureDisabled —
+// UserCustomSlugEnabled=false → user получает ошибку при любом кастомном слаге
+func TestEnforceSlugPrefix_UserCustomSlugFeatureDisabled(t *testing.T) {
+	svc := newShlinkServiceFull(false, false)
+	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
+	slug := "u1-mylink"
+
+	_, err := svc.EnforceSlugPrefix(context.Background(), user, &slug)
+	if err == nil {
+		t.Fatal("expected error when UserCustomSlugEnabled=false")
+	}
+	if !strings.Contains(err.Error(), "custom slugs are disabled") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// TestEnforceSlugPrefix_AdminIgnoresFeatureFlag —
+// UserCustomSlugEnabled=false → admin всё равно может задавать любой слаг
+func TestEnforceSlugPrefix_AdminIgnoresFeatureFlag(t *testing.T) {
+	svc := newShlinkServiceFull(false, false)
+	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
+	slug := "anything"
+
+	result, err := svc.EnforceSlugPrefix(context.Background(), admin, &slug)
+	if err != nil {
+		t.Fatalf("admin should ignore UserCustomSlugEnabled=false, got error: %v", err)
+	}
+	if result != slug {
+		t.Errorf("expected %q, got %q", slug, result)
 	}
 }
 

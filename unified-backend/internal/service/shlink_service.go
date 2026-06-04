@@ -29,9 +29,11 @@ func (s *ShlinkService) Perms(user *domain.User) domain.RolePermissions {
 //
 // Логика:
 //  1. Если у роли нет can_create_links → ошибка.
-//  2. Если передан customSlug и нет can_create_with_custom_slug → ошибка.
+//  2. Если передан customSlug:
+//     a. Если UserCustomSlugEnabled=false и роль не admin (CanViewAllLinks) → ошибка.
+//     b. Если нет can_create_with_custom_slug → ошибка.
 //  3. Если не передан slug и нет can_create_without_slug → ошибка.
-//  4. Если включён UserSlugPrefixEnabled и роль не may_view_all_links (не имеет глобальных прав)
+//  4. Если включён UserSlugPrefixEnabled и роль не имеет глобальных прав
 //     → принудительно добавляем slug_prefix.
 func (s *ShlinkService) EnforceSlugPrefix(
 	ctx context.Context,
@@ -46,9 +48,18 @@ func (s *ShlinkService) EnforceSlugPrefix(
 
 	hasCustomSlug := customSlug != nil && *customSlug != ""
 
-	if hasCustomSlug && !p.CanCreateWithCustomSlug {
-		return "", fmt.Errorf("role %q is not allowed to set a custom slug", user.Role)
+	// Двухступенчатая проверка кастомного слага.
+	if hasCustomSlug {
+		// Ступень 1: feature-флаг. Не распространяется на admin (CanViewAllLinks).
+		if !p.CanViewAllLinks && !s.cfg.UserCustomSlugEnabled {
+			return "", fmt.Errorf("custom slugs are disabled for role %q", user.Role)
+		}
+		// Ступень 2: permission роли.
+		if !p.CanCreateWithCustomSlug {
+			return "", fmt.Errorf("role %q is not allowed to set a custom slug", user.Role)
+		}
 	}
+
 	if !hasCustomSlug && !p.CanCreateWithoutSlug {
 		return "", fmt.Errorf("role %q must provide a custom slug", user.Role)
 	}
@@ -141,4 +152,9 @@ func (s *ShlinkService) CanModifyShortCode(user *domain.User, shortCode string, 
 // Client возвращает shlink-клиент для хендлеров.
 func (s *ShlinkService) Client() *shlink.Client {
 	return s.client
+}
+
+// ShlinkShortIDLength возвращает сконфигурированную длину short ID (0 = не задана).
+func (s *ShlinkService) ShlinkShortIDLength() int {
+	return s.cfg.ShlinkShortIDLength
 }
