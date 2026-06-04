@@ -2,13 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Stack, Title, Button, TextInput, Table, ActionIcon, Group,
   Badge, Text, Loader, Center, Modal, Tooltip, Pagination,
+  Anchor, CopyButton,
 } from '@mantine/core';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconSearch, IconExternalLink, IconEdit } from '@tabler/icons-react';
+import {
+  IconPlus, IconTrash, IconSearch, IconEdit,
+  IconCopy, IconCheck,
+} from '@tabler/icons-react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { formatDate } from '../utils/date';
 import type { Pagination as PaginationInfo, ShortURL, ShortURLsListResponse } from '../types/api';
 
 const ITEMS_PER_PAGE = 20;
@@ -24,11 +29,8 @@ export function ShortUrls() {
   const [editTarget,    setEditTarget]    = useState<ShortURL | null>(null);
   const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure(false);
 
-  // Дебаунс поиска, чтобы не бить в API на каждый символ.
   const [debouncedSearch] = useDebouncedValue(search, 350);
 
-  // Серверная пагинация + поиск (#24): ранее загружалась только первая страница,
-  // pagination из ответа игнорировался, а поиск работал только по загруженным записям.
   const fetchUrls = useCallback(() => {
     setLoading(true);
     api.get<ShortURLsListResponse>('/api/shlink/short-urls', {
@@ -47,8 +49,6 @@ export function ShortUrls() {
   }, [debouncedSearch, page]);
 
   useEffect(() => { fetchUrls(); }, [fetchUrls]);
-
-  // При смене поискового запроса возвращаемся на первую страницу.
   useEffect(() => { setPage(1); }, [debouncedSearch]);
 
   const handleDelete = async () => {
@@ -63,20 +63,19 @@ export function ShortUrls() {
     }
   };
 
-
   return (
     <Stack gap="lg">
       <Group justify="space-between">
-        <Title order={2}>Короткие ссылки</Title>
+        <Title order={2}>Мои ссылки</Title>
         {user?.permissions.canCreateShortUrl && (
           <Button leftSection={<IconPlus size={16} />} onClick={openCreate}>
-            Создать
+            Создать ссылку
           </Button>
         )}
       </Group>
 
       <TextInput
-        placeholder="Поиск по коду, URL, заголовку..."
+        placeholder="Поиск по коду, URL, названию..."
         leftSection={<IconSearch size={16} />}
         value={search}
         onChange={e => setSearch(e.currentTarget.value)}
@@ -88,10 +87,12 @@ export function ShortUrls() {
         <Table striped highlightOnHover withTableBorder>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Код</Table.Th>
-              <Table.Th>Целевой URL</Table.Th>
+              <Table.Th>Название</Table.Th>
+              <Table.Th>Куда ведёт</Table.Th>
+              <Table.Th>Короткая ссылка</Table.Th>
+              <Table.Th>Кастомная ссылка</Table.Th>
               <Table.Th>Теги</Table.Th>
-              <Table.Th>Клики</Table.Th>
+              <Table.Th>Переходов</Table.Th>
               <Table.Th>Создана</Table.Th>
               <Table.Th />
             </Table.Tr>
@@ -99,25 +100,59 @@ export function ShortUrls() {
           <Table.Tbody>
             {urls.map(url => (
               <Table.Tr key={url.shortCode}>
+                {/* 2.1 — Название */}
                 <Table.Td>
-                  <Group gap={4}>
-                    <Text fw={500} ff="monospace">{url.shortCode}</Text>
-                    <Tooltip label="Открыть">
-                      <ActionIcon
-                        size="xs" variant="subtle"
-                        component="a" href={url.shortUrl} target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <IconExternalLink size={12} />
-                      </ActionIcon>
-                    </Tooltip>
-                  </Group>
+                  <Text size="sm" c={url.title ? undefined : 'dimmed'}>
+                    {url.title || 'Без названия'}
+                  </Text>
                 </Table.Td>
+
+                {/* Куда ведёт */}
                 <Table.Td>
-                  <Text size="sm" truncate="end" maw={280} title={url.longUrl}>
+                  <Text size="sm" truncate="end" maw={240} title={url.longUrl}>
                     {url.longUrl}
                   </Text>
                 </Table.Td>
+
+                {/* 2.2 — Полный короткий URL + кнопка копирования */}
+                <Table.Td>
+                  <Group gap={4} wrap="nowrap">
+                    <Anchor
+                      href={url.shortUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      size="sm"
+                      truncate="end"
+                      maw={180}
+                    >
+                      {url.shortUrl}
+                    </Anchor>
+                    <CopyButton value={url.shortUrl} timeout={2000}>
+                      {({ copied, copy }) => (
+                        <Tooltip label={copied ? 'Скопировано!' : 'Копировать'} withArrow>
+                          <ActionIcon
+                            size="xs"
+                            variant="subtle"
+                            color={copied ? 'teal' : 'gray'}
+                            onClick={copy}
+                          >
+                            {copied
+                              ? <IconCheck size={12} />
+                              : <IconCopy size={12} />}
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </CopyButton>
+                  </Group>
+                </Table.Td>
+
+                {/* 2.2 — Кастомная ссылка (slug) */}
+                <Table.Td>
+                  <Text size="xs" c="dimmed" ff="monospace">
+                    {url.shortCode || '—'}
+                  </Text>
+                </Table.Td>
+
                 <Table.Td>
                   <Group gap={4}>
                     {url.tags.map(t => (
@@ -125,12 +160,13 @@ export function ShortUrls() {
                     ))}
                   </Group>
                 </Table.Td>
+
                 <Table.Td>{url.visitsSummary.total.toLocaleString('ru')}</Table.Td>
+
                 <Table.Td>
-                  <Text size="sm">
-                    {new Date(url.dateCreated).toLocaleDateString('ru')}
-                  </Text>
+                  <Text size="sm">{formatDate(url.dateCreated)}</Text>
                 </Table.Td>
+
                 <Table.Td>
                   <Group gap={4}>
                     {user?.permissions.canEditOwnLinks && (
@@ -152,7 +188,7 @@ export function ShortUrls() {
             ))}
             {urls.length === 0 && (
               <Table.Tr>
-                <Table.Td colSpan={6}>
+                <Table.Td colSpan={8}>
                   <Center p="xl">
                     <Text c="dimmed">Ничего не найдено</Text>
                   </Center>
@@ -163,7 +199,6 @@ export function ShortUrls() {
         </Table>
       )}
 
-      {/* Серверная пагинация (#24) */}
       {pagination && pagination.pagesCount > 1 && (
         <Group justify="space-between" align="center">
           <Text size="sm" c="dimmed">
@@ -178,7 +213,6 @@ export function ShortUrls() {
         </Group>
       )}
 
-      {/* Форма создания */}
       <CreateShortUrlModal
         opened={createOpen}
         onClose={closeCreate}
@@ -186,7 +220,6 @@ export function ShortUrls() {
         slugPrefix={user?.features.userSlugPrefixEnabled ? user.slugPrefix : undefined}
       />
 
-      {/* Форма редактирования */}
       {editTarget && (
         <EditShortUrlModal
           url={editTarget}
@@ -195,7 +228,6 @@ export function ShortUrls() {
         />
       )}
 
-      {/* Деструктивное подтверждение удаления */}
       <ConfirmDialog
         opened={!!deleteTarget}
         title="Удалить ссылку?"
@@ -239,26 +271,34 @@ function CreateShortUrlModal({
   };
 
   return (
-    <Modal opened={opened} onClose={onClose} title="Создать короткую ссылку" size="md">
+    <Modal opened={opened} onClose={onClose} title="Создать ссылку" size="md">
       <Stack gap="sm">
         <TextInput
-          label="Целевой URL" required
+          label="Длинная ссылка"
+          description="Адрес страницы, на которую будет вести короткая ссылка"
+          required
           placeholder="https://example.com/long-path"
-          value={longUrl} onChange={e => setLongUrl(e.currentTarget.value)}
+          value={longUrl}
+          onChange={e => setLongUrl(e.currentTarget.value)}
         />
         <TextInput
-          label={slugPrefix ? `Slug (префикс: ${slugPrefix})` : 'Custom Slug (необязательно)'}
+          label="Название"
+          description="Как вы будете её узнавать в списке"
+          placeholder="Например: Презентация Q3"
+          value={title}
+          onChange={e => setTitle(e.currentTarget.value)}
+        />
+        <TextInput
+          label={slugPrefix ? `Кастомная ссылка (префикс: ${slugPrefix})` : 'Кастомная ссылка'}
+          description="Придумайте короткое слово, например: konferencia"
           placeholder={slugPrefix ? `${slugPrefix}-...` : 'авто-генерация'}
-          value={customSlug} onChange={e => setCustomSlug(e.currentTarget.value)}
-        />
-        <TextInput
-          label="Заголовок (необязательно)"
-          value={title} onChange={e => setTitle(e.currentTarget.value)}
+          value={customSlug}
+          onChange={e => setCustomSlug(e.currentTarget.value)}
         />
         <Group justify="flex-end" mt="md">
           <Button variant="default" onClick={onClose}>Отмена</Button>
           <Button onClick={handleSubmit} loading={loading} disabled={!longUrl.trim()}>
-            Создать
+            Создать ссылку
           </Button>
         </Group>
       </Stack>
@@ -281,7 +321,6 @@ function EditShortUrlModal({
     try {
       await api.patch(`/api/shlink/short-urls/${url.shortCode}`, {
         longUrl: longUrl.trim(),
-        // null явно очищает title в Shlink; undefined оставил бы старое значение (#36)
         title:   title.trim() || null,
       });
       notifications.show({ message: 'Ссылка обновлена', color: 'green' });
@@ -302,12 +341,15 @@ function EditShortUrlModal({
     >
       <Stack gap="sm">
         <TextInput
-          label="Целевой URL" required
-          value={longUrl} onChange={e => setLongUrl(e.currentTarget.value)}
+          label="Длинная ссылка"
+          required
+          value={longUrl}
+          onChange={e => setLongUrl(e.currentTarget.value)}
         />
         <TextInput
-          label="Заголовок"
-          value={title} onChange={e => setTitle(e.currentTarget.value)}
+          label="Название"
+          value={title}
+          onChange={e => setTitle(e.currentTarget.value)}
         />
         <Group justify="flex-end" mt="md">
           <Button variant="default" onClick={onClose}>Отмена</Button>

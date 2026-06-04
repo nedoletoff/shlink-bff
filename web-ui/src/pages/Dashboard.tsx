@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  Grid, Card, Text, Group, Badge, Title, Stack, Loader, Center,
+  Grid, Card, Text, Group, Badge, Title, Stack, Center,
+  Skeleton,
 } from '@mantine/core';
 import { IconClick, IconLink, IconTags } from '@tabler/icons-react';
 import {
@@ -20,19 +21,48 @@ export function Dashboard() {
   useEffect(() => {
     api.get<DashboardResponse>('/api/dashboard')
       .then(setData)
-      // Сохраняем причину ошибки, а не глушим её (#23)
       .catch((e: unknown) =>
         setLoadErr(e instanceof Error ? e.message : 'Неизвестная ошибка'))
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <Center h={400}><Loader /></Center>;
-  if (loadErr) return <Text c="red">Ошибка загрузки дашборда: {loadErr}</Text>;
-  if (!data)   return <Text c="red">Нет данных дашборда</Text>;
+  // Skeleton-лоадер вместо спиннера — повторяет структуру страницы
+  if (loading) {
+    return (
+      <Stack gap="lg">
+        <Skeleton height={32} width={200} radius="sm" />
+        <Grid>
+          {[1, 2, 3].map(i => (
+            <Grid.Col key={i} span={{ base: 12, sm: 4 }}>
+              <Skeleton height={96} radius="md" />
+            </Grid.Col>
+          ))}
+        </Grid>
+        <Skeleton height={300} radius="md" />
+        <Skeleton height={260} radius="md" />
+      </Stack>
+    );
+  }
+
+  if (loadErr) {
+    return (
+      <Center h={400}>
+        <Text c="red">Ошибка загрузки дашборда: {loadErr}</Text>
+      </Center>
+    );
+  }
+
+  if (!data) {
+    return (
+      <Center h={400}>
+        <Text c="dimmed">Нет данных дашборда</Text>
+      </Center>
+    );
+  }
 
   return (
     <Stack gap="lg">
-      <Title order={2}>Dashboard</Title>
+      <Title order={2}>Дашборд</Title>
 
       <Grid>
         <Grid.Col span={{ base: 12, sm: 4 }}>
@@ -61,7 +91,6 @@ export function Dashboard() {
         </Grid.Col>
       </Grid>
 
-      {/* График кликов по времени */}
       <Card withBorder radius="md" p="lg">
         <Text fw={600} mb="md">Клики по времени</Text>
         <ResponsiveContainer width="100%" height={260}>
@@ -78,7 +107,6 @@ export function Dashboard() {
         </ResponsiveContainer>
       </Card>
 
-      {/* Топ тегов */}
       {data.topTags.length > 0 && (
         <Card withBorder radius="md" p="lg">
           <Text fw={600} mb="md">Распределение по тегам</Text>

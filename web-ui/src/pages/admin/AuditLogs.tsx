@@ -4,21 +4,22 @@ import {
   TextInput, Center, Loader, Pagination,
 } from '@mantine/core';
 import { api } from '../../api/client';
+import { formatDateTime } from '../../utils/date';
 import type { AuditLog, AuditLogsResponse } from '../../types/api';
 
 const PAGE_SIZE = 50;
 
 const ACTION_OPTIONS = [
-  { value: '',                  label: 'Все действия' },
-  { value: 'create_short_url',  label: 'Создание ссылки' },
-  { value: 'update_short_url',  label: 'Обновление ссылки' },
-  { value: 'delete_short_url',  label: 'Удаление ссылки' },
-  { value: 'list_short_urls',   label: 'Просмотр ссылок' },
-  { value: 'create_tag',        label: 'Создание тега' },
-  { value: 'delete_tag',        label: 'Удаление тега' },
-  { value: 'rename_tag',        label: 'Переименование тега' },
-  { value: 'rbac_denied',       label: 'RBAC-отказ' },
-  { value: 'admin_update_user', label: 'Изменение пользователя' },
+  { value: '',                    label: 'Все действия' },
+  { value: 'create_short_url',    label: 'Создание ссылки' },
+  { value: 'update_short_url',    label: 'Обновление ссылки' },
+  { value: 'delete_short_url',    label: 'Удаление ссылки' },
+  { value: 'list_short_urls',     label: 'Просмотр ссылок' },
+  { value: 'create_tag',          label: 'Создание тега' },
+  { value: 'delete_tag',          label: 'Удаление тега' },
+  { value: 'rename_tag',          label: 'Переименование тега' },
+  { value: 'rbac_denied',         label: 'RBAC-отказ' },
+  { value: 'admin_update_user',   label: 'Изменение пользователя' },
   { value: 'admin_update_apikey', label: 'Обновление API key' },
   { value: 'admin_update_prefix', label: 'Обновление префикса' },
 ];
@@ -42,7 +43,6 @@ export function AuditLogs() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo,   setDateTo]   = useState('');
 
-  // useCallback вместо eslint-disable (#21): все зависимости явные.
   const fetchLogs = useCallback(() => {
     setLoading(true);
     api.get<AuditLogsResponse>('/api/admin/logs', {
@@ -70,7 +70,6 @@ export function AuditLogs() {
     <Stack gap="lg">
       <Title order={2}>Журнал аудита</Title>
 
-      {/* Фильтры */}
       <Group wrap="wrap">
         <TextInput
           placeholder="Фильтр по username"
@@ -122,12 +121,12 @@ export function AuditLogs() {
               {logs.map(log => (
                 <Table.Tr key={log.id}>
                   <Table.Td>
+                    {/* 2.4 — безопасный парсинг даты через formatDateTime */}
                     <Text size="xs" ff="monospace">
-                      {new Date(log.createdAt).toLocaleString('ru')}
+                      {formatDateTime(log.createdAt)}
                     </Text>
                   </Table.Td>
                   <Table.Td>
-                    {/* fallback '—' при null (#34) */}
                     <Text size="sm">{log.username ?? '—'}</Text>
                     <Text size="xs" c="dimmed" ff="monospace">
                       {log.userSub ? `${log.userSub.slice(0, 8)}…` : '—'}
@@ -135,14 +134,14 @@ export function AuditLogs() {
                   </Table.Td>
                   <Table.Td>
                     <Badge size="sm" color={log.role === 'admin' ? 'red' : 'blue'} variant="light">
-                      {log.role}
+                      {log.role ?? '—'}
                     </Badge>
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm" ff="monospace">{log.action}</Text>
                   </Table.Td>
                   <Table.Td>
-                    <Text size="sm" c="dimmed" truncate="end" maw={200}>{log.resource}</Text>
+                    <Text size="sm" c="dimmed" truncate="end" maw={200}>{log.resource ?? '—'}</Text>
                   </Table.Td>
                   <Table.Td>
                     <Badge size="sm" color={resultColor(log.result)} variant="light">
@@ -150,7 +149,7 @@ export function AuditLogs() {
                     </Badge>
                   </Table.Td>
                   <Table.Td>
-                    <Text size="xs" ff="monospace" c="dimmed">{log.ipAddress}</Text>
+                    <Text size="xs" ff="monospace" c="dimmed">{log.ipAddress ?? '—'}</Text>
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -164,7 +163,6 @@ export function AuditLogs() {
             </Table.Tbody>
           </Table>
 
-          {/* Счётчик "записей X из Y" рядом с пагинацией (#27) */}
           <Group justify="space-between" align="center">
             <Text size="sm" c="dimmed">
               {total === 0
