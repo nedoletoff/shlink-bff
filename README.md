@@ -52,16 +52,26 @@ cp oauth2-proxy/shlink.cfg.example oauth2-proxy/shlink.cfg
 DOMAIN_SHORT=shlink.example.com
 DOMAIN_SHORT_CREATE=shlink-create.example.com
 
-# PostgreSQL для BFF (shlink-api в docker-compose использует SQLite, отдельная БД ему не нужна)
+# PostgreSQL для BFF
 DB_USER=bff
 DB_PASSWORD=changeme
+DB_NAME=shlink_bff
 
 # Начальный admin API key для shlink-api (INITIAL_API_KEY).
 # unified-backend его НЕ использует — работает с per-user ключами из БД.
 ADMIN_SHLINK_API_KEY=your-admin-shlink-api-key
 
-# Группы Keycloak с ролью admin (дефолт: shlink-admins,admin)
-ADMIN_GROUPS=shlink-admins,admin
+# Маппинг Keycloak-групп → роли (формат: group=role,...)
+# Группы сравниваются case-insensitive.
+ROLE_GROUPS=shlink-admins=admin,admin=admin
+
+# Имя «суперрольи» с доступом к /api/admin/*
+ADMIN_ROLE=admin
+
+# Источник истины для роли: keycloak (default) или db
+# keycloak — роль перечитывается из групп Keycloak при каждом запросе
+# db       — роль берётся из users.role, управляется через admin API
+ROLE_SOURCE=keycloak
 
 # Keycloak (extra_hosts в docker compose: имя → IP)
 KEYCLOAK_HOST=keycloak.example.com
@@ -77,7 +87,7 @@ OAUTH2_COOKIE_SECRET=your-32-byte-base64-secret
 > Внутренние переменные backend (`HTTP_ADDR`, `DATABASE_URL`, `SHLINK_INTERNAL_URL`)
 > задаются в `docker-compose.yml` напрямую и обычно не требуют правки.
 
-Полный список параметров см. в `.env.example` — он является источником истины.
+Полный список параметров с комментариями см. в `.env.example`.
 
 ### Шаг 3. Настроить Keycloak
 
@@ -89,14 +99,17 @@ OAUTH2_COOKIE_SECRET=your-32-byte-base64-secret
 4. `Valid redirect URIs`: `https://shlink-create.example.com/oauth2/callback`
 5. После создания: **Credentials** → скопировать `Client secret` в `.env` → `OAUTH2_CLIENT_SECRET_SHLINK`
 
-#### 3.2. Создать группу для admin-доступа
+#### 3.2. Создать группы и назначить пользователей
+
+Каждая Keycloak-группа маппируется в роль через `ROLE_GROUPS`. Пример для дефолтной конфигурации:
 
 1. **Groups** → **Create group** → имя `shlink-admins`
-2. Добавить нужных пользователей в группу:
-   **Users** → выбрать пользователя → **Groups** → **Join group** → `shlink-admins`
+2. **Groups** → **Create group** → имя `shlink-users` (опционально, если нужна явная группа для обычных пользователей)
+3. Добавить пользователей в группы:
+   **Users** → выбрать пользователя → **Groups** → **Join group**
 
-> Группа `shlink-admins` — дефолтное имя admin-группы в backend.
-> При необходимости можно изменить через `ADMIN_GROUPS` в `.env`.
+> Пользователь **обязан** состоять хотя бы в одной группе, присутствующей в `ROLE_GROUPS`,
+> иначе бэкенд не сможет определить роль и вернёт `403`.
 
 #### 3.3. Добавить mapper для groups в токен
 
@@ -168,7 +181,7 @@ curl -sk https://shlink-create.example.com/api/me  # в браузере (пос
 
 ### Как это работает
 
-- SQL-файлы из `unified-backend/migrations/*.sql` встроены в бинарник через `go:embed`
+- SQL-файлы из `unified-backend/internal/migrations/sql/*.sql` встроены в бинарник через `go:embed`
 - При старте создаётся таблица `schema_migrations` (если не существует)
 - Файлы применяются в алфавитном порядке (`001_...`, `002_...`, ...), уже применённые пропускаются
 - Каждая миграция выполняется в отдельной транзакции; при ошибке — откат и `os.Exit(1)` с подробным логом
@@ -204,7 +217,7 @@ docker logs unified-backend 2>&1 | grep -E '(ERROR|migration)'
 
 ```bash
 # Создать файл с порядковым номером
-cat > unified-backend/migrations/004_new_table.sql << 'EOF'
+cat > unified-backend/internal/migrations/sql/004_new_table.sql << 'EOF'
 CREATE TABLE IF NOT EXISTS new_table (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid()
 );
@@ -219,7 +232,7 @@ docker compose up -d unified-backend
 
 ---
 
-## RBAC и роль admin
+## RBAC, роли и разрешения
 
 `unified-backend` не читает JWT напрямую. Идентичность пользователя приходит уже распакованной из `oauth2-proxy` через HTTP-заголовки, которые nginx пробрасывает из ответа на `auth_request`:
 
@@ -230,22 +243,89 @@ docker compose up -d unified-backend
 | `X-Auth-Request-Preferred-Username` | Username |
 | `X-Auth-Request-Groups` | Группы Keycloak через запятую: `shlink-admins,developers` |
 
-Функция `resolveRole` в `unified-backend/internal/middleware/identity.go` сравнивает группы пользователя со списком admin-групп:
+### Маппинг групп → роли (`ROLE_GROUPS`)
 
-- список берётся из env `ADMIN_GROUPS` (comma-separated)
-- если `ADMIN_GROUPS` не задан, дефолт: `shlink-admins,admin`
-- сравнение **case-insensitive**
-- если хотя бы одна группа совпадает — роль `admin`, иначе `user`
+Функция `resolveRole` сравнивает группы из `X-Auth-Request-Groups` с картой `ROLE_GROUPS`:
+
+- Формат: `ROLE_GROUPS=group1=role1,group2=role2,...`
+- Сравнение **case-insensitive**
+- Если несколько групп совпадают, берётся первая по порядку записи в `ROLE_GROUPS`
+- Если ни одна группа не совпала — роль пустая, пользователь получает `403` на все запросы кроме `/healthz`
+
+```dotenv
+# Пример: две Keycloak-группы → одна admin-роль
+ROLE_GROUPS=shlink-admins=admin,superusers=admin
+
+# Пример: разные группы → разные роли
+ROLE_GROUPS=shlink-admins=admin,shlink-users=user,contractors=user
+```
+
+> **Устаревший формат `ADMIN_GROUPS`** (только список admin-групп через запятую) по-прежнему поддерживается для обратной совместимости, но выводит предупреждение в логе. Рекомендуется перейти на `ROLE_GROUPS`.
+
+### Источник истины для роли (`ROLE_SOURCE`)
+
+| `ROLE_SOURCE` | Поведение |
+|---|---|
+| `keycloak` (default) | Роль читается из `X-Auth-Request-Groups` **при каждом запросе**. Изменение групп в Keycloak применяется немедленно без перезапуска. Роль в БД обновляется при каждом входе (upsert). |
+| `db` | Роль берётся из `users.role` в БД. Keycloak используется только при первом логине (провизионирование). Последующие изменения групп в Keycloak **не влияют** на роль. Управление ролями — через `PUT /api/admin/users/{sub}`. |
+
+### Гранулярные разрешения (`role_permissions`)
+
+Помимо роли, каждая роль имеет набор гранулярных флагов разрешений, хранящихся в таблице `role_permissions` (создаётся миграцией `003_role_permissions.sql`). Загружаются при старте и кешируются в `PermissionsCache`.
+
+#### Дефолтные права при первом запуске
+
+| Разрешение | `admin` | `user` |
+|---|:---:|:---:|
+| `canViewOwnLinks` | ✓ | ✓ |
+| `canViewAllLinks` | ✓ | — |
+| `canCreateLinks` | ✓ | ✓ |
+| `canCreateWithCustomSlug` | ✓ | — |
+| `canCreateWithoutSlug` | ✓ | ✓ |
+| `canEditOwnLinks` | ✓ | ✓ |
+| `canEditAllLinks` | ✓ | — |
+| `canDeleteOwnLinks` | ✓ | ✓ |
+| `canDeleteAllLinks` | ✓ | — |
+| `canManageOwnTags` | ✓ | ✓ |
+| `canManageAllTags` | ✓ | — |
+| `canViewOwnStats` | ✓ | ✓ |
+| `canViewAllStats` | ✓ | — |
+| `canViewAuditLogs` | ✓ | — |
+| `canManageUsers` | ✓ | — |
+| `canManageRoles` | ✓ | — |
+
+#### Управление разрешениями
+
+Администратор может изменить разрешения для любой роли через API:
+
+```bash
+PUT /api/admin/roles/{role}/permissions
+Content-Type: application/json
+
+{
+  "canViewAllLinks": true,
+  "canManageUsers": false
+}
+```
+
+Изменения вступают в силу немедленно (кеш инвалидируется). При недоступности БД используются fallback-значения из `DefaultAdminPermissions` / `DefaultUserPermissions`.
+
+#### Взаимодействие с `FEATURE_USER_CUSTOM_SLUG`
+
+`canCreateWithCustomSlug` в `role_permissions` — необходимое, но **не достаточное** условие для кастомного slug у пользователя:
+
+- Если `FEATURE_USER_CUSTOM_SLUG=false` — обычные пользователи не могут задать custom slug вне зависимости от `role_permissions`. Admin не блокируется флагом.
+- Если `FEATURE_USER_CUSTOM_SLUG=true` (default) — решает `canCreateWithCustomSlug` в `role_permissions`.
 
 ### Предупреждение `active_user: no known keycloak group`
 
-Это сообщение появляется когда в заголовке `X-Auth-Request-Groups` нет ни одной известной группы.
+Это сообщение появляется, когда в `X-Auth-Request-Groups` нет ни одной группы из `ROLE_GROUPS`.
 
 **Причины:**
 
-1. **Не настроен Group Membership mapper в Keycloak** (самая частая) — claim `groups` не попадает в токен. Проверьте по инструкции в Шаге 3.3.
+1. **Не настроен Group Membership mapper в Keycloak** — claim `groups` не попадает в токен. Проверьте Шаг 3.3.
 2. **Неверный `oidc_groups_claim`** в `oauth2-proxy/shlink.cfg` — должен быть `groups`.
-3. **Пользователь не состоит ни в одной группе** — добавьте его в группу `shlink-admins` (для admin) или любую другую (для user; достаточно любой группы в токене чтобы `X-Auth-Request-Groups` не был пустым).
+3. **Пользователь не состоит ни в одной группе** из `ROLE_GROUPS` — добавьте в нужную группу.
 
 **Диагностика:**
 
@@ -256,30 +336,18 @@ docker logs oauth2-proxy-shlink 2>&1 | grep 'AuthSuccess'
 docker logs unified-backend 2>&1 | grep 'active_user'
 ```
 
-Пользователь с пустой ролью (`"role": ""`) получает `403` на все запросы кроме `/healthz`.
+Пользователь с пустой ролью получает `403` на все запросы кроме `/healthz`.
 
-### Кастомизация admin-групп
+### Кастомизация ролей
 
 ```dotenv
 # .env
-ADMIN_GROUPS=shadmin,superusers
+# Три группы Keycloak → две роли
+ROLE_GROUPS=super-admins=admin,content-managers=editor,viewers=user
+ADMIN_ROLE=admin
 ```
 
-`ADMIN_GROUPS` читается один раз при старте и хранится в иммутабельном `config.Config`.
-После изменения — перезапустить `unified-backend`.
-
-### Управление ролями
-
-Роль назначается в два этапа:
-
-1. **Первый логин (auto-provision).** Если пользователя нет в БД, он создаётся автоматически,
-   роль берётся из групп Keycloak (`resolveRole`).
-2. **Последующие логины.** Роль в БД — источник истины и **не перезаписывается** из Keycloak
-   при каждом входе. Это позволяет админу вручную понижать/повышать роль через `PUT /api/admin/users/{sub}`
-   без последующего затирания.
-
-Если требуется, чтобы Keycloak всегда был источником истины для ролей, добавьте
-`role = EXCLUDED.role` в `ON CONFLICT` внутри `Upsert`.
+`ROLE_GROUPS` и `ADMIN_ROLE` читаются один раз при старте. После изменения — перезапустить `unified-backend`.
 
 ### TLS-сертификаты nginx
 
@@ -371,11 +439,12 @@ unified-backend/
 │   ├── domain/         # Типы, permissions
 │   ├── handler/        # HTTP-обработчики
 │   ├── middleware/      # Auth, RBAC, logging
+│   ├── migrations/
+│   │   └── sql/        # SQL-миграции (embed в бинарник)
 │   ├── repository/
 │   │   └── postgres/   # Репозитории + мигратор
 │   ├── service/        # Бизнес-логика
 │   └── shlink/         # Клиент Shlink API
-├── migrations/         # SQL-миграции (embed в бинарник)
 ├── test/               # Unit-тесты
 ├── Dockerfile
 └── go.mod
