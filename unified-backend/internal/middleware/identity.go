@@ -26,9 +26,9 @@ type Identity struct {
 }
 
 // ExtractIdentity — фабрика middleware: читает X-Auth-Request-* заголовки от oauth2-proxy
-// и кладёт Identity-поля в контекст. Множество admin-групп передаётся явно
-// (из config.Config), без глобального мутабельного состояния — поэтому гонок данных нет (#13, #33).
-func ExtractIdentity(adminGroups map[string]struct{}) func(http.Handler) http.Handler {
+// и кладёт Identity-поля в контекст. roleGroups — маппинг keycloak-group → role-name
+// (из config.RoleGroups). Гонок данных отсутствует: roleGroups иммутабелен после загрузки (#13, #33).
+func ExtractIdentity(roleGroups map[string]string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sub := r.Header.Get("X-Auth-Request-User")
@@ -38,7 +38,7 @@ func ExtractIdentity(adminGroups map[string]struct{}) func(http.Handler) http.Ha
 			}
 
 			groups := parseGroups(r.Header.Get("X-Auth-Request-Groups"))
-			role := resolveRole(groups, adminGroups)
+			role := resolveRole(groups, roleGroups)
 
 			ctx := context.WithValue(r.Context(), CtxKeySub, sub)
 			ctx = context.WithValue(ctx, CtxKeyEmail, r.Header.Get("X-Auth-Request-Email"))
@@ -72,15 +72,18 @@ func groupsFromCtx(ctx context.Context) []string {
 	return v
 }
 
-// resolveRole проверяет группы пользователя против переданного множества adminGroups.
-// Сравнение case-insensitive. Если совпадение найдено — возвращает "admin", иначе "user".
-func resolveRole(groups []string, adminGroups map[string]struct{}) string {
+// resolveRole определяет роль пользователя по его группам Keycloak.
+// roleGroups: keycloak-group (lower-case) → role-name.
+// Проходит по списку групп пользователя до первого совпадения.
+// Если ни одна группа не совпала — возвращает пустую строку (пользователь не
+// будет провизионирован через RequireActiveUser — 401/403).
+func resolveRole(groups []string, roleGroups map[string]string) string {
 	for _, g := range groups {
-		if _, ok := adminGroups[strings.ToLower(strings.TrimSpace(g))]; ok {
-			return "admin"
+		if role, ok := roleGroups[strings.ToLower(strings.TrimSpace(g))]; ok {
+			return role
 		}
 	}
-	return "user"
+	return ""
 }
 
 // parseGroups: "group1,group2" → []string
@@ -120,5 +123,5 @@ func ClientIP(r *http.Request) string {
 func jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`)) 
 }
