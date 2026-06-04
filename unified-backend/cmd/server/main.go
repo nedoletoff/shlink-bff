@@ -61,7 +61,7 @@ func main() {
 	}
 
 	// Хендлеры
-	meH := handler.NewMeHandler(cfg)
+	meH := handler.NewMeHandler(cfg, permsCache)
 	dashH := handler.NewDashboardHandler(shlinkSvc)
 	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
 	adminH := handler.NewAdminHandler(userRepo, auditRepo)
@@ -79,7 +79,7 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.ExtractIdentity(cfg.RoleGroups))
 		r.Use(middleware.RequestLogger)
-		r.Use(middleware.RequireActiveUser(userRepo, auditRepo))
+		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, cfg))
 
 		r.Get("/api/me", meH.ServeHTTP)
 		r.Get("/api/dashboard", dashH.ServeHTTP)

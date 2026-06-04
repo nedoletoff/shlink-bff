@@ -6,6 +6,7 @@ import (
 
 	"unified-backend/internal/config"
 	"unified-backend/internal/middleware"
+	"unified-backend/internal/service"
 )
 
 type MeResponse struct {
@@ -25,15 +26,15 @@ type FeatureFlags struct {
 }
 
 type MeHandler struct {
-	cfg *config.Config
+	cfg   *config.Config
+	perms *service.PermissionsCache
 }
 
-func NewMeHandler(cfg *config.Config) *MeHandler {
-	return &MeHandler{cfg: cfg}
+func NewMeHandler(cfg *config.Config, perms *service.PermissionsCache) *MeHandler {
+	return &MeHandler{cfg: cfg, perms: perms}
 }
 
 func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// user уже загружен из БД в RequireActiveUser middleware
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
 		slog.Error("me: user not in context")
@@ -41,7 +42,7 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	perms := user.ComputePermissions(h.cfg.AdminRole)
+	p := h.perms.Get(user.Role)
 
 	resp := MeResponse{
 		Sub:      user.Sub,
@@ -49,14 +50,13 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Email:    user.Email,
 		Role:     string(user.Role),
 		Permissions: map[string]bool{
-			"canCreateShortUrl": perms.CanCreateShortURL,
-			"canEditOwnLinks":   perms.CanEditOwnLinks,
-			"canDeleteOwnLinks": perms.CanDeleteOwnLinks,
-			"canManageOwnTags":  perms.CanManageOwnTags,
-			"canViewAuditLogs":  perms.CanViewAuditLogs,
-			"canManageUsers":    perms.CanManageUsers,
+			"canCreateShortUrl": p.CanCreateLinks,
+			"canEditOwnLinks":   p.CanEditOwnLinks,
+			"canDeleteOwnLinks": p.CanDeleteOwnLinks,
+			"canManageOwnTags":  p.CanManageOwnTags,
+			"canViewAuditLogs":  p.CanViewAuditLogs,
+			"canManageUsers":    p.CanManageUsers,
 		},
-		// Только флаг наличия — реальный ключ НИКОГДА не покидает backend
 		HasAPIKey: user.ShlinkAPIKey != "",
 		Features: FeatureFlags{
 			UserSlugPrefixEnabled:    h.cfg.UserSlugPrefixEnabled,

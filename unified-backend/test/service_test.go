@@ -10,9 +10,10 @@ import (
 	"unified-backend/internal/shlink"
 )
 
-// newTestPermissionsCache — PermissionsCache с дефолтными правами для admin/user.
+// newTestPermissionsCache — in-memory PermissionsCache без БД для тестов.
+// repo=nil допустимо: Load() не вызывается, права предварительно прописываются через Set().
 func newTestPermissionsCache() *service.PermissionsCache {
-	cache := service.NewPermissionsCache()
+	cache := service.NewPermissionsCache(nil, domain.RoleAdmin)
 	cache.Set(domain.DefaultAdminPermissions(domain.RoleAdmin))
 	cache.Set(domain.DefaultUserPermissions(domain.RoleUser))
 	return cache
