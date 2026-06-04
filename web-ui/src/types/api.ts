@@ -133,10 +133,17 @@ export interface DeviceBreakdown {
 
 export interface NamedCount { name: string; count: number; }
 
+export interface HeatmapCell {
+  hour:    number;  // 0-23
+  weekday: number;  // 0=вс, 1=пн … 6=сб
+  value:   number;
+}
+
 export interface DevicesResponse {
   devices:  DeviceBreakdown;
   browsers: NamedCount[];
   os:       NamedCount[];
+  heatmap?: HeatmapCell[];
 }
 
 // URL detail page

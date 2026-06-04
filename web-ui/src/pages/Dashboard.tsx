@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import {
   Grid, Card, Text, Title, Stack, Skeleton,
   Tabs, Group, SegmentedControl, Table, Badge,
-  Center, Anchor,
+  Center, Anchor, Box, Tooltip as MTooltip,
 } from '@mantine/core';
 import {
   IconClick, IconLink, IconUsers, IconChartBar,
@@ -19,7 +19,7 @@ import { ErrorBoundary } from '../components/ui/ErrorBoundary';
 import { formatDate } from '../utils/date';
 import type {
   OverviewResponse, UserActivityResponse,
-  UrlStatsResponse, DevicesResponse,
+  UrlStatsResponse, DevicesResponse, HeatmapCell,
 } from '../types/api';
 
 const COLORS = ['#4dabf7', '#51cf66', '#ff6b6b', '#ffd43b', '#cc5de8', '#74c0fc'];
@@ -194,12 +194,10 @@ function UsersTab({ period }: { period: string }) {
   if (err)     return <ErrText msg={err} />;
   if (!data)   return null;
 
-  // Цвета для stacked bar по пользователям
   const usernames = data.users.map(u => u.username);
 
   return (
     <Stack gap="lg">
-      {/* Таблица */}
       <Table striped highlightOnHover withTableBorder>
         <Table.Thead>
           <Table.Tr>
@@ -236,7 +234,6 @@ function UsersTab({ period }: { period: string }) {
         </Table.Tbody>
       </Table>
 
-      {/* Stacked bar: новые ссылки по пользователям */}
       {data.newLinksPerDay.length > 0 && (
         <Card withBorder radius="md" p="lg">
           <Text fw={600} mb="md">Новые ссылки по пользователям</Text>
@@ -269,8 +266,9 @@ function LinksTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
   const [data,    setData]    = useState<UrlStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err,     setErr]     = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>('visitsTotal');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [sortBy,  setSortBy]  = useState<SortKey>('visitsTotal');
+  const [tagFilter, setTagFilter] = useState('');
+  const [userFilter, setUserFilter] = useState('');
 
   useEffect(() => {
     setLoading(true); setErr(null);
@@ -282,79 +280,102 @@ function LinksTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
 
   const sorted = useMemo(() => {
     if (!data) return [];
-    return [...data.urls].sort((a, b) => {
-      const diff = a[sortKey] - b[sortKey];
-      return sortDir === 'desc' ? -diff : diff;
-    });
-  }, [data, sortKey, sortDir]);
+    let rows = [...data.urls];
+    if (tagFilter)  rows = rows.filter(r => r.tags.includes(tagFilter));
+    if (userFilter) rows = rows.filter(r => r.ownerUsername === userFilter);
+    return rows.sort((a, b) => b[sortBy] - a[sortBy]);
+  }, [data, sortBy, tagFilter, userFilter]);
 
-  const toggleSort = (key: SortKey) => {
-    if (key === sortKey) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
-    else { setSortKey(key); setSortDir('desc'); }
-  };
-
-  const arrow = (key: SortKey) => sortKey === key ? (sortDir === 'desc' ? ' ↓' : ' ↑') : '';
-
-  if (loading) return <DashSkeleton rows={3} />;
+  if (loading) return <DashSkeleton rows={2} />;
   if (err)     return <ErrText msg={err} />;
+  if (!data)   return null;
+
+  const allTags  = Array.from(new Set(data.urls.flatMap(u => u.tags)));
+  const allUsers = isAdmin ? Array.from(new Set(data.urls.map(u => u.ownerUsername).filter(Boolean))) as string[] : [];
+
+  const SortTh = ({ col, label }: { col: SortKey; label: string }) => (
+    <Table.Th
+      style={{ cursor: 'pointer', userSelect: 'none' }}
+      onClick={() => setSortBy(col)}
+    >
+      {label} {sortBy === col ? '↓' : ''}
+    </Table.Th>
+  );
 
   return (
-    <Table striped highlightOnHover withTableBorder>
-      <Table.Thead>
-        <Table.Tr>
-          <Table.Th>Название</Table.Th>
-          {isAdmin && <Table.Th>Владелец</Table.Th>}
-          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleSort('visitsToday')}>
-            Сегодня{arrow('visitsToday')}
-          </Table.Th>
-          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleSort('visits7d')}>
-            7 д{arrow('visits7d')}
-          </Table.Th>
-          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleSort('visitsTotal')}>
-            Всего{arrow('visitsTotal')}
-          </Table.Th>
-          <Table.Th>Статус</Table.Th>
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {sorted.map(u => (
-          <Table.Tr
-            key={u.shortCode}
-            style={{ cursor: 'pointer' }}
-            onClick={() => navigate(`/links/${u.shortCode}`)}
+    <Stack gap="md">
+      <Group>
+        <select
+          value={tagFilter}
+          onChange={e => setTagFilter(e.target.value)}
+          style={{ padding: '4px 8px', borderRadius: 4, fontSize: 13 }}
+        >
+          <option value="">Все теги</option>
+          {allTags.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        {isAdmin && (
+          <select
+            value={userFilter}
+            onChange={e => setUserFilter(e.target.value)}
+            style={{ padding: '4px 8px', borderRadius: 4, fontSize: 13 }}
           >
-            <Table.Td>
-              <Text size="sm" fw={500}>
-                {u.title || <Text span c="dimmed" size="sm">Без названия</Text>}
-              </Text>
-              <Text size="xs" c="dimmed" ff="monospace">{u.shortCode}</Text>
-            </Table.Td>
-            {isAdmin && (
-              <Table.Td><Text size="sm" c="dimmed">{u.ownerUsername ?? '—'}</Text></Table.Td>
-            )}
-            <Table.Td>{u.visitsToday.toLocaleString('ru-RU')}</Table.Td>
-            <Table.Td>{u.visits7d.toLocaleString('ru-RU')}</Table.Td>
-            <Table.Td>{u.visitsTotal.toLocaleString('ru-RU')}</Table.Td>
-            <Table.Td>
-              <Badge
-                size="sm"
-                color={u.status === 'active' ? 'green' : 'gray'}
-                variant="dot"
-              >
-                {u.status === 'active' ? 'активна' : 'неактивна'}
-              </Badge>
-            </Table.Td>
-          </Table.Tr>
-        ))}
-        {sorted.length === 0 && (
-          <Table.Tr>
-            <Table.Td colSpan={isAdmin ? 6 : 5}>
-              <Center p="xl"><Text c="dimmed">Нет данных</Text></Center>
-            </Table.Td>
-          </Table.Tr>
+            <option value="">Все пользователи</option>
+            {allUsers.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
         )}
-      </Table.Tbody>
-    </Table>
+      </Group>
+
+      <Table striped highlightOnHover withTableBorder fz="sm" verticalSpacing="xs">
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>Название</Table.Th>
+            <SortTh col="visitsToday" label="Сегодня" />
+            <SortTh col="visits7d"    label="7 дней" />
+            <SortTh col="visitsTotal" label="Всего" />
+            <Table.Th>Статус</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {sorted.map(r => (
+            <Table.Tr
+              key={r.shortCode}
+              style={{ cursor: 'pointer' }}
+              onClick={() => navigate(
+                isAdmin ? `/admin/urls/${r.shortCode}` : `/links/${r.shortCode}`
+              )}
+            >
+              <Table.Td>
+                <Text size="sm" fw={500} truncate maw={260}>
+                  {r.title || r.shortCode}
+                </Text>
+                {r.ownerUsername && isAdmin && (
+                  <Text size="xs" c="dimmed">{r.ownerUsername}</Text>
+                )}
+              </Table.Td>
+              <Table.Td>{r.visitsToday.toLocaleString('ru-RU')}</Table.Td>
+              <Table.Td>{r.visits7d.toLocaleString('ru-RU')}</Table.Td>
+              <Table.Td>{r.visitsTotal.toLocaleString('ru-RU')}</Table.Td>
+              <Table.Td>
+                <Badge
+                  size="xs"
+                  color={r.status === 'active' ? 'green' : 'gray'}
+                  variant="light"
+                >
+                  {r.status === 'active' ? 'активна' : 'неактивна'}
+                </Badge>
+              </Table.Td>
+            </Table.Tr>
+          ))}
+          {sorted.length === 0 && (
+            <Table.Tr>
+              <Table.Td colSpan={5}>
+                <Center p="xl"><Text c="dimmed">Нет данных</Text></Center>
+              </Table.Td>
+            </Table.Tr>
+          )}
+        </Table.Tbody>
+      </Table>
+    </Stack>
   );
 }
 
@@ -385,23 +406,29 @@ function DevicesTab({ period }: { period: string }) {
   ].filter(d => d.value > 0);
 
   return (
-    <Grid>
-      <Grid.Col span={{ base: 12, md: 4 }}>
-        <DonutCard title="Устройства" data={deviceData} />
-      </Grid.Col>
-      <Grid.Col span={{ base: 12, md: 4 }}>
-        <DonutCard
-          title="Браузеры"
-          data={data.browsers.map(b => ({ name: b.name, value: b.count }))}
-        />
-      </Grid.Col>
-      <Grid.Col span={{ base: 12, md: 4 }}>
-        <DonutCard
-          title="Операционные системы"
-          data={data.os.map(o => ({ name: o.name, value: o.count }))}
-        />
-      </Grid.Col>
-    </Grid>
+    <Stack gap="lg">
+      <Grid>
+        <Grid.Col span={{ base: 12, md: 4 }}>
+          <DonutCard title="Устройства" data={deviceData} />
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, md: 4 }}>
+          <DonutCard
+            title="Браузеры"
+            data={data.browsers.map(b => ({ name: b.name, value: b.count }))}
+          />
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, md: 4 }}>
+          <DonutCard
+            title="Операционные системы"
+            data={data.os.map(o => ({ name: o.name, value: o.count }))}
+          />
+        </Grid.Col>
+      </Grid>
+
+      {data.heatmap && data.heatmap.length > 0 && (
+        <ActivityHeatmap data={data.heatmap} />
+      )}
+    </Stack>
   );
 }
 
@@ -437,6 +464,88 @@ function DonutCard({ title, data }: { title: string; data: { name: string; value
           <Tooltip formatter={(v: number) => v.toLocaleString('ru-RU')} />
         </PieChart>
       </ResponsiveContainer>
+    </Card>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Heatmap: активность по часам недели
+// ───────────────────────────────────────────────────────────────────────
+const WEEKDAYS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+
+function ActivityHeatmap({ data }: { data: HeatmapCell[] }) {
+  const max = Math.max(...data.map(d => d.value), 1);
+
+  // grid[weekday][hour] = value
+  const grid = Array.from({ length: 7 }, (_, wd) =>
+    Array.from({ length: 24 }, (_, h) =>
+      data.find(d => d.weekday === wd && d.hour === h)?.value ?? 0,
+    ),
+  );
+
+  return (
+    <Card withBorder radius="md" p="lg">
+      <Text fw={600} mb="md">Активность по часам недели</Text>
+      <Box style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'separate', borderSpacing: 2 }}>
+          <thead>
+            <tr>
+              <th style={{ width: 28 }} />
+              {Array.from({ length: 24 }, (_, h) => (
+                <th
+                  key={h}
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 400,
+                    textAlign: 'center',
+                    width: 20,
+                    color: 'var(--mantine-color-dimmed)',
+                  }}
+                >
+                  {h % 3 === 0 ? h : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {grid.map((row, wd) => (
+              <tr key={wd}>
+                <td
+                  style={{
+                    fontSize: 11,
+                    paddingRight: 6,
+                    color: 'var(--mantine-color-dimmed)',
+                    userSelect: 'none',
+                  }}
+                >
+                  {WEEKDAYS[wd]}
+                </td>
+                {row.map((val, h) => {
+                  const alpha = val === 0 ? 0.07 : 0.15 + (val / max) * 0.8;
+                  return (
+                    <td key={h} style={{ padding: 0 }}>
+                      <MTooltip
+                        label={`${WEEKDAYS[wd]} ${String(h).padStart(2, '0')}:00 — ${val.toLocaleString('ru-RU')} переходов`}
+                        withArrow
+                        position="top"
+                      >
+                        <Box
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: 3,
+                            background: `oklch(0.55 0.15 192 / ${alpha.toFixed(2)})`,
+                          }}
+                        />
+                      </MTooltip>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Box>
     </Card>
   );
 }
