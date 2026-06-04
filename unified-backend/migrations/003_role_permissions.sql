@@ -1,2 +1,0 @@
--- DELETED: moved to unified-backend/internal/migrations/sql/
--- This file is intentionally left empty and will be removed.
