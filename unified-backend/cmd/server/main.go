@@ -16,6 +16,7 @@ import (
 	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
 	"unified-backend/internal/middleware"
+	"unified-backend/internal/migrations"
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
@@ -40,7 +41,7 @@ func main() {
 	defer pool.Close()
 
 	// Миграции — запускаем до любого обращения к схеме.
-	if err := postgres.RunMigrations(ctx, pool); err != nil {
+	if err := postgres.RunMigrations(ctx, pool, migrations.FS); err != nil {
 		slog.Error("database migration failed", "err", err)
 		os.Exit(1)
 	}
