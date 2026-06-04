@@ -11,6 +11,21 @@ import (
 // defaultRoleGroups — маппинг по умолчанию, если ROLE_GROUPS не задан.
 const defaultRoleGroups = "shlink-admins=admin,admin=admin"
 
+// RoleSource определяет, откуда берётся роль пользователя при каждом запросе.
+type RoleSource string
+
+const (
+	// RoleSourceKeycloak — роль читается из X-Auth-Request-Groups на каждый запрос.
+	// Keycloak — единственный источник истины. Изменение групп в Keycloak применяется сразу.
+	// Роль в БД обновляется при каждом логине (upsert role).
+	RoleSourceKeycloak RoleSource = "keycloak"
+
+	// RoleSourceDB — роль читается из БД (users.role).
+	// Первичный провизион берёт роль из Keycloak, далее роль управляется вручную через admin API.
+	// Изменение групп в Keycloak НЕ влияет на роль уже существующего пользователя.
+	RoleSourceDB RoleSource = "db"
+)
+
 type Config struct {
 	HTTPAddr    string
 	DatabaseURL string
@@ -21,6 +36,11 @@ type Config struct {
 
 	// AdminRole — имя роли, считающейся администраторской.
 	AdminRole string
+
+	// RoleSource — источник истины для роли пользователя.
+	// "keycloak" (default): роль берётся из Keycloak-групп на каждый запрос.
+	// "db": роль берётся из users.role, Keycloak только для первичного провизионирования.
+	RoleSource RoleSource
 
 	// Feature flags
 	UserSlugPrefixEnabled    bool
@@ -34,10 +54,35 @@ func Load() *Config {
 		ShlinkURL:                mustGetEnv("SHLINK_INTERNAL_URL"),
 		RoleGroups:               parseRoleGroups(),
 		AdminRole:                getEnv("ADMIN_ROLE", "admin"),
+		RoleSource:               parseRoleSource(),
 		UserSlugPrefixEnabled:    getBool("FEATURE_USER_SLUG_PREFIX", false),
 		UserTagInternalIdEnabled: getBool("FEATURE_USER_TAG_INTERNAL_ID", false),
 	}
+	slog.Info("config loaded",
+		"role_source", cfg.RoleSource,
+		"admin_role", cfg.AdminRole,
+		"slug_prefix_enabled", cfg.UserSlugPrefixEnabled,
+	)
 	return cfg
+}
+
+// parseRoleSource читает ROLE_SOURCE. Допустимые значения: "keycloak", "db".
+// По умолчанию — "keycloak".
+func parseRoleSource() RoleSource {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("ROLE_SOURCE")))
+	switch RoleSource(v) {
+	case RoleSourceDB:
+		slog.Info("config: ROLE_SOURCE=db — role authority is the database")
+		return RoleSourceDB
+	case RoleSourceKeycloak, "":
+		if v != "" && v != string(RoleSourceKeycloak) {
+			slog.Warn("config: unknown ROLE_SOURCE value, defaulting to keycloak", "value", v)
+		}
+		return RoleSourceKeycloak
+	default:
+		slog.Warn("config: unknown ROLE_SOURCE value, defaulting to keycloak", "value", v)
+		return RoleSourceKeycloak
+	}
 }
 
 // resolveDatabaseURL строит DSN следующим образом (приоритет по убыванию):

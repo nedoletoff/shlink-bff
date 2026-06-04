@@ -84,12 +84,10 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 	return users, rows.Err()
 }
 
-// Upsert вставляет пользователя или обновляет username/email при повторном логине.
-//
-// ВАЖНО (#32): role НЕ обновляется при повторном логине намеренно — роль в БД
-// является источником истины после первого провизионирования, чтобы админ мог
-// понижать/повышать роль вручную, а Keycloak не затирал это при каждом входе.
-// См. раздел README "Управление ролями".
+// Upsert вставляет нового пользователя.
+// При конфликте по sub обновляет ТОЛЬКО username и email — роль никогда не трогает.
+// Логика обновления роли полностью вынесена в middleware/active_user.go
+// и зависит от cfg.RoleSource.
 func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 	const q = `
 		INSERT INTO users (sub, username, email, role, shlink_api_key, status)
@@ -97,21 +95,19 @@ func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 		ON CONFLICT (sub) DO UPDATE SET
 			username   = EXCLUDED.username,
 			email      = EXCLUDED.email,
-			-- role НЕ обновляется намеренно (#32)
-			updated_at = NOW()`
+			updated_at = NOW()
+		-- role намеренно НЕ обновляется здесь;
+		-- обновление роли выполняется явно через UpdateBySubFields в active_user.go
+		`
 	_, err := r.pool.Exec(ctx, q,
 		u.Sub, u.Username, u.Email, u.Role, u.ShlinkAPIKey, u.Status,
 	)
 	return err
 }
 
-// UpdateBySubFields обновляет разрешённые поля пользователя ОДНИМ атомарным UPDATE (#14).
-//
-// Прежняя реализация выполняла до трёх отдельных UPDATE без транзакции,
-// что давало inconsistent-состояние между запросами.
+// UpdateBySubFields обновляет разрешённые поля пользователя одним атомарным UPDATE.
 func (r *UserRepository) UpdateBySubFields(ctx context.Context, sub string, fields map[string]any) error {
-	// Белый список колонок — защита от SQL-инъекции в имена полей.
-	allowed := []string{"role", "status", "slug_prefix"}
+	allowed := []string{"role", "status", "slug_prefix", "username", "email"}
 
 	setClauses := make([]string, 0, len(allowed))
 	args := make([]any, 0, len(allowed)+1)
@@ -125,7 +121,7 @@ func (r *UserRepository) UpdateBySubFields(ctx context.Context, sub string, fiel
 	}
 
 	if len(setClauses) == 0 {
-		return nil // нечего обновлять
+		return nil
 	}
 
 	args = append(args, sub)
