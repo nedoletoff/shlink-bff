@@ -14,8 +14,6 @@ export interface FeatureFlags {
 }
 
 export type UserRole = 'admin' | 'user';
-
-// Статус пользователя — union вместо string (#35)
 export type UserStatus = 'active' | 'disabled' | 'pending';
 
 export interface MeResponse {
@@ -24,7 +22,7 @@ export interface MeResponse {
   email:       string;
   role:        UserRole;
   permissions: Permissions;
-  hasApiKey:   boolean; // только флаг — реальный ключ недоступен в браузере
+  hasApiKey:   boolean;
   features:    FeatureFlags;
   slugPrefix?: string;
 }
@@ -60,7 +58,6 @@ export interface ShortURLsListResponse {
 }
 
 // Tags
-// Shlink v5.x: visitsCount (number) replaced by visitsSummary object
 export interface TagStats {
   tag:            string;
   shortUrlsCount: number;
@@ -68,29 +65,115 @@ export interface TagStats {
 }
 
 export interface TagsResponse {
-  tags: {
-    data: TagStats[];
-  };
+  tags: { data: TagStats[] };
 }
 
-// Dashboard
-export interface TagCount {
-  tag:   string;
-  count: number;
-}
-
-export interface ClickPoint {
-  date:   string;
-  clicks: number;
-}
+// Dashboard — базовые типы (Overview)
+export interface TagCount    { tag:    string; count:  number; }
+export interface ClickPoint  { date:   string; clicks: number; }
 
 export interface DashboardResponse {
-  totalClicks:   number;
-  activeLinks:   number;
-  topTags:       TagCount[];
+  totalClicks:    number;
+  activeLinks:    number;
+  topTags:        TagCount[];
   clicksOverTime: ClickPoint[];
 }
 
+// Dashboard — расширенные типы для вкладок 1–4
+export interface TopLink {
+  shortCode:  string;
+  title:      string;
+  shortUrl:   string;
+  visits:     number;
+}
+
+export interface OverviewResponse {
+  totalClicks:    number;
+  activeLinks:    number;
+  createdPeriod:  number;
+  uniqueVisitors: number | null;
+  clicksPerDay:   ClickPoint[];
+  topLinks:       TopLink[];
+}
+
+export interface UserActivityRow {
+  sub:            string;
+  username:       string;
+  linksCount:     number;
+  visitsCount:    number;
+  lastActivityAt: string | null;
+}
+
+export interface UserActivityResponse {
+  users:       UserActivityRow[];
+  newLinksPerDay: Array<{ date: string; [username: string]: number | string }>;
+}
+
+export interface UrlStatsRow {
+  shortCode:      string;
+  title:          string;
+  shortUrl:       string;
+  visitsToday:    number;
+  visits7d:       number;
+  visitsTotal:    number;
+  status:         'active' | 'inactive';
+  tags:           string[];
+  ownerUsername?: string;
+}
+
+export interface UrlStatsResponse {
+  urls: UrlStatsRow[];
+}
+
+export interface DeviceBreakdown {
+  desktop: number;
+  mobile:  number;
+  tablet:  number;
+}
+
+export interface NamedCount { name: string; count: number; }
+
+export interface DevicesResponse {
+  devices:  DeviceBreakdown;
+  browsers: NamedCount[];
+  os:       NamedCount[];
+}
+
+// URL detail page
+export interface VisitRow {
+  date:      string;
+  device:    string;
+  os:        string;
+  country:   string | null;
+  referer:   string | null;
+}
+
+export interface UrlDetailResponse {
+  shortCode:      string;
+  title:          string;
+  shortUrl:       string;
+  longUrl:        string;
+  dateCreated:    string;
+  ownerUsername?: string;
+  clicksPerDay:   ClickPoint[];
+  devices:        DeviceBreakdown;
+  browsers:       NamedCount[];
+  os:             NamedCount[];
+  visits:         VisitRow[];
+  visitsTotal:    number;
+}
+
+// User detail page
+export interface UserDetailResponse {
+  sub:         string;
+  username:    string;
+  email:       string;
+  role:        UserRole;
+  linksCount:  number;
+  visitsTotal: number;
+  activityPerDay: ClickPoint[];
+  links:       ShortURL[];
+}
 
 // Audit Logs
 export interface AuditLog {
@@ -117,6 +200,6 @@ export interface AdminUser {
   email:      string;
   role:       UserRole;
   slugPrefix: string | null;
-  status:     UserStatus; // union вместо string (#35)
+  status:     UserStatus;
   hasApiKey:  boolean;
 }
