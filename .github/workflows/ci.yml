@@ -53,7 +53,7 @@ jobs:
         env:
           PGPASSWORD: bff_test_password
         run: |
-          for f in migrations/*.sql; do
+          for f in internal/migrations/sql/*.sql; do
             psql -h 127.0.0.1 -U bff -d shlink_bff_test -f "$f"
           done
 
