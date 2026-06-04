@@ -14,6 +14,6 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
 
 # Финальный образ — alpine (нужен wget для healthcheck в docker-compose)
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates wget
+RUN apk add --no-cache ca-certificates wget docker-cli
 COPY --from=builder /unified-backend /unified-backend
 ENTRYPOINT ["/unified-backend"]
