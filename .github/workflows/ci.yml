@@ -92,6 +92,8 @@ jobs:
   web-ui:
     name: Build & Lint (Web UI)
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     defaults:
       run:
         working-directory: web-ui
@@ -120,7 +122,7 @@ jobs:
         run: npm run build
 
       - name: Upload web-ui build artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: web-ui-dist
           path: web-ui/dist
