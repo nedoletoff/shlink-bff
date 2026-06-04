@@ -2,8 +2,8 @@ package postgres
 
 import (
 	"context"
-	"embed"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"sort"
 	"strings"
@@ -11,19 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed ../../../migrations/*.sql
-var migrationsFS embed.FS
-
 const createMigrationsTable = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    TEXT        PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );`
 
-// RunMigrations applies all pending *.sql files from migrations/ in sorted order.
+// RunMigrations applies all pending *.sql files from the provided fs.FS in sorted order.
+// Pass migrations.FS from internal/migrations.
 // Idempotent: already-applied versions are skipped.
 // Returns error on first failure — caller should os.Exit(1).
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsFS fs.FS) error {
 	// Ensure tracking table exists.
 	if _, err := pool.Exec(ctx, createMigrationsTable); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
@@ -47,8 +45,13 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("schema_migrations rows: %w", err)
 	}
 
-	// Read migration files.
-	entries, err := migrationsFS.ReadDir("migrations")
+	// Read migration files from sql/ subdir.
+	sub, err := fs.Sub(migrationsFS, "sql")
+	if err != nil {
+		return fmt.Errorf("migrations sub fs: %w", err)
+	}
+
+	entries, err := fs.ReadDir(sub, ".")
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
 	}
@@ -66,7 +69,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			continue
 		}
 
-		content, err := migrationsFS.ReadFile("migrations/" + name)
+		content, err := fs.ReadFile(sub, name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
