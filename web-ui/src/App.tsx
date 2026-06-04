@@ -4,14 +4,16 @@ import { Notifications } from '@mantine/notifications';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider }  from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { AppLayout } from './components/layout/AppLayout';
-import { Dashboard }  from './pages/Dashboard';
-import { ShortUrls }  from './pages/ShortUrls';
-import { Tags }       from './pages/Tags';
-import { AdminUsers } from './pages/admin/Users';
-import { AuditLogs }  from './pages/admin/AuditLogs';
+import { AppLayout }     from './components/layout/AppLayout';
+import { Dashboard }     from './pages/Dashboard';
+import { ShortUrls }     from './pages/ShortUrls';
+import { Tags }          from './pages/Tags';
+import { AdminUsers }    from './pages/admin/Users';
+import { AuditLogs }     from './pages/admin/AuditLogs';
+import { Roles }         from './pages/admin/Roles';
+import { Settings }      from './pages/admin/Settings';
 
 export default function App() {
   return (
@@ -47,6 +49,22 @@ export default function App() {
                 element={
                   <ProtectedRoute requiredRole="admin">
                     <AuditLogs />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/roles"
+                element={
+                  <ProtectedRoute requiredRole="admin">
+                    <Roles />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/settings"
+                element={
+                  <ProtectedRoute requiredRole="admin">
+                    <Settings />
                   </ProtectedRoute>
                 }
               />
