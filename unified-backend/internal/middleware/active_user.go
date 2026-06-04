@@ -11,16 +11,6 @@ import (
 	"unified-backend/internal/repository/postgres"
 )
 
-type userCtxKeyType struct{}
-
-var userCtxKey = userCtxKeyType{}
-
-// UserFromCtx возвращает *domain.User из контекста (устанавливается RequireActiveUser).
-func UserFromCtx(ctx context.Context) *domain.User {
-	v, _ := ctx.Value(userCtxKey).(*domain.User)
-	return v
-}
-
 // RequireActiveUser — middleware провизионирования и авторизации.
 //
 // Логика зависит от cfg.RoleSource:
@@ -82,8 +72,9 @@ func RequireActiveUser(
 				return
 			}
 
-			// Кладём пользователя и финальную роль в контекст.
-			ctx = context.WithValue(ctx, userCtxKey, user)
+			// Кладём пользователя в контекст через WithUser (userctx.go),
+			// и обновляем CtxKeyRole для обратной совместимости с IdentityFromCtx.
+			ctx = WithUser(ctx, user)
 			ctx = context.WithValue(ctx, CtxKeyRole, user.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -113,7 +104,6 @@ func handleRoleSourceKeycloak(
 		return newUser, nil
 	}
 
-	// Роль обновляем если изменилась в Keycloak.
 	if user.Role != keycloakRole {
 		slog.Info("active_user: role synced from keycloak",
 			"sub", idnt.Sub, "old", user.Role, "new", keycloakRole)
@@ -122,7 +112,6 @@ func handleRoleSourceKeycloak(
 		}
 		user.Role = keycloakRole
 	}
-	// username/email всегда синхронизируем из Keycloak.
 	fields := map[string]any{}
 	if user.Username != idnt.Username {
 		fields["username"] = idnt.Username
@@ -149,7 +138,6 @@ func handleRoleSourceDB(
 	keycloakRole string,
 ) (*domain.User, error) {
 	if user == nil {
-		// Только при первом визите роль берётся из Keycloak.
 		newUser := &domain.User{
 			Sub:      idnt.Sub,
 			Email:    idnt.Email,
@@ -165,7 +153,6 @@ func handleRoleSourceDB(
 	}
 
 	// Повторный визит — роль из БД, Keycloak не меняет её.
-	// username/email обновляем (они не секретны и полезны для аудита).
 	fields := map[string]any{}
 	if user.Username != idnt.Username {
 		fields["username"] = idnt.Username
@@ -180,7 +167,6 @@ func handleRoleSourceDB(
 			return nil, err
 		}
 	}
-	// user.Role — из БД. Keycloak-роль НЕ применяется.
 	return user, nil
 }
 

@@ -10,6 +10,14 @@ import (
 	"unified-backend/internal/shlink"
 )
 
+// newTestPermissionsCache — PermissionsCache с дефолтными правами для admin/user.
+func newTestPermissionsCache() *service.PermissionsCache {
+	cache := service.NewPermissionsCache()
+	cache.Set(domain.DefaultAdminPermissions(domain.RoleAdmin))
+	cache.Set(domain.DefaultUserPermissions(domain.RoleUser))
+	return cache
+}
+
 func newShlinkService(slugPrefixEnabled bool) *service.ShlinkService {
 	cfg := &config.Config{
 		UserSlugPrefixEnabled:    slugPrefixEnabled,
@@ -17,7 +25,7 @@ func newShlinkService(slugPrefixEnabled bool) *service.ShlinkService {
 		ShlinkURL:                "http://shlink-api:8080",
 	}
 	cli := shlink.NewClient(cfg.ShlinkURL)
-	return service.NewShlinkService(cli, cfg)
+	return service.NewShlinkService(cli, cfg, newTestPermissionsCache())
 }
 
 // TestEnforceSlugPrefix_AdminBypass — для admin prefix не применяется
@@ -144,10 +152,9 @@ func TestFilterShortURLsByUser_AdminGetAll(t *testing.T) {
 	}
 }
 
-// TestComputePermissions_Admin — admin получает все права
-func TestComputePermissions_Admin(t *testing.T) {
-	user := &domain.User{Role: domain.RoleAdmin}
-	perms := user.ComputePermissions()
+// TestDefaultPermissions_Admin — admin получает все права
+func TestDefaultPermissions_Admin(t *testing.T) {
+	perms := domain.DefaultAdminPermissions(domain.RoleAdmin)
 
 	if !perms.CanViewAuditLogs {
 		t.Error("admin should canViewAuditLogs")
@@ -157,10 +164,9 @@ func TestComputePermissions_Admin(t *testing.T) {
 	}
 }
 
-// TestComputePermissions_User — user не получает admin-права
-func TestComputePermissions_User(t *testing.T) {
-	user := &domain.User{Role: domain.RoleUser}
-	perms := user.ComputePermissions()
+// TestDefaultPermissions_User — user не получает admin-права
+func TestDefaultPermissions_User(t *testing.T) {
+	perms := domain.DefaultUserPermissions(domain.RoleUser)
 
 	if perms.CanViewAuditLogs {
 		t.Error("user should NOT canViewAuditLogs")
@@ -168,8 +174,8 @@ func TestComputePermissions_User(t *testing.T) {
 	if perms.CanManageUsers {
 		t.Error("user should NOT canManageUsers")
 	}
-	if !perms.CanCreateShortURL {
-		t.Error("user SHOULD canCreateShortUrl")
+	if !perms.CanCreateLinks {
+		t.Error("user SHOULD canCreateLinks")
 	}
 }
 
@@ -177,8 +183,11 @@ func TestComputePermissions_User(t *testing.T) {
 func TestCanModifyShortCode_AdminAlways(t *testing.T) {
 	svc := newShlinkService(true)
 	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
-	if !svc.CanModifyShortCode(admin, "someone-else-link") {
-		t.Error("admin should be able to modify any short code")
+	if !svc.CanModifyShortCode(admin, "someone-else-link", false) {
+		t.Error("admin should be able to edit any short code")
+	}
+	if !svc.CanModifyShortCode(admin, "someone-else-link", true) {
+		t.Error("admin should be able to delete any short code")
 	}
 }
 
@@ -186,8 +195,11 @@ func TestCanModifyShortCode_AdminAlways(t *testing.T) {
 func TestCanModifyShortCode_FeatureDisabled(t *testing.T) {
 	svc := newShlinkService(false)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
-	if !svc.CanModifyShortCode(user, "u2-foreign") {
-		t.Error("when feature disabled, ownership is not enforced")
+	if !svc.CanModifyShortCode(user, "u2-foreign", false) {
+		t.Error("when feature disabled, ownership is not enforced (edit)")
+	}
+	if !svc.CanModifyShortCode(user, "u2-foreign", true) {
+		t.Error("when feature disabled, ownership is not enforced (delete)")
 	}
 }
 
@@ -195,17 +207,23 @@ func TestCanModifyShortCode_FeatureDisabled(t *testing.T) {
 func TestCanModifyShortCode_UserOwn(t *testing.T) {
 	svc := newShlinkService(true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
-	if !svc.CanModifyShortCode(user, "u1-mylink") {
-		t.Error("user should be able to modify own short code")
+	if !svc.CanModifyShortCode(user, "u1-mylink", false) {
+		t.Error("user should be able to edit own short code")
+	}
+	if !svc.CanModifyShortCode(user, "u1-mylink", true) {
+		t.Error("user should be able to delete own short code")
 	}
 }
 
-// TestCanModifyShortCode_UserForeign — чужие ссылки запрещены (#8)
+// TestCanModifyShortCode_UserForeign — чужие ссылки запрещены
 func TestCanModifyShortCode_UserForeign(t *testing.T) {
 	svc := newShlinkService(true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
-	if svc.CanModifyShortCode(user, "u2-foreign") {
-		t.Error("user must NOT be able to modify foreign short code")
+	if svc.CanModifyShortCode(user, "u2-foreign", false) {
+		t.Error("user must NOT be able to edit foreign short code")
+	}
+	if svc.CanModifyShortCode(user, "u2-foreign", true) {
+		t.Error("user must NOT be able to delete foreign short code")
 	}
 }
 
@@ -213,7 +231,10 @@ func TestCanModifyShortCode_UserForeign(t *testing.T) {
 func TestCanModifyShortCode_UserNoPrefix(t *testing.T) {
 	svc := newShlinkService(true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: ""}
-	if svc.CanModifyShortCode(user, "any-code") {
-		t.Error("user with no prefix and feature enabled must be denied")
+	if svc.CanModifyShortCode(user, "any-code", false) {
+		t.Error("user with no prefix and feature enabled must be denied (edit)")
+	}
+	if svc.CanModifyShortCode(user, "any-code", true) {
+		t.Error("user with no prefix and feature enabled must be denied (delete)")
 	}
 }
