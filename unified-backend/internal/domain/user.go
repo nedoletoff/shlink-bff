@@ -6,13 +6,23 @@ import (
 	"github.com/google/uuid"
 )
 
-type Role string
+// Role — открытый тип: любая строка, задаваемая через ROLE_GROUPS в конфиге.
+// RoleAdmin — единственная зарезервированная константа: используется только
+// внутри RBAC-проверок (AdminOnly/RequireRole). Фактическое значение
+// определяется ADMIN_ROLE в конфиге (config.AdminRole), по умолчанию "admin".
+type Role = string
+
+const (
+	// RoleAdmin — значение по умолчанию для админской роли.
+	// Используйте cfg.AdminRole там, где значение подставляется динамически.
+	RoleAdmin Role = "admin"
+	// RoleUser — оставлен для обратной совместимости. Не используйте в новом коде.
+	RoleUser Role = "user"
+)
+
 type Status string
 
 const (
-	RoleAdmin Role = "admin"
-	RoleUser  Role = "user"
-
 	StatusActive   Status = "active"
 	StatusDisabled Status = "disabled"
 	StatusPending  Status = "pending"
@@ -32,7 +42,8 @@ type User struct {
 	UpdatedAt    time.Time `db:"updated_at"`
 }
 
-// Permissions вычисляются из роли пользователя
+// Permissions вычисляются из роли пользователя. adminRole передаётся явно
+// (берётся из config.AdminRole), чтобы не зависеть от глобального состояния.
 type Permissions struct {
 	CanCreateShortURL bool `json:"canCreateShortUrl"`
 	CanEditOwnLinks   bool `json:"canEditOwnLinks"`
@@ -42,8 +53,8 @@ type Permissions struct {
 	CanManageUsers    bool `json:"canManageUsers"`
 }
 
-func (u *User) ComputePermissions() Permissions {
-	isAdmin := u.Role == RoleAdmin
+func (u *User) ComputePermissions(adminRole string) Permissions {
+	isAdmin := u.Role == adminRole
 	return Permissions{
 		CanCreateShortURL: true,
 		CanEditOwnLinks:   true,
