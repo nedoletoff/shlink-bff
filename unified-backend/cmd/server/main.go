@@ -39,6 +39,12 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Миграции — запускаем до любого обращения к схеме.
+	if err := postgres.RunMigrations(ctx, pool); err != nil {
+		slog.Error("database migration failed", "err", err)
+		os.Exit(1)
+	}
+
 	// Репозитории
 	userRepo := postgres.NewUserRepository(pool)
 	auditRepo := postgres.NewAuditRepository(pool)
