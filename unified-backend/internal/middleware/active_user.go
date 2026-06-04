@@ -9,6 +9,7 @@ import (
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/repository/postgres"
+	"unified-backend/internal/shlinkctl"
 )
 
 // RequireActiveUser — middleware провизионирования и авторизации.
@@ -24,9 +25,13 @@ import (
 //   - Первый визит: роль берётся из Keycloak и записывается в БД (провизионирование).
 //   - Последующие запросы: роль берётся из users.role (БД), Keycloak НЕ влияет.
 //   - Смена роли — только через admin API (PUT /api/admin/users/{sub}).
+//
+// После разрешения пользователя provisioner.EnsureAPIKey выдаёт shlink API-ключ
+// при первом логине (идемпотентно). Ошибка генерации не блокирует запрос.
 func RequireActiveUser(
 	userRepo *postgres.UserRepository,
 	auditRepo *postgres.AuditRepository,
+	provisioner *shlinkctl.Provisioner,
 	cfg *config.Config,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -70,6 +75,18 @@ func RequireActiveUser(
 				slog.Warn("active_user: disabled user", "sub", user.Sub)
 				writeErrJSON(w, http.StatusForbidden, "forbidden", "account is disabled")
 				return
+			}
+
+			// Выдаём shlink API-ключ при первом логине (идемпотентно).
+			// Не блокируем запрос при ошибке — пользователь видит 502 только на proxy-запросах.
+			if user.ShlinkAPIKey == "" {
+				key, provErr := provisioner.EnsureAPIKey(ctx, user.Sub, user.Username)
+				if provErr != nil {
+					slog.Warn("active_user: api key provisioning failed",
+						"sub", user.Sub, "err", provErr)
+				} else {
+					user.ShlinkAPIKey = key
+				}
 			}
 
 			// Кладём пользователя в контекст через WithUser (userctx.go),
