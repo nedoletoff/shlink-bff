@@ -19,15 +19,21 @@ func NewShlinkService(client *shlink.Client, cfg *config.Config) *ShlinkService 
 	return &ShlinkService{client: client, cfg: cfg}
 }
 
-// EnforceSlugPrefix добавляет/валидирует prefix для роли user.
-// Для admin — пропускает без изменений.
+// isAdmin возвращает true, если роль пользователя совпадает с cfg.AdminRole.
+// Используется вместо хардкода domain.RoleAdmin, чтобы поддерживать произвольные имена ролей.
+func (s *ShlinkService) isAdmin(user *domain.User) bool {
+	return user.Role == s.cfg.AdminRole
+}
+
+// EnforceSlugPrefix добавляет/валидирует prefix для не-админ ролей.
+// Для админа — пропускает без изменений.
 // Возвращает итоговый slug (может быть пустым → Shlink генерирует сам).
 func (s *ShlinkService) EnforceSlugPrefix(
 	ctx context.Context,
 	user *domain.User,
 	customSlug *string,
 ) (string, error) {
-	if !s.cfg.UserSlugPrefixEnabled || user.Role == domain.RoleAdmin {
+	if !s.cfg.UserSlugPrefixEnabled || s.isAdmin(user) {
 		if customSlug != nil {
 			return *customSlug, nil
 		}
@@ -51,13 +57,13 @@ func (s *ShlinkService) EnforceSlugPrefix(
 	return slug, nil
 }
 
-// FilterShortURLsByUser фильтрует ссылки по slug_prefix для роли user.
+// FilterShortURLsByUser фильтрует ссылки по slug_prefix для не-админ ролей.
 // Работает только если feature flag включён.
 func (s *ShlinkService) FilterShortURLsByUser(
 	urls []shlink.ShortURL,
 	user *domain.User,
 ) []shlink.ShortURL {
-	if !s.cfg.UserSlugPrefixEnabled || user.Role == domain.RoleAdmin {
+	if !s.cfg.UserSlugPrefixEnabled || s.isAdmin(user) {
 		return urls
 	}
 	prefix := user.SlugPrefix
@@ -76,26 +82,26 @@ func (s *ShlinkService) FilterShortURLsByUser(
 // CanModifyShortCode проверяет, вправе ли пользователь изменять/удалять ссылку с данным shortCode.
 //
 // Модель владения здесь основана на slug-префиксе (так же, как Filter/Enforce):
-//   - admin — может всё;
+//   - админ (cfg.AdminRole) — может всё;
 //   - при выключенном feature flag изоляция не применяется;
-//   - role=user с префиксом — только свои ссылки (shortCode начинается с префикса).
+//   - не-админ с префиксом — только свои ссылки (shortCode начинается с префикса).
 //
 // Без этой проверки пользователь мог бы изменить/удалить чужую ссылку, зная её shortCode (#8).
 func (s *ShlinkService) CanModifyShortCode(user *domain.User, shortCode string) bool {
-	if user.Role == domain.RoleAdmin {
+	if s.isAdmin(user) {
 		return true
 	}
 	if !s.cfg.UserSlugPrefixEnabled {
 		return true
 	}
 	if user.SlugPrefix == "" {
-		// feature включён, но префикс не задан — изменять нечего безопасного, запрещаем.
+		// feature включён, но префикс не задан — запрещаем.
 		return false
 	}
 	return strings.HasPrefix(shortCode, user.SlugPrefix)
 }
 
-// Client exposes the shlink client for use in handlers
+// Client возвращает shlink-клиент для хендлеров
 func (s *ShlinkService) Client() *shlink.Client {
 	return s.client
 }
