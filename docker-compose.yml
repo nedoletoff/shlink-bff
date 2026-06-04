@@ -1,1 +1,164 @@
-__COMPOSE__
+# docker-compose.yml
+# Архитектура:
+#   Browser -> nginx -> oauth2-proxy -> unified-backend (Go) -> shlink-api
+#
+# Перед запуском:
+#   cp .env.example .env && vi .env
+#   Скопируйте nginx/nginx.conf.example -> nginx/nginx.conf
+#   Скопируйте oauth2-proxy/shlink.cfg.example -> oauth2-proxy/shlink.cfg
+#   Положите SSL сертификаты в nginx/ssl/
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # -- Nginx (reverse proxy / TLS termination) --
+  nginx-proxy:
+    image: nginx:1.30-alpine
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - internal
+    depends_on:
+      unified-backend:
+        condition: service_healthy
+      web-ui:
+        condition: service_healthy
+      oauth2-proxy-shlink:
+        condition: service_started
+    logging: *default-logging
+    restart: unless-stopped
+
+  # -- PostgreSQL --
+  postgres:
+    image: postgres:17-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-shlink_bff}
+      POSTGRES_USER: ${DB_USER:-bff}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bff} -d ${DB_NAME:-shlink_bff}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  # -- Shlink API --
+  shlink-api:
+    image: shlinkio/shlink:latest
+    container_name: shlink-api
+    environment:
+      DEFAULT_DOMAIN: ${DOMAIN_SHORT:-shlink.example.com}
+      IS_HTTPS_ENABLED: "true"
+      INITIAL_API_KEY: ${ADMIN_SHLINK_API_KEY}
+    volumes:
+      - shlink-data:/etc/shlink/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/rest/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  # -- Go Backend (unified-backend) --
+  unified-backend:
+    build:
+      context: ./unified-backend
+      dockerfile: Dockerfile
+    container_name: unified-backend
+    environment:
+      HTTP_ADDR: "0.0.0.0:8080"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-bff}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-shlink_bff}
+      DB_SSLMODE: disable
+      SHLINK_INTERNAL_URL: "http://shlink-api:8080"
+      ROLE_GROUPS: ${ROLE_GROUPS:-shlink-admins=admin,admin=admin}
+      ADMIN_ROLE: ${ADMIN_ROLE:-admin}
+      ROLE_SOURCE: ${ROLE_SOURCE:-keycloak}
+      SHLINK_RUNNER_MODE: ${SHLINK_RUNNER_MODE:-docker}
+      SHLINK_CONTAINER: ${SHLINK_CONTAINER:-shlink-api}
+      SHLINK_BIN: ${SHLINK_BIN:-shlink}
+      FEATURE_USER_SLUG_PREFIX: ${FEATURE_USER_SLUG_PREFIX:-false}
+      FEATURE_USER_TAG_INTERNAL_ID: ${FEATURE_USER_TAG_INTERNAL_ID:-false}
+      FEATURE_USER_CUSTOM_SLUG: ${FEATURE_USER_CUSTOM_SLUG:-true}
+      SHLINK_SHORT_ID_LENGTH: ${SHLINK_SHORT_ID_LENGTH:-0}
+    networks:
+      - internal
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      shlink-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  # -- Web UI (React SPA) --
+  web-ui:
+    build:
+      context: ./web-ui
+      dockerfile: Dockerfile
+    container_name: web-ui
+    networks:
+      - internal
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    logging: *default-logging
+    restart: unless-stopped
+
+  # -- OAuth2 Proxy (Shlink) --
+  oauth2-proxy-shlink:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.2
+    container_name: oauth2-proxy-shlink
+    volumes:
+      - ./oauth2-proxy/shlink.cfg:/oauth2-proxy.cfg:ro
+    command: --config=/oauth2-proxy.cfg
+    networks:
+      - internal
+    expose:
+      - "4180"
+    environment:
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_CLIENT_SECRET_SHLINK}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_COOKIE_SECRET}
+    logging: *default-logging
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  shlink-data:
+
+networks:
+  internal:
+    driver: bridge
