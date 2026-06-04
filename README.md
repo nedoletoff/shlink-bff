@@ -9,6 +9,8 @@
 Browser → nginx (HTTPS) → oauth2-proxy → unified-backend (Go) → shlink-api
                                                               ↓
                                                        web-ui (React SPA)
+                                                              ↓
+                                                       PostgreSQL (BFF)
 ```
 
 **Принципы безопасности:**
@@ -55,7 +57,7 @@ DB_USER=bff
 DB_PASSWORD=changeme
 
 # Начальный admin API key для shlink-api (INITIAL_API_KEY).
-# unified-backend его НЕ использует — работает с per-user ключами из БД (см. #18).
+# unified-backend его НЕ использует — работает с per-user ключами из БД.
 ADMIN_SHLINK_API_KEY=your-admin-shlink-api-key
 
 # Группы Keycloak с ролью admin (дефолт: shlink-admins,admin)
@@ -160,6 +162,63 @@ curl -sk https://shlink-create.example.com/api/me  # в браузере (пос
 
 ---
 
+## Миграции БД
+
+`unified-backend` применяет SQL-миграции **автоматически при каждом старте** — вручную ничего делать не нужно.
+
+### Как это работает
+
+- SQL-файлы из `unified-backend/migrations/*.sql` встроены в бинарник через `go:embed`
+- При старте создаётся таблица `schema_migrations` (если не существует)
+- Файлы применяются в алфавитном порядке (`001_...`, `002_...`, ...), уже применённые пропускаются
+- Каждая миграция выполняется в отдельной транзакции; при ошибке — откат и `os.Exit(1)` с подробным логом
+
+### Ожидаемый лог успешного старта
+
+```json
+{"level":"INFO","msg":"postgres: connected successfully"}
+{"level":"INFO","msg":"migration applied","file":"001_init_schema.sql"}
+{"level":"INFO","msg":"migration applied","file":"002_open_role_constraint.sql"}
+{"level":"INFO","msg":"migration applied","file":"003_role_permissions.sql"}
+{"level":"INFO","msg":"shlink_client: version validated"}
+{"level":"INFO","msg":"unified-backend starting","addr":"0.0.0.0:8080"}
+```
+
+При повторном запуске (миграции уже применены) строки `migration applied` отсутствуют — это норма.
+
+### Если миграция упала
+
+```bash
+docker logs unified-backend 2>&1 | grep -E '(ERROR|migration)'
+```
+
+Примеры ошибок и их причины:
+
+| Ошибка | Причина | Решение |
+|---|---|---|
+| `failed to connect to postgres` | postgres-bff не поднялся | `docker compose restart unified-backend` |
+| `apply migration 001_...: ...already exists` | Таблица уже есть без `IF NOT EXISTS` | Миграция использует `CREATE TABLE IF NOT EXISTS` — не должно возникать |
+| `apply migration NNN_...: syntax error` | Сломан SQL в файле миграции | Исправить файл, пересобрать образ |
+
+### Добавление новой миграции
+
+```bash
+# Создать файл с порядковым номером
+cat > unified-backend/migrations/004_new_table.sql << 'EOF'
+CREATE TABLE IF NOT EXISTS new_table (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid()
+);
+EOF
+
+# Пересобрать образ
+docker compose build unified-backend
+docker compose up -d unified-backend
+```
+
+> **Важно:** уже применённые миграции **не изменять** — `schema_migrations` отслеживает их по имени файла. Правки существующего файла не применятся повторно. Для изменений создавайте новый файл.
+
+---
+
 ## RBAC и роль admin
 
 `unified-backend` не читает JWT напрямую. Идентичность пользователя приходит уже распакованной из `oauth2-proxy` через HTTP-заголовки, которые nginx пробрасывает из ответа на `auth_request`:
@@ -178,6 +237,27 @@ curl -sk https://shlink-create.example.com/api/me  # в браузере (пос
 - сравнение **case-insensitive**
 - если хотя бы одна группа совпадает — роль `admin`, иначе `user`
 
+### Предупреждение `active_user: no known keycloak group`
+
+Это сообщение появляется когда в заголовке `X-Auth-Request-Groups` нет ни одной известной группы.
+
+**Причины:**
+
+1. **Не настроен Group Membership mapper в Keycloak** (самая частая) — claim `groups` не попадает в токен. Проверьте по инструкции в Шаге 3.3.
+2. **Неверный `oidc_groups_claim`** в `oauth2-proxy/shlink.cfg` — должен быть `groups`.
+3. **Пользователь не состоит ни в одной группе** — добавьте его в группу `shlink-admins` (для admin) или любую другую (для user; достаточно любой группы в токене чтобы `X-Auth-Request-Groups` не был пустым).
+
+**Диагностика:**
+
+```bash
+# Декодировать токен пользователя
+docker logs oauth2-proxy-shlink 2>&1 | grep 'AuthSuccess'
+# Проверить заголовки, которые oauth2-proxy отдаёт nginx
+docker logs unified-backend 2>&1 | grep 'active_user'
+```
+
+Пользователь с пустой ролью (`"role": ""`) получает `403` на все запросы кроме `/healthz`.
+
 ### Кастомизация admin-групп
 
 ```dotenv
@@ -185,8 +265,8 @@ curl -sk https://shlink-create.example.com/api/me  # в браузере (пос
 ADMIN_GROUPS=shadmin,superusers
 ```
 
-`ADMIN_GROUPS` читается один раз при старте и хранится в иммутабельном `config.Config`
-(без глобального состояния и гонок данных). После изменения — перезапустить `unified-backend`.
+`ADMIN_GROUPS` читается один раз при старте и хранится в иммутабельном `config.Config`.
+После изменения — перезапустить `unified-backend`.
 
 ### Управление ролями
 
@@ -195,15 +275,15 @@ ADMIN_GROUPS=shadmin,superusers
 1. **Первый логин (auto-provision).** Если пользователя нет в БД, он создаётся автоматически,
    роль берётся из групп Keycloak (`resolveRole`).
 2. **Последующие логины.** Роль в БД — источник истины и **не перезаписывается** из Keycloak
-   при каждом входе (см. `UserRepository.Upsert`, #32). Это позволяет админу вручную
-   понижать/повышать роль через `PUT /api/admin/users/{sub}` без последующего затирания.
+   при каждом входе. Это позволяет админу вручную понижать/повышать роль через `PUT /api/admin/users/{sub}`
+   без последующего затирания.
 
 Если требуется, чтобы Keycloak всегда был источником истины для ролей, добавьте
 `role = EXCLUDED.role` в `ON CONFLICT` внутри `Upsert`.
 
 ### TLS-сертификаты nginx
 
-nginx ожидает **раздельные** файлы сертификата и ключа (#9):
+nginx ожидает **раздельные** файлы сертификата и ключа:
 
 ```bash
 # Из combined PEM (cert+key в одном файле) извлекаем раздельно:
@@ -234,15 +314,6 @@ browser → nginx → /_oauth2_auth (internal)
 
 При использовании `auth_request` nginx **по умолчанию не передаёт** Cookie-заголовок во внутренний subrequest. Без явной передачи oauth2-proxy не видит сессионный cookie и возвращает `401`.
 
-Это приводит к бесконечному циклу редиректов, который выглядит так в логах:
-
-```
-[AuthSuccess] user@example.com ...  # логин прошёл
-GET /oauth2/auth → 202              # первый auth_request — ок
-GET /oauth2/auth → 401              # второй — cookie не дошёл
-GET /oauth2/sign_in → 200           # снова на логин ← цикл
-```
-
 **Обязательно в блоке `/_oauth2_auth`:**
 
 ```nginx
@@ -258,15 +329,13 @@ location = /_oauth2_auth {
 
 ### session_cookie_minimal
 
-Параметр `session_cookie_minimal = true` в конфиге oauth2-proxy убирает из cookie `refresh_token`. При коротком `Access Token Lifespan` в Keycloak (по умолчанию 5 минут) токен истекает, обновить его нельзя — пользователь вылетает из сессии.
+Параметр `session_cookie_minimal = true` убирает из cookie `refresh_token`. При коротком `Access Token Lifespan` в Keycloak токен истекает, обновить его нельзя — пользователь вылетает из сессии.
 
 **Рекомендации:**
 - не включать `session_cookie_minimal`
 - или увеличить `Access Token Lifespan` в Keycloak: **Realm Settings → Tokens → Access Token Lifespan** (минимум 5 минут)
 
 ### Logout
-
-`/oauth2/sign_out` с GET-запросом без активной сессии уходит в цикл редиректов. Решение — делать logout через POST:
 
 Добавить в `nginx.conf` (перед `location /oauth2/`):
 
@@ -277,8 +346,6 @@ location = /logout {
 }
 ```
 
-В UI использовать `href="/logout"` вместо `/oauth2/sign_out`.
-
 ---
 
 ## Go Backend (unified-backend)
@@ -288,41 +355,31 @@ location = /logout {
 | Компонент | Версия | Назначение |
 |---|---|---|
 | Go | ≥ 1.24 | Runtime |
-| Gin | latest | HTTP-роутер |
-| GORM | latest | ORM (PostgreSQL) |
-| PostgreSQL | 16 | База данных |
-| golang-jwt | latest | JWT-валидация |
-| zap | latest | Структурированные логи |
+| Chi | v5 | HTTP-роутер |
+| pgx | v5 | PostgreSQL-клиент |
+| PostgreSQL | 17 | База данных BFF |
+| embed.FS | stdlib | Встроенные SQL-миграции |
+| slog | stdlib | Структурированные логи |
 
 ### Структура
 
 ```
 unified-backend/
-├── cmd/           # Точка входа
+├── cmd/server/         # Точка входа (main.go)
 ├── internal/
-│   ├── config/    # Конфигурация из .env
-│   ├── handler/   # HTTP-обработчики
-│   ├── middleware/ # Auth, RBAC, logging
-│   ├── model/     # GORM-модели
-│   └── service/   # Бизнес-логика
-├── migrations/    # SQL-миграции
-├── test/          # Unit-тесты
+│   ├── config/         # Конфигурация из env
+│   ├── domain/         # Типы, permissions
+│   ├── handler/        # HTTP-обработчики
+│   ├── middleware/      # Auth, RBAC, logging
+│   ├── repository/
+│   │   └── postgres/   # Репозитории + мигратор
+│   ├── service/        # Бизнес-логика
+│   └── shlink/         # Клиент Shlink API
+├── migrations/         # SQL-миграции (embed в бинарник)
+├── test/               # Unit-тесты
 ├── Dockerfile
 └── go.mod
 ```
-
-### Миграции БД
-
-При первом запуске `unified-backend` таблица `users` создаётся автоматически через GORM AutoMigrate. Если таблица отсутствует (`relation "users" does not exist`), убедись что postgres-bff поднялся раньше:
-
-```bash
-docker compose logs postgres-bff | tail -5
-docker compose restart unified-backend
-```
-
-### Переменные окружения (полный список)
-
-См. `.env.example` в корне репозитория.
 
 ---
 
@@ -341,7 +398,7 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 - **test** — `go test -race ./...` с PostgreSQL-сервисом
 - **lint** — `golangci-lint`
-- **docker** — сборка образа `shlink-bff-go:ci`
+- **docker** — сборка и push образа в GHCR
 
 Триггер: push/PR в `main`.
 
@@ -356,58 +413,16 @@ cd unified-backend
 go test -v -race ./test/...
 ```
 
-### `audit_sanitize_test.go` — sanitize чувствительных полей аудита
-
-Проверяет, что функция `sanitizeDetails` корректно удаляет чувствительные ключи перед записью в БД.
-
-| Тест | Что проверяет |
-|---|---|
-| `TestSanitizeDetails_RemovesSensitiveKeys` | Ключи `shlink_api_key`, `api_key`, `authorization`, `password` удаляются; безопасные поля (`method`, `shortCode`) сохраняются |
-| `TestSanitizeDetails_NilInput` | Nil-вход не вызывает панику, возвращает nil |
-| `TestSanitizeDetails_EmptyInput` | Пустой map возвращает пустой map |
-| `TestSanitizeDetails_CaseInsensitive` | Matching работает case-insensitive: `SHLINK_API_KEY`, `Api_Key` — оба удаляются |
-
-### `rbac_test.go` — middleware ExtractIdentity и RBAC
-
-Проверяет middleware `ExtractIdentity`, который читает заголовки от oauth2-proxy и определяет роль пользователя.
-
-| Тест | Что проверяет |
-|---|---|
-| `TestExtractIdentity_MissingHeader` | Запрос без `X-Auth-Request-User` → `401 Unauthorized`, handler не вызван |
-| `TestExtractIdentity_WithHeader` | Запрос с валидными заголовками → handler вызван |
-| `TestExtractIdentity_AdminGroup_Default` | Группа `shlink-admins` → роль `admin` (дефолтные группы) |
-| `TestExtractIdentity_AdminGroup_LegacyAdmin` | Группа `admin` (legacy) → роль `admin` |
-| `TestExtractIdentity_UserRole_NoAdminGroup` | Группы `developers,readonly` → роль `user` |
-| `TestExtractIdentity_UserRole_EmptyGroups` | Пустые группы → роль `user` |
-| `TestExtractIdentity_CustomAdminGroup` | `ADMIN_GROUPS=shadmin,superusers`: только эти группы дают `admin`; старые (`shlink-admins`, `admin`) — уже `user` |
-| `TestExtractIdentity_CaseInsensitive` | Matching групп case-insensitive: `SHLINK-ADMINS` == `Shlink-Admins` |
-| `TestExtractIdentity_FieldsPopulated` | Все поля Identity заполнены корректно: `Sub`, `Email`, `Username`, `Role`, `Groups` |
-| `TestUserFromCtx_NilSafe` | `UserFromCtx` на пустом контексте возвращает nil без паники |
-| `TestWithUser_RoundTrip` | `WithUser` + `UserFromCtx`: запись/чтение из контекста сохраняет все поля |
-
-### `handler_me_test.go` — обработчик `GET /api/me`
-
-Проверяет, что ответ `/api/me` содержит корректные поля и **никогда не раскрывает** `shlink_api_key`.
-
-| Тест | Что проверяет |
-|---|---|
-| `TestMeHandler_ReturnsCorrectFields` | Ответ содержит `sub`, `username`, `role`, `hasApiKey=true`, `features`, `permissions`; поля `shlinkApiKey` / `shlink_api_key` / `apiKey` отсутствуют |
-| `TestMeHandler_AdminPermissions` | Admin получает `canManageUsers=true`, `canViewAuditLogs=true`; API key по-прежнему не попадает в ответ |
-| `TestMeHandler_NoUser_InternalError` | Запрос без user в контексте → `500 Internal Server Error` |
-
 ### `service_test.go` — бизнес-логика ShlinkService
 
-Проверяет `EnforceSlugPrefix` и `FilterShortURLsByUser`.
-
 | Тест | Что проверяет |
 |---|---|
-| `TestEnforceSlugPrefix_AdminBypass` | Admin передаёт произвольный slug без prefix — slug не изменяется |
+| `TestEnforceSlugPrefix_AdminBypass` | Admin передаёт произвольный slug — slug не изменяется |
 | `TestEnforceSlugPrefix_UserNoPrefix` | Feature включён, у пользователя нет `slug_prefix` → ошибка |
-| `TestEnforceSlugPrefix_UserCorrectPrefix` | Slug начинается с `slug_prefix` пользователя → OK |
+| `TestEnforceSlugPrefix_UserCorrectPrefix` | Slug начинается с `slug_prefix` → OK |
 | `TestEnforceSlugPrefix_UserWrongPrefix` | Slug без нужного prefix → ошибка |
-| `TestEnforceSlugPrefix_FeatureDisabled` | `FEATURE_USER_SLUG_PREFIX=false` → slug не трогается независимо от роли |
-| `TestEnforceSlugPrefix_UserNilSlug` | Nil slug + prefix → возвращает prefix как slug |
-| `TestFilterShortURLsByUser` | Фильтрация: пользователь видит только ссылки со своим prefix |
-| `TestFilterShortURLsByUser_AdminGetAll` | Admin видит все ссылки без фильтрации |
-| `TestComputePermissions_Admin` | Admin: `CanViewAuditLogs=true`, `CanManageUsers=true` |
-| `TestComputePermissions_User` | User: `CanViewAuditLogs=false`, `CanManageUsers=false`, `CanCreateShortURL=true` |
+| `TestEnforceSlugPrefix_FeatureDisabled` | `FEATURE_USER_SLUG_PREFIX=false` → slug не трогается |
+| `TestEnforceSlugPrefix_UserCustomSlugFeatureDisabled` | `FEATURE_USER_CUSTOM_SLUG=false` → user получает ошибку |
+| `TestEnforceSlugPrefix_AdminIgnoresFeatureFlag` | `FEATURE_USER_CUSTOM_SLUG=false` → admin не блокируется |
+| `TestFilterShortURLsByUser` | Пользователь видит только ссылки со своим prefix |
+| `TestFilterShortURLsByUser_AdminGetAll` | Admin видит все ссылки |
