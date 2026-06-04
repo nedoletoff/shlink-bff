@@ -67,7 +67,7 @@ services:
     image: postgres:16-alpine
     container_name: bff-postgres
     environment:
-      POSTGRES_DB: shlink_bff
+      POSTGRES_DB: ${DB_NAME:-shlink_bff}
       POSTGRES_USER: ${DB_USER:-bff}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
@@ -77,7 +77,7 @@ services:
     expose:
       - "5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bff} -d shlink_bff"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bff} -d ${DB_NAME:-shlink_bff}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -92,12 +92,15 @@ services:
     container_name: unified-backend
     environment:
       HTTP_ADDR: "0.0.0.0:8080"
-      DATABASE_URL: "postgres://${DB_USER:-bff}:${DB_PASSWORD}@postgres:5432/shlink_bff?sslmode=disable"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-bff}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-shlink_bff}
+      DB_SSLMODE: disable
       SHLINK_INTERNAL_URL: "http://shlink-api:8080"
-      # SHLINK_API_KEY убран (#18): backend использует per-user ключ из БД (X-Api-Key),
-      # а не глобальный ключ. ADMIN_SHLINK_API_KEY нужен только shlink-api (INITIAL_API_KEY).
-      # ADMIN_GROUPS — имена Keycloak-групп с ролью admin (дефолт: shlink-admins,admin).
-      ADMIN_GROUPS: ${ADMIN_GROUPS:-shlink-admins,admin}
+      ROLE_GROUPS: ${ROLE_GROUPS:-shlink-admins=admin,admin=admin}
+      ADMIN_ROLE: ${ADMIN_ROLE:-admin}
       FEATURE_USER_SLUG_PREFIX: ${FEATURE_USER_SLUG_PREFIX:-false}
       FEATURE_USER_TAG_INTERNAL_ID: ${FEATURE_USER_TAG_INTERNAL_ID:-false}
     networks:

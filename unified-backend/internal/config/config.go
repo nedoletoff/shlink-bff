@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -8,11 +9,6 @@ import (
 )
 
 // defaultRoleGroups — маппинг по умолчанию, если ROLE_GROUPS не задан.
-// Формат: keycloak-group=role-name,...
-// Пример: "shlink-admin=shlink-admin,shlink-user=shlink-user"
-//
-// Обратная совместимость: если задан только ADMIN_GROUPS (старый формат),
-// он интерпретируется как список групп, получающих роль "admin".
 const defaultRoleGroups = "shlink-admins=admin,admin=admin"
 
 type Config struct {
@@ -21,12 +17,9 @@ type Config struct {
 	ShlinkURL   string
 
 	// RoleGroups — маппинг keycloak-group (lower-case) → role-name.
-	// Читается один раз при старте из ROLE_GROUPS (формат: group=role,...).
-	// Иммутабельно после загрузки — гонок данных нет.
 	RoleGroups map[string]string
 
-	// AdminRole — имя роли, считающейся администраторской (для RBAC-проверок AdminOnly).
-	// Задаётся через ADMIN_ROLE, по умолчанию "admin".
+	// AdminRole — имя роли, считающейся администраторской.
 	AdminRole string
 
 	// Feature flags
@@ -37,7 +30,7 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{
 		HTTPAddr:                 getEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL:              mustGetEnv("DATABASE_URL"),
+		DatabaseURL:              resolveDatabaseURL(),
 		ShlinkURL:                mustGetEnv("SHLINK_INTERNAL_URL"),
 		RoleGroups:               parseRoleGroups(),
 		AdminRole:                getEnv("ADMIN_ROLE", "admin"),
@@ -47,16 +40,34 @@ func Load() *Config {
 	return cfg
 }
 
+// resolveDatabaseURL строит DSN следующим образом (приоритет по убыванию):
+//  1. DATABASE_URL — если задан целиком, используется как есть (legacy / внешний запуск).
+//  2. DB_HOST + DB_PORT + DB_USER + DB_PASSWORD + DB_NAME + DB_SSLMODE — собирается DSN.
+//     DB_NAME обязателен в этом режиме.
+func resolveDatabaseURL() string {
+	if url := strings.TrimSpace(os.Getenv("DATABASE_URL")); url != "" {
+		return url
+	}
+
+	host := getEnv("DB_HOST", "localhost")
+	port := getEnv("DB_PORT", "5432")
+	user := mustGetEnv("DB_USER")
+	password := mustGetEnv("DB_PASSWORD")
+	dbName := mustGetEnv("DB_NAME")
+	sslMode := getEnv("DB_SSLMODE", "disable")
+
+	return fmt.Sprintf(
+		"postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		user, password, host, port, dbName, sslMode,
+	)
+}
+
 // parseRoleGroups читает ROLE_GROUPS (приоритет) или ADMIN_GROUPS (обратная совместимость).
-//
-// ROLE_GROUPS format: "keycloak-group=role-name,..." — явный маппинг группа→роль.
-// ADMIN_GROUPS format: "group1,group2,..." — все перечисленные группы получают ADMIN_ROLE.
 func parseRoleGroups() map[string]string {
 	if raw := strings.TrimSpace(os.Getenv("ROLE_GROUPS")); raw != "" {
 		return parseExplicitRoleGroups(raw)
 	}
 
-	// Обратная совместимость: ADMIN_GROUPS
 	adminRole := getEnv("ADMIN_ROLE", "admin")
 	if raw := strings.TrimSpace(os.Getenv("ADMIN_GROUPS")); raw != "" {
 		m := make(map[string]string)
