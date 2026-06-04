@@ -45,12 +45,9 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Для role=user — дополнительно фильтруем по префиксу (если включён)
-	urls := resp.ShortURLs.Data
-	if user.Role == domain.RoleUser {
-		urls = h.shlinkSvc.FilterShortURLsByUser(urls, user)
-	}
-	resp.ShortURLs.Data = urls
+	// Для не-админа — дополнительно фильтруем по префиксу (если включён feature flag).
+	// Админ видит все ссылки — ShlinkService.FilterShortURLsByUser пропускает без фильтрации.
+	resp.ShortURLs.Data = h.shlinkSvc.FilterShortURLsByUser(resp.ShortURLs.Data, user)
 
 	h.recordAudit(r, user, "list_short_urls", "success", nil)
 	writeJSON(w, resp, http.StatusOK)
@@ -76,7 +73,7 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Enforce slug prefix для role=user
+	// Enforce slug prefix для не-админа
 	var customSlug *string
 	if cs, ok := payload["customSlug"].(string); ok && cs != "" {
 		customSlug = &cs
@@ -123,7 +120,7 @@ func (h *ShlinkProxyHandler) UpdateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Проверка владельца: role=user не может изменять чужие ссылки (#8)
+	// Проверка владельца: не-админ не может изменять чужие ссылки (#8)
 	if !h.shlinkSvc.CanModifyShortCode(user, shortCode) {
 		slog.Warn("proxy: update denied — not owner", "sub", user.Sub, "shortCode", shortCode)
 		h.recordAudit(r, user, "update_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "not owner"})
@@ -165,7 +162,7 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Проверка владельца: role=user не может удалять чужие ссылки (#8)
+	// Проверка владельца: не-админ не может удалять чужие ссылки (#8)
 	if !h.shlinkSvc.CanModifyShortCode(user, shortCode) {
 		slog.Warn("proxy: delete denied — not owner", "sub", user.Sub, "shortCode", shortCode)
 		h.recordAudit(r, user, "delete_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "not owner"})
@@ -206,7 +203,6 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 // Shlink v5 не имеет API для явного создания тега: теги создаются автоматически
 // при создании/обновлении ссылки с новым тегом (POST/PATCH /rest/v3/short-urls).
 // PUT /rest/v3/tags — только переименование ({oldName, newName}).
-// Прежний CreateTag вызывал RenameTag и падал в runtime — endpoint удалён.
 
 // PUT /api/shlink/tags/{tagId} — переименование тега
 func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
