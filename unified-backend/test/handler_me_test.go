@@ -20,7 +20,8 @@ func TestMeHandler_ReturnsCorrectFields(t *testing.T) {
 		UserSlugPrefixEnabled:    true,
 		UserTagInternalIdEnabled: false,
 	}
-	h := handler.NewMeHandler(cfg)
+	perms := newTestPermissionsCache()
+	h := handler.NewMeHandler(cfg, perms)
 
 	user := &domain.User{
 		ID:           uuid.New(),
@@ -85,14 +86,14 @@ func TestMeHandler_ReturnsCorrectFields(t *testing.T) {
 	}
 
 	// permissions должны присутствовать
-	perms, ok := resp["permissions"].(map[string]any)
+	permsResp, ok := resp["permissions"].(map[string]any)
 	if !ok {
 		t.Fatal("permissions should be an object")
 	}
-	if perms["canManageUsers"] != false {
+	if permsResp["canManageUsers"] != false {
 		t.Error("user role should not canManageUsers")
 	}
-	if perms["canViewAuditLogs"] != false {
+	if permsResp["canViewAuditLogs"] != false {
 		t.Error("user role should not canViewAuditLogs")
 	}
 }
@@ -100,7 +101,8 @@ func TestMeHandler_ReturnsCorrectFields(t *testing.T) {
 // TestMeHandler_AdminPermissions — admin получает расширенные права
 func TestMeHandler_AdminPermissions(t *testing.T) {
 	cfg := &config.Config{}
-	h := handler.NewMeHandler(cfg)
+	perms := newTestPermissionsCache()
+	h := handler.NewMeHandler(cfg, perms)
 
 	admin := &domain.User{
 		ID:           uuid.New(),
@@ -121,11 +123,11 @@ func TestMeHandler_AdminPermissions(t *testing.T) {
 	var resp map[string]any
 	_ = json.NewDecoder(rr.Body).Decode(&resp)
 
-	perms := resp["permissions"].(map[string]any)
-	if perms["canManageUsers"] != true {
+	permsResp := resp["permissions"].(map[string]any)
+	if permsResp["canManageUsers"] != true {
 		t.Error("admin should canManageUsers")
 	}
-	if perms["canViewAuditLogs"] != true {
+	if permsResp["canViewAuditLogs"] != true {
 		t.Error("admin should canViewAuditLogs")
 	}
 
@@ -140,7 +142,8 @@ func TestMeHandler_AdminPermissions(t *testing.T) {
 // TestMeHandler_NoUser_InternalError — без user в контексте → 500
 func TestMeHandler_NoUser_InternalError(t *testing.T) {
 	cfg := &config.Config{}
-	h := handler.NewMeHandler(cfg)
+	perms := newTestPermissionsCache()
+	h := handler.NewMeHandler(cfg, perms)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	// Намеренно НЕ кладём user в контекст
