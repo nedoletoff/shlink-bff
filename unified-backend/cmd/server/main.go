@@ -13,6 +13,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
 	"unified-backend/internal/config"
+	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/repository/postgres"
@@ -21,7 +22,6 @@ import (
 )
 
 func main() {
-	// Структурированный JSON-логинг (slog, Go 1.21+)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})))
@@ -42,13 +42,19 @@ func main() {
 	// Репозитории
 	userRepo := postgres.NewUserRepository(pool)
 	auditRepo := postgres.NewAuditRepository(pool)
+	permsRepo := postgres.NewRolePermissionsRepository(pool)
 
-	// Shlink клиент и сервис
+	// Кеш permissions — загружаем при старте
+	permsCache := service.NewPermissionsCache(permsRepo, cfg.AdminRole)
+	if err := permsCache.Load(ctx); err != nil {
+		// Не фатально: кеш вернёт дефолты для известных ролей
+		slog.Warn("permissions cache load failed, using defaults", "err", err)
+	}
+
+	// Shlink
 	shlinkClient := shlink.NewClient(cfg.ShlinkURL)
-	shlinkSvc := service.NewShlinkService(shlinkClient, cfg)
+	shlinkSvc := service.NewShlinkService(shlinkClient, cfg, permsCache)
 
-	// Валидация версии Shlink API на старте (#16): минимум v5.
-	// Shlink может ещё подниматься — делаем несколько попыток с задержкой.
 	if err := shlinkClient.ValidateVersion(ctx, 5, 10, 3*time.Second); err != nil {
 		slog.Error("shlink version validation failed", "err", err)
 		os.Exit(1)
@@ -59,47 +65,36 @@ func main() {
 	dashH := handler.NewDashboardHandler(shlinkSvc)
 	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
 	adminH := handler.NewAdminHandler(userRepo, auditRepo)
+	rolesH := handler.NewRolesHandler(permsCache, permsRepo)
 
 	r := chi.NewRouter()
-
-	// Базовые middleware.
-	// chimiddleware.RealIP НЕ используем: он уязвим к IP-spoofing (GHSA-3fxj-6jh8-hvhx)
-	// и перезаписывает r.RemoteAddr из клиентских заголовков. Мы за nginx,
-	// который сам пробрасывает доверенный X-Real-IP — полагаемся на него.
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
-	// Публичный healthcheck (без auth)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","service":"unified-backend"}`))
 	})
 
-	// Все /api/* — за identity extraction + request logging + active user check
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.ExtractIdentity(cfg.RoleGroups))
 		r.Use(middleware.RequestLogger)
 		r.Use(middleware.RequireActiveUser(userRepo, auditRepo))
 
-		// Профиль текущего пользователя
 		r.Get("/api/me", meH.ServeHTTP)
-
-		// Dashboard
 		r.Get("/api/dashboard", dashH.ServeHTTP)
 
-		// Shlink proxy — доступен обоим ролям (изоляция внутри хендлеров)
+		// Shlink proxy — enforcement внутри хендлеров через PermissionsCache
 		r.Get("/api/shlink/short-urls", proxyH.ListShortURLs)
 		r.Post("/api/shlink/short-urls", proxyH.CreateShortURL)
 		r.Patch("/api/shlink/short-urls/{shortCode}", proxyH.UpdateShortURL)
 		r.Delete("/api/shlink/short-urls/{shortCode}", proxyH.DeleteShortURL)
 
 		r.Get("/api/shlink/tags", proxyH.ListTags)
-		// POST /api/shlink/tags убран (#1): Shlink v5 создаёт теги автоматически
-		// при добавлении к ссылке — отдельного endpoint создания нет.
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
 		r.Delete("/api/shlink/tags/{tagId}", proxyH.DeleteTag)
 
-		// Admin-only маршруты
+		// Admin-only: управление пользователями, аудит, роли
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.AdminOnly(cfg.AdminRole, auditRepo))
 
@@ -110,6 +105,26 @@ func main() {
 			r.Put("/api/admin/users/{sub}/prefix", adminH.UpdateSlugPrefix)
 			r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
 			r.Get("/api/admin/logs", adminH.ListLogs)
+
+			// Управление permissions ролей — только роли с can_manage_roles
+			r.With(
+				middleware.RequirePermission(permsCache,
+					func(p domain.RolePermissions) bool { return p.CanManageRoles },
+					auditRepo,
+				),
+			).Get("/api/admin/roles", rolesH.ListRoles)
+			r.With(
+				middleware.RequirePermission(permsCache,
+					func(p domain.RolePermissions) bool { return p.CanManageRoles },
+					auditRepo,
+				),
+			).Get("/api/admin/roles/{role}", rolesH.GetRole)
+			r.With(
+				middleware.RequirePermission(permsCache,
+					func(p domain.RolePermissions) bool { return p.CanManageRoles },
+					auditRepo,
+				),
+			).Put("/api/admin/roles/{role}/permissions", rolesH.UpsertRolePermissions)
 		})
 	})
 

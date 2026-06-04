@@ -13,28 +13,50 @@ import (
 type ShlinkService struct {
 	client *shlink.Client
 	cfg    *config.Config
+	perms  *PermissionsCache
 }
 
-func NewShlinkService(client *shlink.Client, cfg *config.Config) *ShlinkService {
-	return &ShlinkService{client: client, cfg: cfg}
+func NewShlinkService(client *shlink.Client, cfg *config.Config, perms *PermissionsCache) *ShlinkService {
+	return &ShlinkService{client: client, cfg: cfg, perms: perms}
 }
 
-// isAdmin возвращает true, если роль пользователя совпадает с cfg.AdminRole.
-// Используется вместо хардкода domain.RoleAdmin, чтобы поддерживать произвольные имена ролей.
-func (s *ShlinkService) isAdmin(user *domain.User) bool {
-	return user.Role == s.cfg.AdminRole
+// Perms возвращает permissions для роли пользователя.
+func (s *ShlinkService) Perms(user *domain.User) domain.RolePermissions {
+	return s.perms.Get(user.Role)
 }
 
-// EnforceSlugPrefix добавляет/валидирует prefix для не-админ ролей.
-// Для админа — пропускает без изменений.
-// Возвращает итоговый slug (может быть пустым → Shlink генерирует сам).
+// EnforceSlugPrefix валидирует/устанавливает slug с учётом permissions.
+//
+// Логика:
+//  1. Если у роли нет can_create_links → ошибка.
+//  2. Если передан customSlug и нет can_create_with_custom_slug → ошибка.
+//  3. Если не передан slug и нет can_create_without_slug → ошибка.
+//  4. Если включён UserSlugPrefixEnabled и роль не may_view_all_links (не имеет глобальных прав)
+//     → принудительно добавляем slug_prefix.
 func (s *ShlinkService) EnforceSlugPrefix(
 	ctx context.Context,
 	user *domain.User,
 	customSlug *string,
 ) (string, error) {
-	if !s.cfg.UserSlugPrefixEnabled || s.isAdmin(user) {
-		if customSlug != nil {
+	p := s.perms.Get(user.Role)
+
+	if !p.CanCreateLinks {
+		return "", fmt.Errorf("role %q is not allowed to create links", user.Role)
+	}
+
+	hasCustomSlug := customSlug != nil && *customSlug != ""
+
+	if hasCustomSlug && !p.CanCreateWithCustomSlug {
+		return "", fmt.Errorf("role %q is not allowed to set a custom slug", user.Role)
+	}
+	if !hasCustomSlug && !p.CanCreateWithoutSlug {
+		return "", fmt.Errorf("role %q must provide a custom slug", user.Role)
+	}
+
+	// Принудительный slug_prefix только если изоляция включена
+	// и роль не имеет глобального доступа к чужим ссылкам.
+	if !s.cfg.UserSlugPrefixEnabled || p.CanViewAllLinks {
+		if hasCustomSlug {
 			return *customSlug, nil
 		}
 		return "", nil
@@ -45,8 +67,7 @@ func (s *ShlinkService) EnforceSlugPrefix(
 		return "", fmt.Errorf("user %s has no slug prefix configured", user.Sub)
 	}
 
-	if customSlug == nil || *customSlug == "" {
-		// Пустой slug → вернём только префикс, Shlink добавит суффикс
+	if !hasCustomSlug {
 		return prefix, nil
 	}
 
@@ -57,13 +78,22 @@ func (s *ShlinkService) EnforceSlugPrefix(
 	return slug, nil
 }
 
-// FilterShortURLsByUser фильтрует ссылки по slug_prefix для не-админ ролей.
-// Работает только если feature flag включён.
+// FilterShortURLsByUser фильтрует ссылки согласно permissions роли.
 func (s *ShlinkService) FilterShortURLsByUser(
 	urls []shlink.ShortURL,
 	user *domain.User,
 ) []shlink.ShortURL {
-	if !s.cfg.UserSlugPrefixEnabled || s.isAdmin(user) {
+	p := s.perms.Get(user.Role)
+
+	if p.CanViewAllLinks {
+		return urls
+	}
+	if !p.CanViewOwnLinks {
+		return []shlink.ShortURL{}
+	}
+
+	// Изоляция по slug_prefix если включена
+	if !s.cfg.UserSlugPrefixEnabled {
 		return urls
 	}
 	prefix := user.SlugPrefix
@@ -79,29 +109,36 @@ func (s *ShlinkService) FilterShortURLsByUser(
 	return filtered
 }
 
-// CanModifyShortCode проверяет, вправе ли пользователь изменять/удалять ссылку с данным shortCode.
-//
-// Модель владения здесь основана на slug-префиксе (так же, как Filter/Enforce):
-//   - админ (cfg.AdminRole) — может всё;
-//   - при выключенном feature flag изоляция не применяется;
-//   - не-админ с префиксом — только свои ссылки (shortCode начинается с префикса).
-//
-// Без этой проверки пользователь мог бы изменить/удалить чужую ссылку, зная её shortCode (#8).
-func (s *ShlinkService) CanModifyShortCode(user *domain.User, shortCode string) bool {
-	if s.isAdmin(user) {
-		return true
+// CanModifyShortCode — edit/delete права с учётом permissions.
+func (s *ShlinkService) CanModifyShortCode(user *domain.User, shortCode string, isDelete bool) bool {
+	p := s.perms.Get(user.Role)
+
+	if isDelete {
+		if p.CanDeleteAllLinks {
+			return true
+		}
+		if !p.CanDeleteOwnLinks {
+			return false
+		}
+	} else {
+		if p.CanEditAllLinks {
+			return true
+		}
+		if !p.CanEditOwnLinks {
+			return false
+		}
 	}
+
 	if !s.cfg.UserSlugPrefixEnabled {
 		return true
 	}
 	if user.SlugPrefix == "" {
-		// feature включён, но префикс не задан — запрещаем.
 		return false
 	}
 	return strings.HasPrefix(shortCode, user.SlugPrefix)
 }
 
-// Client возвращает shlink-клиент для хендлеров
+// Client возвращает shlink-клиент для хендлеров.
 func (s *ShlinkService) Client() *shlink.Client {
 	return s.client
 }

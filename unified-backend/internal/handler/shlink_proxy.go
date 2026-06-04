@@ -36,6 +36,12 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
+	p := h.shlinkSvc.Perms(user)
+	if !p.CanViewOwnLinks && !p.CanViewAllLinks {
+		h.recordAudit(r, user, "list_short_urls", "denied", map[string]any{"reason": "no view permission"})
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
 
 	resp, err := h.shlinkSvc.Client().GetShortURLs(r.Context(), user.ShlinkAPIKey, r.URL.RawQuery)
 	if err != nil {
@@ -45,8 +51,6 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Для не-админа — дополнительно фильтруем по префиксу (если включён feature flag).
-	// Админ видит все ссылки — ShlinkService.FilterShortURLsByUser пропускает без фильтрации.
 	resp.ShortURLs.Data = h.shlinkSvc.FilterShortURLsByUser(resp.ShortURLs.Data, user)
 
 	h.recordAudit(r, user, "list_short_urls", "success", nil)
@@ -73,7 +77,6 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Enforce slug prefix для не-админа
 	var customSlug *string
 	if cs, ok := payload["customSlug"].(string); ok && cs != "" {
 		customSlug = &cs
@@ -81,9 +84,9 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 
 	enforced, err := h.shlinkSvc.EnforceSlugPrefix(r.Context(), user, customSlug)
 	if err != nil {
-		slog.Warn("proxy: slug prefix violation", "sub", user.Sub, "err", err)
+		slog.Warn("proxy: slug enforcement failed", "sub", user.Sub, "err", err)
 		h.recordAudit(r, user, "create_short_url", "denied", map[string]any{"reason": err.Error()})
-		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusForbidden)
 		return
 	}
 	if enforced != "" {
@@ -120,10 +123,9 @@ func (h *ShlinkProxyHandler) UpdateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Проверка владельца: не-админ не может изменять чужие ссылки (#8)
-	if !h.shlinkSvc.CanModifyShortCode(user, shortCode) {
-		slog.Warn("proxy: update denied — not owner", "sub", user.Sub, "shortCode", shortCode)
-		h.recordAudit(r, user, "update_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "not owner"})
+	if !h.shlinkSvc.CanModifyShortCode(user, shortCode, false) {
+		slog.Warn("proxy: update denied", "sub", user.Sub, "shortCode", shortCode)
+		h.recordAudit(r, user, "update_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "no edit permission"})
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
@@ -162,10 +164,9 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Проверка владельца: не-админ не может удалять чужие ссылки (#8)
-	if !h.shlinkSvc.CanModifyShortCode(user, shortCode) {
-		slog.Warn("proxy: delete denied — not owner", "sub", user.Sub, "shortCode", shortCode)
-		h.recordAudit(r, user, "delete_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "not owner"})
+	if !h.shlinkSvc.CanModifyShortCode(user, shortCode, true) {
+		slog.Warn("proxy: delete denied", "sub", user.Sub, "shortCode", shortCode)
+		h.recordAudit(r, user, "delete_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": "no delete permission"})
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
@@ -188,6 +189,11 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
+	p := h.shlinkSvc.Perms(user)
+	if !p.CanManageOwnTags && !p.CanManageAllTags {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
 
 	resp, err := h.shlinkSvc.Client().GetTags(r.Context(), user.ShlinkAPIKey)
 	if err != nil {
@@ -195,19 +201,19 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"error": "shlink unavailable"}, http.StatusBadGateway)
 		return
 	}
-
 	writeJSON(w, resp, http.StatusOK)
 }
 
-// Примечание по #1: отдельного endpoint "создание тега" нет.
-// Shlink v5 не имеет API для явного создания тега: теги создаются автоматически
-// при создании/обновлении ссылки с новым тегом (POST/PATCH /rest/v3/short-urls).
-// PUT /rest/v3/tags — только переименование ({oldName, newName}).
-
-// PUT /api/shlink/tags/{tagId} — переименование тега
+// PUT /api/shlink/tags/{tagId}
 func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
+	p := h.shlinkSvc.Perms(user)
+	if !p.CanManageOwnTags && !p.CanManageAllTags {
+		h.recordAudit(r, user, "rename_tag", "denied", map[string]any{"reason": "no tag permission"})
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
@@ -235,6 +241,12 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
+	p := h.shlinkSvc.Perms(user)
+	if !p.CanManageOwnTags && !p.CanManageAllTags {
+		h.recordAudit(r, user, "delete_tag", "denied", map[string]any{"reason": "no tag permission"})
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
 
 	tagName := chi.URLParam(r, "tagId")
 	if tagName == "" {
@@ -252,11 +264,6 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recordAudit — вспомогательная запись в аудит.
-//
-// Запись выполняется в отдельной горутине с ДЕТАЧНУТЫМ контекстом.
-// Использовать r.Context() здесь нельзя: после возврата HTTP-handler
-// контекст запроса отменяется, и pool.Exec молча теряет запись аудита (#4, #10).
 func (h *ShlinkProxyHandler) recordAudit(
 	r *http.Request,
 	user *domain.User,
