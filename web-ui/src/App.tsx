@@ -54,6 +54,10 @@ export default function App() {
               <Route path="admin/settings" element={
                 <ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>
               } />
+              {/* 5.1 — детальная страница ссылки из админ-зоны */}
+              <Route path="admin/urls/:shortCode" element={
+                <ProtectedRoute requiredRole="admin"><UrlDetail /></ProtectedRoute>
+              } />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />
