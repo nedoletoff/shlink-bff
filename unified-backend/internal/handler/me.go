@@ -41,7 +41,7 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	perms := user.ComputePermissions()
+	perms := user.ComputePermissions(h.cfg.AdminRole)
 
 	resp := MeResponse{
 		Sub:      user.Sub,

@@ -77,7 +77,7 @@ func main() {
 
 	// Все /api/* — за identity extraction + request logging + active user check
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.ExtractIdentity(cfg.AdminGroups))
+		r.Use(middleware.ExtractIdentity(cfg.RoleGroups))
 		r.Use(middleware.RequestLogger)
 		r.Use(middleware.RequireActiveUser(userRepo, auditRepo))
 
@@ -101,7 +101,7 @@ func main() {
 
 		// Admin-only маршруты
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.AdminOnly(auditRepo))
+			r.Use(middleware.AdminOnly(cfg.AdminRole, auditRepo))
 
 			r.Get("/api/admin/users", adminH.ListUsers)
 			r.Get("/api/admin/users/{sub}", adminH.GetUser)
