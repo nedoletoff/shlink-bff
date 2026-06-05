@@ -39,9 +39,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	userRepo  := postgres.NewUserRepository(db)
-	auditRepo := postgres.NewAuditRepository(db)
-	rolesRepo := postgres.NewRolePermissionsRepository(db)
+	userRepo    := postgres.NewUserRepository(db)
+	auditRepo   := postgres.NewAuditRepository(db)
+	rolesRepo   := postgres.NewRolePermissionsRepository(db)
+	ownerRepo   := postgres.NewURLOwnershipRepository(db)
 
 	// ── Shlink client ────────────────────────────────────────────────────────
 	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
@@ -71,7 +72,7 @@ func main() {
 	// ── Handlers ─────────────────────────────────────────────────────────────
 	meH        := handler.NewMeHandler(cfg, permsCache)
 	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo)
-	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
+	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
 	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
 	rolesH     := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
 	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
