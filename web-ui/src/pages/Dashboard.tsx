@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Container, Title, Text, Group, Stack, Grid, Card,
-  Badge, Table, Anchor, Select, Tabs, Loader, Center,
+  Badge, Table, Select, Tabs, Loader, Center,
   Avatar, SimpleGrid, Progress, Tooltip, ThemeIcon,
   Skeleton, Box,
 } from '@mantine/core';
@@ -17,7 +17,6 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useIsAdmin } from '../contexts/AuthContext';
 import { api } from '../api/client';
-import { formatDate } from '../utils/date';
 
 // ─── types ────────────────────────────────────────────────────────────────────────────
 interface ClickPoint  { date: string; clicks: number; }
@@ -228,7 +227,6 @@ function UrlsTab({ period }: { period: string }) {
 
 // ─── Main component ──────────────────────────────────────────────────────────────────────────────
 export function Dashboard() {
-  const navigate  = useNavigate();
   const isAdmin   = useIsAdmin();
 
   const [data,    setData]    = useState<DashboardData | null>(null);
