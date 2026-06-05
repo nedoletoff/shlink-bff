@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -148,7 +147,16 @@ func buildOverview(urls []shlink.ShortURL) map[string]any {
 		top = top[:10]
 	}
 
-	recent := topLinks
+	recent := make([]topLinkItem, 0, len(urls))
+	for _, u := range urls {
+		recent = append(recent, topLinkItem{
+			ShortCode:   u.ShortCode,
+			ShortURL:    u.ShortURL,
+			LongURL:     u.LongURL,
+			Title:       u.Title,
+			VisitsTotal: u.VisitsSummary.Total,
+		})
+	}
 	if len(recent) > 5 {
 		recent = recent[:5]
 	}
@@ -262,10 +270,7 @@ func buildDevices(visits *shlink.VisitsResponse) map[string]any {
 
 	if visits != nil {
 		for _, v := range visits.Visits.Data {
-			ua := ""
-			if v.UserAgent != "" {
-				ua = v.UserAgent
-			}
+			ua := v.UserAgent
 			uaLower := strings.ToLower(ua)
 			switch {
 			case strings.Contains(uaLower, "mobi") || strings.Contains(uaLower, "android"):
@@ -312,42 +317,4 @@ func buildDevices(visits *shlink.VisitsResponse) map[string]any {
 		"os":       topCountSlice(osMap, 10),
 		"heatmap":  cells,
 	}
-}
-
-// writeJSON — хелпер для JSON ответа
-func writeJSON(w http.ResponseWriter, v any, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	enc := jsonNewEncoder(w)
-	if err := enc.Encode(v); err != nil {
-		slog.Error("writeJSON encode", "err", err)
-	}
-}
-
-// jsonNewEncoder — обёртка для инициализации энкодера (избегаем import cycle)
-func jsonNewEncoder(w http.ResponseWriter) interface{ Encode(any) error } {
-	return &jsonEnc{w: w}
-}
-
-type jsonEnc struct{ w http.ResponseWriter }
-
-func (e *jsonEnc) Encode(v any) error {
-	_ = strconv.Itoa // keep strconv import used
-	b, err := marshalJSON(v)
-	if err != nil {
-		return err
-	}
-	_, err = e.w.Write(b)
-	return err
-}
-
-func marshalJSON(v any) ([]byte, error) {
-	// delegate to standard library at runtime via interface
-	type jsonMarshaler interface {
-		MarshalJSON() ([]byte, error)
-	}
-	if m, ok := v.(jsonMarshaler); ok {
-		return m.MarshalJSON()
-	}
-	return nil, fmt.Errorf("writeJSON: use encoding/json.NewEncoder directly")
 }
