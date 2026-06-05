@@ -32,7 +32,7 @@ import {
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useIsAdmin } from '../contexts/AuthContext';
-import { api } from '../lib/api';
+import { api } from '../api/client';
 
 interface DashboardData {
   overview: {
@@ -113,12 +113,12 @@ function VisitsChart({ data }: { data: Array<{ date: string; clicks: number }> }
     );
   }
 
-  const max = Math.max(...data.map((d) => d.clicks), 1);
+  const max = Math.max(...data.map((d: { date: string; clicks: number }) => d.clicks), 1);
   const last14 = data.slice(-14);
 
   return (
     <Group align="flex-end" gap={3} h={80} style={{ overflow: 'hidden' }}>
-      {last14.map((d) => (
+      {last14.map((d: { date: string; clicks: number }) => (
         <Tooltip key={d.date} label={`${d.date}: ${d.clicks}`}>
           <div
             style={{
@@ -141,8 +141,8 @@ function HeatmapChart({
   data: Array<{ weekday: number; hour: number; value: number }>;
 }) {
   const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-  const max = Math.max(...data.map((d) => d.value), 1);
-  const map = new Map(data.map((d) => [`${d.weekday}-${d.hour}`, d.value]));
+  const max = Math.max(...data.map((d: { weekday: number; hour: number; value: number }) => d.value), 1);
+  const map = new Map(data.map((d: { weekday: number; hour: number; value: number }) => [`${d.weekday}-${d.hour}`, d.value]));
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -183,7 +183,7 @@ function UrlsTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
     setLoading(true);
     api
       .get<DashboardData>(`/api/dashboard?period=${period}`)
-      .then((d) => setData(d))
+      .then((d: DashboardData) => setData(d))
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [period]);
@@ -253,7 +253,7 @@ export function Dashboard() {
     setLoading(true);
     api
       .get<DashboardData>(`/api/dashboard?period=${period}`)
-      .then((d) => setData(d))
+      .then((d: DashboardData) => setData(d))
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [period]);

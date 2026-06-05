@@ -37,6 +37,7 @@ func main() {
 
 	userRepo := postgres.NewUserRepository(db)
 	auditRepo := postgres.NewAuditRepository(db)
+	rolesRepo := postgres.NewRolePermissionsRepository(db)
 
 	// ── Shlink client ────────────────────────────────────────────────────────
 	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
@@ -58,7 +59,7 @@ func main() {
 	meH := handler.NewMeHandler(userRepo, shlinkSvc)
 	dashH := handler.NewDashboardHandler(shlinkSvc, userRepo)
 	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
-	adminH := handler.NewAdminHandler(userRepo, auditRepo, shlinkSvc)
+	adminH := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
 
 	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
 	settingsH := handler.NewSettingsHandler(cfg, shlinkSvc)
@@ -127,6 +128,9 @@ func main() {
 			r.Get("/api/admin/roles", adminH.ListRoles)
 			r.Get("/api/admin/roles/{role}", adminH.GetRole)
 			r.Put("/api/admin/roles/{role}/permissions", adminH.UpdateRolePermissions)
+
+			r.Get("/api/admin/settings", adminH.GetSettings)
+			r.Patch("/api/admin/settings", adminH.PatchSettings)
 		})
 	})
 

@@ -43,16 +43,15 @@ type deviceBreakdown struct {
 }
 
 type visitRow struct {
-	Date     string  `json:"date"`
-	Country  *string `json:"country,omitempty"`
-	Referer  *string `json:"referer,omitempty"`
-	Browser  string  `json:"browser"`
-	OS       string  `json:"os"`
-	Device   string  `json:"device"`
-	Visitor  *string `json:"visitor,omitempty"`
+	Date    string  `json:"date"`
+	Country *string `json:"country,omitempty"`
+	Referer *string `json:"referer,omitempty"`
+	Browser string  `json:"browser"`
+	OS      string  `json:"os"`
+	Device  string  `json:"device"`
 }
 
-// GET /api/urls/{shortCode}/detail — страница деталей ссылки для web-ui
+// GET /api/urls/{shortCode}/detail
 func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) {
 	shortCode := chi.URLParam(r, "shortCode")
 	if shortCode == "" {
@@ -81,8 +80,9 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// RBAC: обычный пользователь видит только свои ссылки (по tags/prefix policy сервиса).
-	if !h.svc.CanAccessShortURL(user, info) {
+	// RBAC: check view access via CanModifyShortCode (edit=false path uses CanViewOwnLinks logic)
+	perms := h.svc.Perms(user)
+	if !perms.CanViewAllLinks && !h.svc.CanModifyShortCode(user, shortCode, false) {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
@@ -108,7 +108,6 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		visits = visitsResp.Visits.Data
 	}
 
-	// clicks per day
 	const dayFmt = "2006-01-02"
 	buckets := make(map[string]int, period)
 	ordered := make([]string, 0, period)
@@ -147,12 +146,11 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 
 		visitRows = append(visitRows, visitRow{
 			Date:    v.Date,
-			Country: nullStrPtr(v.CountryCode),
+			Country: nullStrPtr(v.VisitLocation.CountryName),
 			Referer: nullStrPtr(v.Referer),
 			Browser: urlDetailParseBrowser(ua),
 			OS:      urlDetailParseOS(ua),
 			Device:  dev,
-			Visitor: nullStrPtr(v.PotentialBot),
 		})
 	}
 
@@ -174,9 +172,9 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 			Mobile:  mobile,
 			Tablet:  tablet,
 		},
-		Browsers:     topCountSlice(browsersMap, 10),
-		OS:           topCountSlice(osMap, 10),
-		Visits:       visitRows,
+		Browsers: topCountSlice(browsersMap, 10),
+		OS:       topCountSlice(osMap, 10),
+		Visits:   visitRows,
 	}
 
 	writeJSON(w, resp, http.StatusOK)

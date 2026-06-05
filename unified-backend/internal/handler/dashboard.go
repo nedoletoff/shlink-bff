@@ -25,10 +25,8 @@ func NewDashboardHandler(shlinkSvc *service.ShlinkService, userRepo *postgres.Us
 
 // GET /api/dashboard
 func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-
-	user, err := h.userRepo.GetBySub(r.Context(), claims.Sub)
-	if err != nil || user == nil {
+	user := middleware.UserFromCtx(r.Context())
+	if user == nil {
 		writeJSON(w, map[string]string{"error": "user not found"}, http.StatusUnauthorized)
 		return
 	}
