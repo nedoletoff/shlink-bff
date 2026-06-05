@@ -8,18 +8,6 @@ import (
 	"unified-backend/internal/service"
 )
 
-// stubRolePermissionsRepo реализует минимальный stub для postgres.RolePermissionsRepository,
-// нужный конструктору service.NewPermissionsCache.
-// В unit-тестах БД не нужна: Load() вызывается напрямую с пустым или заполненным стабом.
-type stubRolePermissionsRepo struct {
-	data []domain.RolePermissions
-	err  error
-}
-
-func (r *stubRolePermissionsRepo) GetAll(_ context.Context) ([]domain.RolePermissions, error) {
-	return r.data, r.err
-}
-
 // newCache создаёт PermissionsCache с предзагруженными данными (без реальной БД).
 func newCache(t *testing.T, rows []domain.RolePermissions, adminRole string) *service.PermissionsCache {
 	t.Helper()
@@ -49,7 +37,7 @@ func TestPermissionsCache_SetUpdatesCache(t *testing.T) {
 
 	// устанавливаем кастомные права через Set (как это делает RolesHandler.UpsertRolePermissions)
 	custom := domain.RolePermissions{
-		Role:           "editor",
+		Role:            "editor",
 		CanViewOwnLinks: true,
 		CanCreateLinks:  true,
 		CanManageUsers:  true, // нетипично, но возможно
@@ -71,8 +59,8 @@ func TestPermissionsCache_SetUpdatesCache(t *testing.T) {
 // TestPermissionsCache_SetOverwritesExisting — повторный Set перезаписывает старое значение.
 func TestPermissionsCache_SetOverwritesExisting(t *testing.T) {
 	initial := domain.RolePermissions{
-		Role:           "editor",
-		CanCreateLinks: true,
+		Role:            "editor",
+		CanCreateLinks:  true,
 		CanEditOwnLinks: true,
 	}
 	cache := newCache(t, []domain.RolePermissions{initial}, "admin")
@@ -136,13 +124,13 @@ func TestPermissionsCache_Get_UnknownRoleFallback(t *testing.T) {
 func TestPermissionsCache_GetMerged_OR(t *testing.T) {
 	roles := []domain.RolePermissions{
 		{
-			Role:           "reader",
+			Role:            "reader",
 			CanViewOwnLinks: true,
 			CanViewOwnStats: true,
 		},
 		{
-			Role:           "creator",
-			CanCreateLinks: true,
+			Role:            "creator",
+			CanCreateLinks:  true,
 			CanEditOwnLinks: true,
 		},
 	}

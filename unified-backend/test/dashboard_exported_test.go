@@ -137,12 +137,6 @@ func buildVisitsExported(visits *shlink.VisitsResponse, days int) VisitsResult {
 func buildDevicesExported(visits *shlink.VisitsResponse) DevicesResult {
 	desktop, mobile, tablet := 0, 0, 0
 	browsersMap := map[string]int{}
-
-	type heatCell struct {
-		Weekday int
-		Hour    int
-		Value   int
-	}
 	heatmap := map[string]int{}
 
 	if visits != nil {
@@ -157,7 +151,7 @@ func buildDevicesExported(visits *shlink.VisitsResponse) DevicesResult {
 			default:
 				desktop++
 			}
-			browsersMap["unknown"]++ // упрощённо для тестов
+			browsersMap["unknown"]++
 
 			t, perr := time.Parse(time.RFC3339, v.Date)
 			if perr == nil {
