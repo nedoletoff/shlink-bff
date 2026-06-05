@@ -10,15 +10,6 @@ import (
 	"unified-backend/internal/shlink"
 )
 
-// stubRolesRepo реализует service.RolePermissionsReader без БД.
-type stubRolesRepo struct {
-	data []domain.RolePermissions
-}
-
-func (s *stubRolesRepo) GetAll(_ context.Context) ([]domain.RolePermissions, error) {
-	return s.data, nil
-}
-
 func newTestService(perms []domain.RolePermissions, cfg *config.Config) *service.ShlinkService {
 	cache := service.NewPermissionsCache(&stubRolesRepo{data: perms}, cfg.AdminRole)
 	_ = cache.Load(context.Background())
