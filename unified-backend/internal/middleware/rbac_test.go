@@ -35,6 +35,12 @@ func userCtx(u *domain.User) context.Context {
 	return middleware.WithUser(context.Background(), u)
 }
 
+func okHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
 // ── AdminOnly ─────────────────────────────────────────────────────────────────
 
 func TestAdminOnly_AdminRole_Passes(t *testing.T) {
@@ -92,6 +98,52 @@ func TestAdminOnly_EmptyRole_Forbidden(t *testing.T) {
 	}
 }
 
+// ── EqualFold: регистр роли не важен ─────────────────────────────────────────
+
+func TestAdminOnly_AdminRoleUpperCase_Passes(t *testing.T) {
+	// ADMIN_ROLE=Admin в конфиге, Keycloak шлёт "admin" — должны совпасть
+	mw := middleware.AdminOnly("Admin", nil)
+	handler := mw(okHandler())
+
+	u := &domain.User{Sub: "s4", Role: "admin"}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil).WithContext(userCtx(u))
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("EqualFold: 'admin' should match 'Admin', got %d", rec.Code)
+	}
+}
+
+func TestAdminOnly_AdminRoleMixedCase_Passes(t *testing.T) {
+	// Keycloak даёт "ADMIN", конфиг задан "admin"
+	mw := middleware.AdminOnly("admin", nil)
+	handler := mw(okHandler())
+
+	u := &domain.User{Sub: "s5", Role: "ADMIN"}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil).WithContext(userCtx(u))
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("EqualFold: 'ADMIN' should match 'admin', got %d", rec.Code)
+	}
+}
+
+func TestAdminOnly_AdminMixedBothSides_Passes(t *testing.T) {
+	mw := middleware.AdminOnly("Admin", nil)
+	handler := mw(okHandler())
+
+	u := &domain.User{Sub: "s6", Role: "ADMIN"}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil).WithContext(userCtx(u))
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("EqualFold: 'ADMIN' should match 'Admin', got %d", rec.Code)
+	}
+}
+
 // ── RequirePermission ─────────────────────────────────────────────────────────
 
 func TestRequirePermission_HasFlag_Passes(t *testing.T) {
@@ -102,7 +154,6 @@ func TestRequirePermission_HasFlag_Passes(t *testing.T) {
 	handler := mw(okHandler())
 
 	u := &domain.User{Sub: "s1", Role: "editor"}
-	// без keycloak-ролей в контексте — fallback на user.Role
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(userCtx(u))
 	handler.ServeHTTP(rec, req)
@@ -158,7 +209,6 @@ func TestRequirePermission_MultiRole_OR(t *testing.T) {
 	handler := mw(okHandler())
 
 	u := &domain.User{Sub: "s3", Role: "viewer"}
-	// Добавляем keycloak-роли в контекст: viewer + editor
 	ctx := middleware.WithUser(context.Background(), u)
 	ctx = middleware.WithRoles(ctx, []string{"viewer", "editor"})
 
