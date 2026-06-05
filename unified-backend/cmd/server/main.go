@@ -16,60 +16,65 @@ import (
 	"unified-backend/internal/config"
 	"unified-backend/internal/handler"
 	"unified-backend/internal/middleware"
+	"unified-backend/internal/migrations"
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
+	"unified-backend/internal/shlinkctl"
 )
 
 func main() {
 	cfg := config.MustLoad()
 
+	ctx := context.Background()
+
 	// ── Postgres ─────────────────────────────────────────────────────────────
-	db, err := postgres.Connect(cfg.DatabaseURL)
+	db, err := postgres.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("postgres connect", "err", err)
 		os.Exit(1)
 	}
-	if err := postgres.Migrate(db); err != nil {
+	if err := postgres.RunMigrations(ctx, db, migrations.FS); err != nil {
 		slog.Error("postgres migrate", "err", err)
 		os.Exit(1)
 	}
 
-	userRepo := postgres.NewUserRepository(db)
+	userRepo  := postgres.NewUserRepository(db)
 	auditRepo := postgres.NewAuditRepository(db)
 	rolesRepo := postgres.NewRolePermissionsRepository(db)
 
 	// ── Shlink client ────────────────────────────────────────────────────────
 	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
-	if err := shlinkClient.ValidateVersion(context.Background(), 3, 5, 3*time.Second); err != nil {
+	if err := shlinkClient.ValidateVersion(ctx, 3, 5, 3*time.Second); err != nil {
 		slog.Error("shlink version check", "err", err)
 		os.Exit(1)
 	}
 
 	// ── Services ─────────────────────────────────────────────────────────────
-	permsCache, err := service.NewPermissionsCache(context.Background(), userRepo)
-	if err != nil {
+	permsCache := service.NewPermissionsCache(rolesRepo, cfg.AdminRole)
+	if err := permsCache.Load(ctx); err != nil {
 		slog.Error("permissions cache init", "err", err)
 		os.Exit(1)
 	}
 
 	shlinkSvc := service.NewShlinkService(shlinkClient, cfg, permsCache)
 
-	// ── Handlers ─────────────────────────────────────────────────────────────
-	meH := handler.NewMeHandler(userRepo, shlinkSvc)
-	dashH := handler.NewDashboardHandler(shlinkSvc, userRepo)
-	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
-	adminH := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
-
-	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
-	settingsH := handler.NewSettingsHandler(cfg, shlinkSvc)
-
-	// ── OIDC middleware ───────────────────────────────────────────────────────
-	oidcMW, err := middleware.NewOIDCMiddleware(cfg)
-	if err != nil {
-		slog.Error("oidc middleware init", "err", err)
-		os.Exit(1)
+	// ── Provisioner ──────────────────────────────────────────────────────────
+	var runner shlinkctl.Runner
+	if cfg.ShlinkRunnerMode == "native" {
+		runner = shlinkctl.NewNativeRunner(cfg.ShlinkBin)
+	} else {
+		runner = shlinkctl.NewDockerRunner(cfg.ShlinkContainerName)
 	}
+	provisioner := shlinkctl.NewProvisioner(db, runner)
+
+	// ── Handlers ─────────────────────────────────────────────────────────────
+	meH        := handler.NewMeHandler(cfg, permsCache)
+	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo)
+	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
+	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
+	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
+	settingsH  := handler.NewSettingsHandler(cfg, shlinkSvc)
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -90,10 +95,10 @@ func main() {
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
-		r.Use(oidcMW.Authenticate)
-		r.Use(middleware.EnsureUser(userRepo, cfg))
+		r.Use(middleware.ExtractIdentity(cfg.RoleGroups))
+		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, provisioner, cfg))
 
-		r.Get("/api/me", meH.GetMe)
+		r.Get("/api/me", meH.ServeHTTP)
 		r.Get("/api/dashboard", dashH.GetDashboard)
 
 		// Shlink proxy
