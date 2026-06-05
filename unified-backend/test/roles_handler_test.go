@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
@@ -101,7 +103,6 @@ func TestGetRole_KnownRole(t *testing.T) {
 	adminP := domain.DefaultAdminPermissions(domain.RoleAdmin)
 	h := newRolesHandler(adminP)
 
-	// simulate chi URL param via custom handler wrapper
 	w, r := newChiRequest(http.MethodGet, "/api/admin/roles/admin", "", "role", "admin")
 	h.GetRole(w, r)
 
@@ -130,7 +131,6 @@ func TestGetRole_UnknownRoleReturnsZeroPerms(t *testing.T) {
 	}
 	var p domain.RolePermissions
 	_ = json.NewDecoder(w.Body).Decode(&p)
-	// All booleans are false (zero value)
 	if p.CanViewAllLinks || p.CanCreateLinks || p.CanManageUsers {
 		t.Error("unknown role: expected all-false permissions")
 	}
@@ -162,7 +162,6 @@ func TestUpsertRolePermissions_UpdateExisting_CacheInvalidated(t *testing.T) {
 	initial := domain.DefaultUserPermissions(domain.RoleUser)
 	h := newRolesHandler(initial)
 
-	// Grant all links visibility
 	body := `{"canViewAllLinks":true,"canViewOwnLinks":true,"canCreateLinks":true,"canEditOwnLinks":true,"canDeleteOwnLinks":true}`
 	w, r := newChiRequest(http.MethodPut, "/api/admin/roles/user/permissions", body, "role", domain.RoleUser)
 	h.UpsertRolePermissions(w, r)
@@ -171,7 +170,6 @@ func TestUpsertRolePermissions_UpdateExisting_CacheInvalidated(t *testing.T) {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
 
-	// Verify cache was updated: build a new service using the same cache
 	var p domain.RolePermissions
 	_ = json.NewDecoder(w.Body).Decode(&p)
 	if !p.CanViewAllLinks {
@@ -182,7 +180,6 @@ func TestUpsertRolePermissions_UpdateExisting_CacheInvalidated(t *testing.T) {
 func TestUpsertRolePermissions_RoleFromURLNotBody(t *testing.T) {
 	h := newRolesHandler()
 
-	// Body says role="wrong", URL param says role="correct"
 	body := `{"role":"wrong","canCreateLinks":true}`
 	w, r := newChiRequest(http.MethodPut, "/api/admin/roles/correct/permissions", body, "role", "correct")
 	h.UpsertRolePermissions(w, r)
@@ -240,6 +237,8 @@ func TestPermToStringSlice_NoFlags(t *testing.T) {
 
 // ── chi URL param injection helper ────────────────────────────────────────
 
+// newChiRequest injects a chi URL param using chi.RouteCtxKey so that
+// chi.URLParam resolves the param correctly inside handlers.
 func newChiRequest(
 	method, path, body string,
 	paramKey, paramVal string,
@@ -252,9 +251,9 @@ func newChiRequest(
 	}
 	req := httptest.NewRequest(method, path, bodyReader)
 	req.Header.Set("Content-Type", "application/json")
-	// Inject chi URL param via context
 	rctx := chiContext()
 	rctx.URLParams.Add(paramKey, paramVal)
-	req = req.WithContext(context.WithValue(req.Context(), chiRouteContextKey{}, rctx))
+	// Use chi.RouteCtxKey — the same key chi.URLParam reads internally.
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 	return httptest.NewRecorder(), req
 }
