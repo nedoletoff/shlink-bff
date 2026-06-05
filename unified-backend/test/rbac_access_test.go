@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/shlink"
 )
@@ -140,10 +141,22 @@ func TestRBACMatrix(t *testing.T) {
 	}
 }
 
+// ── newShlinkServicePrefixed ──────────────────────────────────────────────────
+
+// newShlinkServicePrefixed creates a service with UserSlugPrefixEnabled=true
+// and UserCustomSlugEnabled=true, for tests that exercise prefix enforcement.
+func newShlinkServicePrefixed(p domain.RolePermissions) *service.ShlinkService {
+	return newShlinkServiceWithPerms([]domain.RolePermissions{p}, &config.Config{
+		AdminRole:             domain.RoleAdmin,
+		UserSlugPrefixEnabled: true,
+		UserCustomSlugEnabled: true,
+	})
+}
+
 // ── EnforceSlugPrefix RBAC ─────────────────────────────────────────────────
 
 func TestEnforceSlugPrefix_AdminNoPrefix(t *testing.T) {
-	svc := newShlinkService(domain.DefaultAdminPermissions(domain.RoleAdmin))
+	svc := newShlinkServicePrefixed(domain.DefaultAdminPermissions(domain.RoleAdmin))
 	admin := &domain.User{Role: domain.RoleAdmin, Sub: "admin1", SlugPrefix: "adm-"}
 
 	result, err := svc.EnforceSlugPrefix(context.TODO(), admin, strPtr("my-custom-slug"))
@@ -156,14 +169,17 @@ func TestEnforceSlugPrefix_AdminNoPrefix(t *testing.T) {
 }
 
 func TestEnforceSlugPrefix_UserPrefixEnforced(t *testing.T) {
-	svc := newShlinkService(domain.DefaultUserPermissions(domain.RoleUser))
+	// UserSlugPrefixEnabled=true: prefix must be validated.
+	svc := newShlinkServicePrefixed(domain.DefaultUserPermissions(domain.RoleUser))
 	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
 
+	// slug without prefix — must be rejected
 	_, err := svc.EnforceSlugPrefix(context.TODO(), user, strPtr("no-prefix"))
 	if err == nil {
 		t.Error("expected error when slug doesn't start with user prefix")
 	}
 
+	// slug with correct prefix — must pass
 	result, err := svc.EnforceSlugPrefix(context.TODO(), user, strPtr("u1-link"))
 	if err != nil {
 		t.Fatalf("valid slug: unexpected error: %v", err)
@@ -178,7 +194,7 @@ func TestEnforceSlugPrefix_NoCreatePermission(t *testing.T) {
 		Role:            "viewer",
 		CanViewAllLinks: true,
 	}
-	svc := newShlinkService(p)
+	svc := newShlinkServicePrefixed(p)
 	user := &domain.User{Role: "viewer", Sub: "v1"}
 
 	_, err := svc.EnforceSlugPrefix(context.TODO(), user, nil)
@@ -194,7 +210,7 @@ func TestEnforceSlugPrefix_NoSlugAndMustProvide(t *testing.T) {
 		CanCreateWithCustomSlug: true,
 		// CanCreateWithoutSlug = false
 	}
-	svc := newShlinkService(p)
+	svc := newShlinkServicePrefixed(p)
 	user := &domain.User{Role: "strictuser", Sub: "s1", SlugPrefix: ""}
 
 	_, err := svc.EnforceSlugPrefix(context.TODO(), user, nil)
