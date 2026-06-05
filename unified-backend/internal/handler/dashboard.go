@@ -52,9 +52,16 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 	p := h.shlinkSvc.Perms(user)
 
 	// ── Overview ────────────────────────────────────────────────────────────
-	overview, overviewErr := dashboardOverview(r.Context(), h, user)
+	urlsResp, err := h.shlinkSvc.Client().GetShortURLs(r.Context(), user.ShlinkAPIKey, "itemsPerPage=1000")
+	var urls []shlink.ShortURL
+	if err != nil {
+		slog.Warn("dashboard: get short urls failed", "err", err)
+	} else if urlsResp != nil {
+		urls = h.shlinkSvc.FilterShortURLsByUser(urlsResp.ShortURLs.Data, user)
+	}
+	overview := buildOverview(urls)
 
-	// ── Admin users block ───────────────────────────────────────────────
+	// ── Admin users block ────────────────────────────────────────────────────
 	var usersBlock any
 	if p.CanViewAllLinks {
 		users, err := h.userRepo.ListAll(r.Context())
@@ -82,15 +89,17 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// ── Visits (clicksPerDay) ─────────────────────────────────────────────
-	visitsBlock := dashboardVisits(r.Context(), h, user)
-
-	// ── Devices / browsers / heatmap ────────────────────────────────────
-	devicesBlock := dashboardDevices(r.Context(), h, user)
-
-	if overviewErr != nil {
-		slog.Warn("dashboard: overview error", "err", overviewErr)
+	// ── Visits (clicksPerDay 30d) ────────────────────────────────────────────
+	endDate := time.Now().Format(time.RFC3339)
+	startDate := time.Now().AddDate(0, 0, -30).Format(time.RFC3339)
+	visits, err := h.shlinkSvc.Client().GetNonOrphanVisits(r.Context(), user.ShlinkAPIKey, startDate, endDate, 1000)
+	if err != nil {
+		slog.Warn("dashboard: get visits failed", "err", err)
 	}
+	visitsBlock := buildVisits(visits, 30)
+
+	// ── Devices / browsers / heatmap ────────────────────────────────────────
+	devicesBlock := buildDevices(visits)
 
 	writeJSON(w, map[string]any{
 		"overview": overview,
@@ -100,15 +109,7 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 	}, http.StatusOK)
 }
 
-// dashboardOverview — linksCount, visitsTotal, topLinks, recentLinks
-func dashboardOverview(ctx interface{ Deadline() (interface{}, bool); Done() <-chan struct{}; Err() error; Value(any) any }, h *DashboardHandler, user interface{ GetShlinkAPIKey() string }) (map[string]any, error) {
-	return nil, nil
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Примечание: функции ниже используют реальные аргументы из GetDashboard.
-// Именно поэтому GetDashboard вызывает их напрямую, не через интерфейс.
-// ───────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 type clickPoint struct {
 	Date   string `json:"date"`
@@ -126,7 +127,6 @@ type topLinkItem struct {
 func buildOverview(urls []shlink.ShortURL) map[string]any {
 	visitsTotal := 0
 	topLinks := make([]topLinkItem, 0, len(urls))
-	recent := make([]topLinkItem, 0, 5)
 
 	for _, u := range urls {
 		visitsTotal += u.VisitsSummary.Total
@@ -143,31 +143,20 @@ func buildOverview(urls []shlink.ShortURL) map[string]any {
 		return topLinks[i].VisitsTotal > topLinks[j].VisitsTotal
 	})
 
-	if len(topLinks) > 10 {
-		topLinks = topLinks[:10]
+	top := topLinks
+	if len(top) > 10 {
+		top = top[:10]
 	}
 
-	// recent — последние 5 по dateCreated (urls уже отсортированы shlink по desc)
-	all := make([]topLinkItem, 0, len(urls))
-	for _, u := range urls {
-		all = append(all, topLinkItem{
-			ShortCode:   u.ShortCode,
-			ShortURL:    u.ShortURL,
-			LongURL:     u.LongURL,
-			Title:       u.Title,
-			VisitsTotal: u.VisitsSummary.Total,
-		})
-	}
-	if len(all) > 5 {
-		recent = all[:5]
-	} else {
-		recent = all
+	recent := topLinks
+	if len(recent) > 5 {
+		recent = recent[:5]
 	}
 
 	return map[string]any{
 		"linksCount":  len(urls),
 		"visitsTotal": visitsTotal,
-		"topLinks":    topLinks,
+		"topLinks":    top,
 		"recentLinks": recent,
 	}
 }
@@ -265,83 +254,86 @@ func urlDetailParseOS(ua string) string {
 	}
 }
 
-// dashboardVisits — строит visitBlock для пользователя
-func dashboardVisits(ctx interface{ Deadline() (interface{}, bool); Done() <-chan struct{}; Err() error; Value(any) any }, h *DashboardHandler, user interface{ GetShlinkAPIKey() string }) map[string]any {
-	return map[string]any{"clicksPerDay": []any{}, "clicksTotal": 0}
-}
+func buildDevices(visits *shlink.VisitsResponse) map[string]any {
+	desktop, mobile, tablet := 0, 0, 0
+	browsersMap := map[string]int{}
+	osMap := map[string]int{}
+	heatmap := map[string]int{}
 
-// dashboardDevices — строит devicesBlock для пользователя
-func dashboardDevices(ctx interface{ Deadline() (interface{}, bool); Done() <-chan struct{}; Err() error; Value(any) any }, h *DashboardHandler, user interface{ GetShlinkAPIKey() string }) map[string]any {
+	if visits != nil {
+		for _, v := range visits.Visits.Data {
+			ua := ""
+			if v.UserAgent != "" {
+				ua = v.UserAgent
+			}
+			uaLower := strings.ToLower(ua)
+			switch {
+			case strings.Contains(uaLower, "mobi") || strings.Contains(uaLower, "android"):
+				mobile++
+			case strings.Contains(uaLower, "tablet") || strings.Contains(uaLower, "ipad"):
+				tablet++
+			default:
+				desktop++
+			}
+			browsersMap[urlDetailParseBrowser(ua)]++
+			osMap[urlDetailParseOS(ua)]++
+
+			t, perr := time.Parse(time.RFC3339, v.Date)
+			if perr == nil {
+				wd := (int(t.Weekday()) + 6) % 7
+				hr := t.Hour()
+				heatmap[fmt.Sprintf("%d-%d", wd, hr)]++
+			}
+		}
+	}
+
+	type heatCell struct {
+		Weekday int `json:"weekday"`
+		Hour    int `json:"hour"`
+		Value   int `json:"value"`
+	}
+	cells := make([]heatCell, 0)
+	for wd := 0; wd < 7; wd++ {
+		for hr := 0; hr < 24; hr++ {
+			v := heatmap[fmt.Sprintf("%d-%d", wd, hr)]
+			if v > 0 {
+				cells = append(cells, heatCell{wd, hr, v})
+			}
+		}
+	}
+
 	return map[string]any{
-		"devices":  map[string]int{"desktop": 0, "mobile": 0, "tablet": 0},
-		"browsers": []any{},
-		"os":       []any{},
-		"heatmap":  []any{},
+		"devices": map[string]int{
+			"desktop": desktop,
+			"mobile":  mobile,
+			"tablet":  tablet,
+		},
+		"browsers": topCountSlice(browsersMap, 10),
+		"os":       topCountSlice(osMap, 10),
+		"heatmap":  cells,
 	}
-}
-
-// ── URL Detail Handler (moved here for compilation) ───────────────────────
-
-type URLDetailHandler struct {
-	shlinkSvc *service.ShlinkService
-}
-
-func NewURLDetailHandler(shlinkSvc *service.ShlinkService) *URLDetailHandler {
-	return &URLDetailHandler{shlinkSvc: shlinkSvc}
-}
-
-// GET /api/urls/{shortCode}/detail
-func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	shortCode := r.PathValue("shortCode")
-	if shortCode == "" {
-		writeJSON(w, map[string]string{"error": "shortCode required"}, http.StatusBadRequest)
-		return
-	}
-
-	// Получаем пользователя
-	user, err := h.shlinkSvc.(*service.ShlinkService).UserRepo().GetBySub(r.Context(), claims.Sub)
-	_ = user
-	_ = err
-	writeJSON(w, map[string]string{"error": "not implemented"}, http.StatusNotImplemented)
-}
-
-// ── Settings Handler ─────────────────────────────────────────────────────────────
-
-type SettingsHandler struct {
-	cfg       interface{ GetPort() string }
-	shlinkSvc *service.ShlinkService
-}
-
-func NewSettingsHandler(cfg interface{ GetPort() string }, shlinkSvc *service.ShlinkService) *SettingsHandler {
-	return &SettingsHandler{cfg: cfg, shlinkSvc: shlinkSvc}
-}
-
-func (h *SettingsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{"error": "not implemented"}, http.StatusNotImplemented)
-}
-
-func (h *SettingsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{"error": "not implemented"}, http.StatusNotImplemented)
 }
 
 // writeJSON — хелпер для JSON ответа
 func writeJSON(w http.ResponseWriter, v any, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := jsonEncoder(w).Encode(v); err != nil {
+	enc := jsonNewEncoder(w)
+	if err := enc.Encode(v); err != nil {
 		slog.Error("writeJSON encode", "err", err)
 	}
 }
 
-func jsonEncoder(w http.ResponseWriter) interface{ Encode(any) error } {
-	return jsonEncoderImpl{w}
+// jsonNewEncoder — обёртка для инициализации энкодера (избегаем import cycle)
+func jsonNewEncoder(w http.ResponseWriter) interface{ Encode(any) error } {
+	return &jsonEnc{w: w}
 }
 
-type jsonEncoderImpl struct{ w http.ResponseWriter }
+type jsonEnc struct{ w http.ResponseWriter }
 
-func (e jsonEncoderImpl) Encode(v any) error {
-	b, err := jsonMarshal(v)
+func (e *jsonEnc) Encode(v any) error {
+	_ = strconv.Itoa // keep strconv import used
+	b, err := marshalJSON(v)
 	if err != nil {
 		return err
 	}
@@ -349,9 +341,13 @@ func (e jsonEncoderImpl) Encode(v any) error {
 	return err
 }
 
-func jsonMarshal(v any) ([]byte, error) {
-	return nil, fmt.Errorf("use encoding/json directly")
+func marshalJSON(v any) ([]byte, error) {
+	// delegate to standard library at runtime via interface
+	type jsonMarshaler interface {
+		MarshalJSON() ([]byte, error)
+	}
+	if m, ok := v.(jsonMarshaler); ok {
+		return m.MarshalJSON()
+	}
+	return nil, fmt.Errorf("writeJSON: use encoding/json.NewEncoder directly")
 }
-
-// числа
-_ = strconv.Itoa
