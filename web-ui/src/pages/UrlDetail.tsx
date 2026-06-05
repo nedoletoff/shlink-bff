@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Stack, Title, Text, Card, Group, Anchor,
   ActionIcon, Tooltip, SegmentedControl, Table,
-  Skeleton, Center, Grid, CopyButton, Pagination, Badge,
+  Skeleton, Center, Grid, CopyButton, Pagination,
 } from '@mantine/core';
 import {
   IconArrowLeft, IconCopy, IconCheck,
@@ -15,7 +15,6 @@ import {
   PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import { api } from '../api/client';
-import { useIsAdmin } from '../contexts/AuthContext';
 import { ErrorBoundary } from '../components/ui/ErrorBoundary';
 import { formatDate, formatDateTime } from '../utils/date';
 import type { UrlDetailResponse } from '../types/api';
@@ -33,7 +32,6 @@ const PAGE_SIZE = 20;
 export function UrlDetail() {
   const { shortCode } = useParams<{ shortCode: string }>();
   const navigate = useNavigate();
-  const isAdmin = useIsAdmin();
 
   const [data,    setData]    = useState<UrlDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,7 +43,7 @@ export function UrlDetail() {
     if (!shortCode) return;
     setLoading(true);
     setErr(null);
-    api.get<UrlDetailResponse>(`/api/shlink/short-urls/${shortCode}`, { params: { period } })
+    api.get<UrlDetailResponse>(`/api/urls/${shortCode}/detail`, { params: { period } })
       .then(setData)
       .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
@@ -110,12 +108,7 @@ export function UrlDetail() {
             <IconArrowLeft size={18} />
           </ActionIcon>
           <Stack gap={2}>
-            <Group gap="xs">
-              <Title order={3}>{data.title || 'Без названия'}</Title>
-              {data.isActive === false && (
-                <Badge color="red" variant="light" size="sm">деактивирована</Badge>
-              )}
-            </Group>
+            <Title order={3}>{data.title || 'Без названия'}</Title>
             <Group gap="xs">
               <Anchor href={data.shortUrl} target="_blank" fz="sm" fw={500}>
                 {data.shortUrl}
@@ -149,12 +142,6 @@ export function UrlDetail() {
               <Text fz="sm" c="dimmed">Переходов всего</Text>
               <Text fz="sm" fw={600}>{(data.visitsTotal ?? 0).toLocaleString('ru-RU')}</Text>
             </Grid.Col>
-            {isAdmin && data.ownerUsername && (
-              <Grid.Col span={12}>
-                <Text fz="sm" c="dimmed">Владелец</Text>
-                <Text fz="sm">{data.ownerUsername}</Text>
-              </Grid.Col>
-            )}
           </Grid>
         </Card>
 
