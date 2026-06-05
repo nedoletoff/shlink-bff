@@ -1,0 +1,227 @@
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import {
+  Stack, Title, Text, Card, Group, Anchor,
+  ActionIcon, Tooltip, SegmentedControl, Table,
+  Skeleton, Center, Grid, CopyButton, Pagination,
+} from '@mantine/core';
+import {
+  IconArrowLeft, IconCopy, IconCheck,
+  IconEdit, IconTrash,
+} from '@tabler/icons-react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip as RTooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend,
+} from 'recharts';
+import { api } from '../api/client';
+import { useIsAdmin } from '../contexts/AuthContext';
+import { ErrorBoundary } from '../components/ui/ErrorBoundary';
+import { formatDate, formatDateTime } from '../utils/date';
+import type { UrlDetailResponse } from '../types/api';
+
+const COLORS = ['#4dabf7', '#51cf66', '#ff6b6b', '#ffd43b', '#cc5de8'];
+
+const PERIOD_OPTIONS = [
+  { label: '7 д', value: '7'  },
+  { label: '30 д', value: '30' },
+  { label: '90 д', value: '90' },
+];
+
+const PAGE_SIZE = 20;
+
+export function UrlDetail() {
+  const { shortCode } = useParams<{ shortCode: string }>();
+  const navigate = useNavigate();
+  const isAdmin = useIsAdmin();
+
+  const [data, setData]       = useState<UrlDetailResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr]         = useState<string | null>(null);
+  const [period, setPeriod]   = useState('30');
+  const [page, setPage]       = useState(1);
+
+  useEffect(() => {
+    if (!shortCode) return;
+    setLoading(true);
+    setErr(null);
+    api.getUrlDetail(shortCode, period)
+      .then(setData)
+      .catch(e => setErr(e.message ?? 'Ошибка загрузки'))
+      .finally(() => setLoading(false));
+  }, [shortCode, period]);
+
+  if (loading) return (
+    <Stack gap="lg">
+      <Skeleton height={32} width={300} />
+      <Skeleton height={240} radius="md" />
+      <Grid>
+        {[1, 2, 3].map(i => (
+          <Grid.Col key={i} span={{ base: 12, sm: 4 }}>
+            <Skeleton height={200} radius="md" />
+          </Grid.Col>
+        ))}
+      </Grid>
+    </Stack>
+  );
+
+  if (err) return (
+    <Center py="xl">
+      <Text c="red">{err}</Text>
+    </Center>
+  );
+
+  if (!data) return null;
+
+  const totalPages = Math.ceil((data.visits?.length ?? 0) / PAGE_SIZE);
+  const visitsPage = (data.visits ?? []).slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const renderDonut = (items: { name: string; value: number }[], title: string) => (
+    <Card withBorder radius="md" p="md">
+      <Title order={5} mb="sm">{title}</Title>
+      <ResponsiveContainer width="100%" height={180}>
+        <PieChart>
+          <Pie data={items} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
+            {items.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+          </Pie>
+          <RTooltip formatter={(v: number) => v.toLocaleString('ru-RU')} />
+          <Legend />
+        </PieChart>
+      </ResponsiveContainer>
+    </Card>
+  );
+
+  return (
+    <ErrorBoundary>
+      <Stack gap="lg">
+        {/* Header */}
+        <Group gap="sm">
+          <ActionIcon variant="subtle" onClick={() => navigate(-1)}>
+            <IconArrowLeft size={18} />
+          </ActionIcon>
+          <Stack gap={2}>
+            <Title order={3}>{data.title || 'Без названия'}</Title>
+            <Group gap="xs">
+              <Anchor href={data.shortUrl} target="_blank" fz="sm" fw={500}>
+                {data.shortUrl}
+              </Anchor>
+              <CopyButton value={data.shortUrl}>
+                {({ copied, copy }) => (
+                  <Tooltip label={copied ? 'Скопировано' : 'Копировать'} withArrow>
+                    <ActionIcon size="xs" variant="subtle" onClick={copy} color={copied ? 'teal' : 'gray'}>
+                      {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                    </ActionIcon>
+                  </Tooltip>
+                )}
+              </CopyButton>
+            </Group>
+          </Stack>
+        </Group>
+
+        {/* Meta */}
+        <Card withBorder radius="md" p="md">
+          <Grid>
+            <Grid.Col span={{ base: 12, sm: 6 }}>
+              <Text fz="sm" c="dimmed">Куда ведёт</Text>
+              <Anchor href={data.longUrl} target="_blank" fz="sm" lineClamp={2}>
+                {data.longUrl}
+              </Anchor>
+            </Grid.Col>
+            <Grid.Col span={{ base: 6, sm: 3 }}>
+              <Text fz="sm" c="dimmed">Создана</Text>
+              <Text fz="sm">{formatDate(data.createdAt)}</Text>
+            </Grid.Col>
+            <Grid.Col span={{ base: 6, sm: 3 }}>
+              <Text fz="sm" c="dimmed">Переходов всего</Text>
+              <Text fz="sm" fw={600}>{(data.totalClicks ?? 0).toLocaleString('ru-RU')}</Text>
+            </Grid.Col>
+            {isAdmin && data.owner && (
+              <Grid.Col span={12}>
+                <Text fz="sm" c="dimmed">Владелец</Text>
+                <Text fz="sm">{data.owner}</Text>
+              </Grid.Col>
+            )}
+          </Grid>
+        </Card>
+
+        {/* Controls */}
+        <Group justify="space-between">
+          <Title order={5}>Аналитика</Title>
+          <Group gap="sm">
+            <SegmentedControl
+              value={period}
+              onChange={v => { setPeriod(v); setPage(1); }}
+              data={PERIOD_OPTIONS}
+              size="xs"
+            />
+            <ActionIcon variant="light" color="blue" onClick={() => navigate(`/admin/urls/${shortCode}/edit`)}>
+              <IconEdit size={16} />
+            </ActionIcon>
+            <ActionIcon variant="light" color="red" onClick={() => {
+              if (confirm('Удалить ссылку?')) {
+                api.deleteUrl(shortCode!).then(() => navigate(-1));
+              }
+            }}>
+              <IconTrash size={16} />
+            </ActionIcon>
+          </Group>
+        </Group>
+
+        {/* Clicks by day */}
+        <Card withBorder radius="md" p="md">
+          <Title order={5} mb="sm">Переходы по дням</Title>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={data.clicksPerDay ?? []}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <RTooltip labelFormatter={v => formatDate(String(v))} />
+              <Line type="monotone" dataKey="clicks" stroke="#4dabf7" dot={false} strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Donuts */}
+        <Grid>
+          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.devices ?? [], 'Устройства')}</Grid.Col>
+          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.browsers ?? [], 'Браузеры')}</Grid.Col>
+          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.os ?? [], 'ОС')}</Grid.Col>
+        </Grid>
+
+        {/* Visits table */}
+        <Card withBorder radius="md" p="md">
+          <Title order={5} mb="sm">Журнал переходов</Title>
+          <Table fz="sm" verticalSpacing="xs" style={{ tableLayout: 'fixed' }}>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Дата / время</Table.Th>
+                <Table.Th>Устройство</Table.Th>
+                <Table.Th>ОС</Table.Th>
+                <Table.Th>Страна</Table.Th>
+                <Table.Th>Реферер</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {visitsPage.map((v, i) => (
+                <Table.Tr key={i}>
+                  <Table.Td>{formatDateTime(v.date)}</Table.Td>
+                  <Table.Td>{v.device ?? '—'}</Table.Td>
+                  <Table.Td>{v.os ?? '—'}</Table.Td>
+                  <Table.Td>{v.country ?? '—'}</Table.Td>
+                  <Table.Td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {v.referer ?? '—'}
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+          {totalPages > 1 && (
+            <Group justify="center" mt="sm">
+              <Pagination value={page} onChange={setPage} total={totalPages} size="sm" />
+            </Group>
+          )}
+        </Card>
+      </Stack>
+    </ErrorBoundary>
+  );
+}
