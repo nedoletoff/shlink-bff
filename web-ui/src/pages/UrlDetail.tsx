@@ -45,9 +45,9 @@ export function UrlDetail() {
     if (!shortCode) return;
     setLoading(true);
     setErr(null);
-    api.getUrlDetail(shortCode, period)
+    api.get<UrlDetailResponse>(`/api/urls/${shortCode}/detail`, { params: { period } })
       .then(setData)
-      .catch(e => setErr(e.message ?? 'Ошибка загрузки'))
+      .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   }, [shortCode, period]);
 
@@ -76,6 +76,17 @@ export function UrlDetail() {
   const totalPages = Math.ceil((data.visits?.length ?? 0) / PAGE_SIZE);
   const visitsPage = (data.visits ?? []).slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+  const devicesArr = data.devices
+    ? [
+        { name: 'Desktop', value: data.devices.desktop },
+        { name: 'Mobile',  value: data.devices.mobile  },
+        { name: 'Tablet',  value: data.devices.tablet  },
+      ]
+    : [];
+
+  const toValueArr = (arr: { name: string; count: number }[]) =>
+    arr.map(x => ({ name: x.name, value: x.count }));
+
   const renderDonut = (items: { name: string; value: number }[], title: string) => (
     <Card withBorder radius="md" p="md">
       <Title order={5} mb="sm">{title}</Title>
@@ -94,7 +105,6 @@ export function UrlDetail() {
   return (
     <ErrorBoundary>
       <Stack gap="lg">
-        {/* Header */}
         <Group gap="sm">
           <ActionIcon variant="subtle" onClick={() => navigate(-1)}>
             <IconArrowLeft size={18} />
@@ -118,7 +128,6 @@ export function UrlDetail() {
           </Stack>
         </Group>
 
-        {/* Meta */}
         <Card withBorder radius="md" p="md">
           <Grid>
             <Grid.Col span={{ base: 12, sm: 6 }}>
@@ -129,22 +138,21 @@ export function UrlDetail() {
             </Grid.Col>
             <Grid.Col span={{ base: 6, sm: 3 }}>
               <Text fz="sm" c="dimmed">Создана</Text>
-              <Text fz="sm">{formatDate(data.createdAt)}</Text>
+              <Text fz="sm">{formatDate(data.dateCreated)}</Text>
             </Grid.Col>
             <Grid.Col span={{ base: 6, sm: 3 }}>
               <Text fz="sm" c="dimmed">Переходов всего</Text>
-              <Text fz="sm" fw={600}>{(data.totalClicks ?? 0).toLocaleString('ru-RU')}</Text>
+              <Text fz="sm" fw={600}>{(data.visitsTotal ?? 0).toLocaleString('ru-RU')}</Text>
             </Grid.Col>
-            {isAdmin && data.owner && (
+            {isAdmin && data.ownerUsername && (
               <Grid.Col span={12}>
                 <Text fz="sm" c="dimmed">Владелец</Text>
-                <Text fz="sm">{data.owner}</Text>
+                <Text fz="sm">{data.ownerUsername}</Text>
               </Grid.Col>
             )}
           </Grid>
         </Card>
 
-        {/* Controls */}
         <Group justify="space-between">
           <Title order={5}>Аналитика</Title>
           <Group gap="sm">
@@ -159,7 +167,7 @@ export function UrlDetail() {
             </ActionIcon>
             <ActionIcon variant="light" color="red" onClick={() => {
               if (confirm('Удалить ссылку?')) {
-                api.deleteUrl(shortCode!).then(() => navigate(-1));
+                api.delete(`/api/urls/${shortCode}`).then(() => navigate(-1));
               }
             }}>
               <IconTrash size={16} />
@@ -167,7 +175,6 @@ export function UrlDetail() {
           </Group>
         </Group>
 
-        {/* Clicks by day */}
         <Card withBorder radius="md" p="md">
           <Title order={5} mb="sm">Переходы по дням</Title>
           <ResponsiveContainer width="100%" height={220}>
@@ -181,14 +188,12 @@ export function UrlDetail() {
           </ResponsiveContainer>
         </Card>
 
-        {/* Donuts */}
         <Grid>
-          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.devices ?? [], 'Устройства')}</Grid.Col>
-          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.browsers ?? [], 'Браузеры')}</Grid.Col>
-          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.os ?? [], 'ОС')}</Grid.Col>
+          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(devicesArr, 'Устройства')}</Grid.Col>
+          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.browsers ?? []), 'Браузеры')}</Grid.Col>
+          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.os ?? []), 'ОС')}</Grid.Col>
         </Grid>
 
-        {/* Visits table */}
         <Card withBorder radius="md" p="md">
           <Title order={5} mb="sm">Журнал переходов</Title>
           <Table fz="sm" verticalSpacing="xs" style={{ tableLayout: 'fixed' }}>

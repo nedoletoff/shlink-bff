@@ -47,13 +47,10 @@ function ActivityHeatmap({ cells }: { cells: HeatmapCell[] }) {
       <Title order={5} mb="sm">Активность по часам недели</Title>
       <Box style={{ overflowX: 'auto' }}>
         <Box style={{ display: 'grid', gridTemplateColumns: '32px repeat(24, 24px)', gap: 2, minWidth: 640 }}>
-          {/* Hour labels */}
           <div />
           {Array.from({ length: 24 }, (_, h) => (
             <Text key={h} fz={10} ta="center" c="dimmed">{h}</Text>
           ))}
-
-          {/* Rows per weekday */}
           {WEEKDAYS.map((day, wd) => (
             <>
               <Text key={`label-${wd}`} fz={11} style={{ lineHeight: '24px' }} c="dimmed">{day}</Text>
@@ -96,9 +93,9 @@ function OverviewTab({ period }: { period: string }) {
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    api.getDashboardOverview(period)
+    api.get<OverviewResponse>('/api/dashboard/overview', { params: { period } })
       .then(setData)
-      .catch(e => setErr(e.message ?? 'Ошибка загрузки'))
+      .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   }, [period]);
 
@@ -128,10 +125,10 @@ function OverviewTab({ period }: { period: string }) {
   if (!data) return null;
 
   const kpis = [
-    { label: 'Переходов за период',  value: data.totalClicks,   icon: <IconClick size={24} /> },
-    { label: 'Активных ссылок',       value: data.activeUrls,    icon: <IconLink size={24} /> },
-    { label: 'Ссылок создано',        value: data.createdUrls,   icon: <IconChartBar size={24} /> },
-    { label: 'Уникальных посетителей',value: data.uniqueVisitors ?? '—', icon: <IconUsers size={24} /> },
+    { label: 'Переходов за период',   value: data.totalClicks,    icon: <IconClick size={24} /> },
+    { label: 'Активных ссылок',        value: data.activeLinks,    icon: <IconLink size={24} /> },
+    { label: 'Ссылок создано',         value: data.createdPeriod,  icon: <IconChartBar size={24} /> },
+    { label: 'Уникальных посетителей', value: data.uniqueVisitors ?? '—', icon: <IconUsers size={24} /> },
   ];
 
   return (
@@ -155,7 +152,7 @@ function OverviewTab({ period }: { period: string }) {
       <Card withBorder radius="md" p="md">
         <Title order={5} mb="sm">Активность по дням</Title>
         <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={data.clicksByDay ?? []}>
+          <BarChart data={data.clicksPerDay ?? []}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} />
@@ -168,12 +165,12 @@ function OverviewTab({ period }: { period: string }) {
       <Card withBorder radius="md" p="md">
         <Title order={5} mb="sm">Топ-5 ссылок по переходам</Title>
         <ResponsiveContainer width="100%" height={180}>
-          <BarChart layout="vertical" data={(data.topUrls ?? []).slice(0, 5)}>
+          <BarChart layout="vertical" data={(data.topLinks ?? []).slice(0, 5)}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis type="number" tick={{ fontSize: 11 }} />
             <YAxis type="category" dataKey="title" width={160} tick={{ fontSize: 11 }} />
             <Tooltip />
-            <Bar dataKey="clicks" fill="#51cf66" radius={[0, 3, 3, 0]} />
+            <Bar dataKey="visits" fill="#51cf66" radius={[0, 3, 3, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -192,9 +189,9 @@ function UsersTab({ period }: { period: string }) {
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    api.getDashboardUsers(period)
+    api.get<UserActivityResponse>('/api/dashboard/users', { params: { period } })
       .then(setData)
-      .catch(e => setErr(e.message ?? 'Ошибка загрузки'))
+      .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   }, [period]);
 
@@ -203,11 +200,11 @@ function UsersTab({ period }: { period: string }) {
   if (!data) return null;
 
   const rows = (data.users ?? []).map(u => (
-    <Table.Tr key={u.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/admin/users/${u.id}`)}>
+    <Table.Tr key={u.sub} style={{ cursor: 'pointer' }} onClick={() => navigate(`/admin/users/${u.sub}`)}>
       <Table.Td>{u.username}</Table.Td>
-      <Table.Td>{u.urlCount.toLocaleString('ru-RU')}</Table.Td>
-      <Table.Td>{u.totalClicks.toLocaleString('ru-RU')}</Table.Td>
-      <Table.Td>{u.lastActivity ? formatDate(u.lastActivity) : '—'}</Table.Td>
+      <Table.Td>{u.linksCount.toLocaleString('ru-RU')}</Table.Td>
+      <Table.Td>{u.visitsCount.toLocaleString('ru-RU')}</Table.Td>
+      <Table.Td>{u.lastActivityAt ? formatDate(u.lastActivityAt) : '—'}</Table.Td>
     </Table.Tr>
   ));
 
@@ -233,22 +230,22 @@ function UsersTab({ period }: { period: string }) {
 
 // ─── URLs Activity Tab ────────────────────────────────────────────────────────
 
-type SortKey = 'title' | 'clicksToday' | 'clicks7d' | 'totalClicks';
+type SortKey = 'title' | 'visitsToday' | 'visits7d' | 'visitsTotal';
 
 function UrlsTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
   const [data, setData] = useState<UrlStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>('totalClicks');
+  const [sortKey, setSortKey] = useState<SortKey>('visitsTotal');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const navigate = useNavigate();
 
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    api.getDashboardUrls(period)
+    api.get<UrlStatsResponse>('/api/dashboard/urls', { params: { period } })
       .then(setData)
-      .catch(e => setErr(e.message ?? 'Ошибка загрузки'))
+      .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   }, [period]);
 
@@ -277,12 +274,12 @@ function UrlsTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
   const rows = sorted.map(u => (
     <Table.Tr key={u.shortCode} style={{ cursor: 'pointer' }} onClick={() => navigate(`/admin/urls/${u.shortCode}`)}>
       <Table.Td>{u.title || <Text fz="sm" c="dimmed">Без названия</Text>}</Table.Td>
-      <Table.Td ta="right">{u.clicksToday.toLocaleString('ru-RU')}</Table.Td>
-      <Table.Td ta="right">{u.clicks7d.toLocaleString('ru-RU')}</Table.Td>
-      <Table.Td ta="right">{u.totalClicks.toLocaleString('ru-RU')}</Table.Td>
+      <Table.Td ta="right">{u.visitsToday.toLocaleString('ru-RU')}</Table.Td>
+      <Table.Td ta="right">{u.visits7d.toLocaleString('ru-RU')}</Table.Td>
+      <Table.Td ta="right">{u.visitsTotal.toLocaleString('ru-RU')}</Table.Td>
       <Table.Td>
-        <Badge size="xs" color={u.active ? 'green' : 'gray'}>
-          {u.active ? 'Активна' : 'Неактивна'}
+        <Badge size="xs" color={u.status === 'active' ? 'green' : 'gray'}>
+          {u.status === 'active' ? 'Активна' : 'Неактивна'}
         </Badge>
       </Table.Td>
     </Table.Tr>
@@ -298,9 +295,9 @@ function UrlsTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
           <Table.Thead>
             <Table.Tr>
               <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleSort('title')}>Название{arrow('title')}</Table.Th>
-              <Table.Th ta="right" style={{ cursor: 'pointer' }} onClick={() => toggleSort('clicksToday')}>Сегодня{arrow('clicksToday')}</Table.Th>
-              <Table.Th ta="right" style={{ cursor: 'pointer' }} onClick={() => toggleSort('clicks7d')}>7 дней{arrow('clicks7d')}</Table.Th>
-              <Table.Th ta="right" style={{ cursor: 'pointer' }} onClick={() => toggleSort('totalClicks')}>Всего{arrow('totalClicks')}</Table.Th>
+              <Table.Th ta="right" style={{ cursor: 'pointer' }} onClick={() => toggleSort('visitsToday')}>Сегодня{arrow('visitsToday')}</Table.Th>
+              <Table.Th ta="right" style={{ cursor: 'pointer' }} onClick={() => toggleSort('visits7d')}>7 дней{arrow('visits7d')}</Table.Th>
+              <Table.Th ta="right" style={{ cursor: 'pointer' }} onClick={() => toggleSort('visitsTotal')}>Всего{arrow('visitsTotal')}</Table.Th>
               <Table.Th>Статус</Table.Th>
             </Table.Tr>
           </Table.Thead>
@@ -321,15 +318,26 @@ function DevicesTab({ period }: { period: string }) {
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    api.getDashboardDevices(period)
+    api.get<DevicesResponse>('/api/dashboard/devices', { params: { period } })
       .then(setData)
-      .catch(e => setErr(e.message ?? 'Ошибка загрузки'))
+      .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   }, [period]);
 
   if (loading) return <Skeleton height={300} radius="md" />;
   if (err) return <Text c="red">{err}</Text>;
   if (!data) return null;
+
+  const devicesArr = data.devices
+    ? [
+        { name: 'Desktop', value: data.devices.desktop },
+        { name: 'Mobile',  value: data.devices.mobile  },
+        { name: 'Tablet',  value: data.devices.tablet  },
+      ]
+    : [];
+
+  const toValueArr = (arr: { name: string; count: number }[]) =>
+    arr.map(x => ({ name: x.name, value: x.count }));
 
   const renderDonut = (items: { name: string; value: number }[], title: string) => (
     <Card withBorder radius="md" p="md">
@@ -349,9 +357,9 @@ function DevicesTab({ period }: { period: string }) {
   return (
     <Stack gap="lg">
       <Grid>
-        <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.devices ?? [], 'Устройства')}</Grid.Col>
-        <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.browsers ?? [], 'Браузеры')}</Grid.Col>
-        <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(data.os ?? [], 'Операционные системы')}</Grid.Col>
+        <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(devicesArr, 'Устройства')}</Grid.Col>
+        <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.browsers ?? []), 'Браузеры')}</Grid.Col>
+        <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.os ?? []), 'Операционные системы')}</Grid.Col>
       </Grid>
 
       {data.heatmap && data.heatmap.length > 0 && (
