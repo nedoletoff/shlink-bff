@@ -81,7 +81,7 @@ func main() {
 
 	// Хендлеры
 	meH := handler.NewMeHandler(cfg, permsCache)
-	dashH := handler.NewDashboardHandler(shlinkSvc)
+	dashH := handler.NewDashboardHandler(shlinkSvc, userRepo)
 	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
 	adminH := handler.NewAdminHandler(userRepo, auditRepo)
 	rolesH := handler.NewRolesHandler(permsCache, permsRepo)
@@ -104,7 +104,7 @@ func main() {
 
 		r.Get("/api/me", meH.ServeHTTP)
 
-		// Dashboard — 4 отдельных endpointа (соответствуют вызовам с фронтенда)
+		// Dashboard — 4 отдельных endpoint'а (соответствуют вызовам с фронтенда)
 		r.Get("/api/dashboard/overview", dashH.GetOverview)
 		r.Get("/api/dashboard/users", dashH.GetUsersActivity)
 		r.Get("/api/dashboard/urls", dashH.GetUrlsStats)
