@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"unified-backend/internal/domain"
@@ -12,6 +13,7 @@ import (
 
 // AdminOnly разрешает доступ только роли с can_manage_users (или по совпадению с adminRole).
 // Используется для /api/admin/* маршрутов.
+// Сравнение регистронезависимое — "Admin" == "admin".
 func AdminOnly(adminRole string, auditRepo *postgres.AuditRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -20,7 +22,7 @@ func AdminOnly(adminRole string, auditRepo *postgres.AuditRepository) func(http.
 				writeForbidden(w, r, user, auditRepo, "no identity")
 				return
 			}
-			if user.Role != adminRole {
+			if !strings.EqualFold(string(user.Role), adminRole) {
 				writeForbidden(w, r, user, auditRepo, "role not admin")
 				return
 			}
@@ -71,10 +73,10 @@ func effectiveRoles(ctx context.Context, dbRole string) []string {
 	// Добавляем dbRole если она не входит в keycloakRoles (ROLE_SOURCE=db)
 	seen := make(map[string]struct{}, len(keycloakRoles))
 	for _, r := range keycloakRoles {
-		seen[r] = struct{}{}
+		seen[strings.ToLower(r)] = struct{}{}
 	}
 	if dbRole != "" {
-		if _, ok := seen[dbRole]; !ok {
+		if _, ok := seen[strings.ToLower(dbRole)]; !ok {
 			return append(keycloakRoles, dbRole)
 		}
 	}
@@ -82,11 +84,12 @@ func effectiveRoles(ctx context.Context, dbRole string) []string {
 }
 
 // RequireRole оставлен для обратной совместимости.
+// Сравнение регистронезависимое.
 func RequireRole(role string, auditRepo *postgres.AuditRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user := UserFromCtx(r.Context())
-			if user == nil || user.Role != role {
+			if user == nil || !strings.EqualFold(string(user.Role), role) {
 				writeForbidden(w, r, user, auditRepo, "role mismatch")
 				return
 			}
