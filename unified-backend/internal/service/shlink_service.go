@@ -90,9 +90,12 @@ func (s *ShlinkService) EnforceSlugPrefix(
 }
 
 // FilterShortURLsByUser фильтрует ссылки согласно permissions роли.
+// Фильтрация по ownership (конкретные short_code) должна была быть выполнена до вызова этого метода:
+// хендлер должен передать только ownedCodes (сет short_code из url_ownership).
 func (s *ShlinkService) FilterShortURLsByUser(
 	urls []shlink.ShortURL,
 	user *domain.User,
+	ownedCodes map[string]struct{},
 ) []shlink.ShortURL {
 	p := s.perms.Get(user.Role)
 
@@ -103,50 +106,24 @@ func (s *ShlinkService) FilterShortURLsByUser(
 		return []shlink.ShortURL{}
 	}
 
-	// Изоляция по slug_prefix если включена
-	if !s.cfg.UserSlugPrefixEnabled {
-		return urls
-	}
-	prefix := user.SlugPrefix
-	if prefix == "" {
-		return urls
-	}
-	filtered := make([]shlink.ShortURL, 0, len(urls))
+	// Фильтрация по явной таблице ownership.
+	filtered := make([]shlink.ShortURL, 0, len(ownedCodes))
 	for _, u := range urls {
-		if strings.HasPrefix(u.ShortCode, prefix) {
+		if _, ok := ownedCodes[u.ShortCode]; ok {
 			filtered = append(filtered, u)
 		}
 	}
 	return filtered
 }
 
-// CanModifyShortCode — edit/delete права с учётом permissions.
-func (s *ShlinkService) CanModifyShortCode(user *domain.User, shortCode string, isDelete bool) bool {
+// CanModifyShortCodeByPerms проверяет права роли на edit/delete.
+// Не проверяет ownership — это делает хендлер через ownerRepo.IsOwner.
+func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bool) (canAll bool, canOwn bool) {
 	p := s.perms.Get(user.Role)
-
 	if isDelete {
-		if p.CanDeleteAllLinks {
-			return true
-		}
-		if !p.CanDeleteOwnLinks {
-			return false
-		}
-	} else {
-		if p.CanEditAllLinks {
-			return true
-		}
-		if !p.CanEditOwnLinks {
-			return false
-		}
+		return p.CanDeleteAllLinks, p.CanDeleteOwnLinks
 	}
-
-	if !s.cfg.UserSlugPrefixEnabled {
-		return true
-	}
-	if user.SlugPrefix == "" {
-		return false
-	}
-	return strings.HasPrefix(shortCode, user.SlugPrefix)
+	return p.CanEditAllLinks, p.CanEditOwnLinks
 }
 
 // Client возвращает shlink-клиент для хендлеров.
