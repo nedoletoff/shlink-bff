@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -10,16 +11,18 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"unified-backend/internal/middleware"
+	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
 )
 
 type URLDetailHandler struct {
-	svc *service.ShlinkService
+	svc       *service.ShlinkService
+	ownerRepo *postgres.URLOwnershipRepository
 }
 
-func NewURLDetailHandler(svc *service.ShlinkService) *URLDetailHandler {
-	return &URLDetailHandler{svc: svc}
+func NewURLDetailHandler(svc *service.ShlinkService, ownerRepo *postgres.URLOwnershipRepository) *URLDetailHandler {
+	return &URLDetailHandler{svc: svc, ownerRepo: ownerRepo}
 }
 
 type urlDetailResponse struct {
@@ -80,11 +83,25 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// RBAC: check view access via CanModifyShortCode (edit=false path uses CanViewOwnLinks logic)
+	// RBAC: проверяем права на просмотр детальной страницы.
+	// admin (CanViewAllLinks) → пропускаем.
+	// обычный пользователь с CanViewOwnLinks → проверяем ownership в url_ownership.
 	perms := h.svc.Perms(user)
-	if !perms.CanViewAllLinks && !h.svc.CanModifyShortCode(user, shortCode, false) {
-		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
-		return
+	if !perms.CanViewAllLinks {
+		if !perms.CanViewOwnLinks {
+			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+			return
+		}
+		isOwner, ownerErr := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
+		if ownerErr != nil && !errors.Is(ownerErr, errors.New("no rows")) {
+			slog.Error("url detail: ownership check failed", "shortCode", shortCode, "err", ownerErr)
+			writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+			return
+		}
+		if !isOwner {
+			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+			return
+		}
 	}
 
 	end := time.Now()
@@ -195,4 +212,38 @@ func urlDetailDetectDevice(ua string) string {
 		return "tablet"
 	}
 	return "desktop"
+}
+
+func urlDetailParseBrowser(ua string) string {
+	switch {
+	case strings.Contains(ua, "firefox"):
+		return "Firefox"
+	case strings.Contains(ua, "chrome") && !strings.Contains(ua, "chromium"):
+		return "Chrome"
+	case strings.Contains(ua, "safari") && !strings.Contains(ua, "chrome"):
+		return "Safari"
+	case strings.Contains(ua, "edge"):
+		return "Edge"
+	case strings.Contains(ua, "opera") || strings.Contains(ua, "opr"):
+		return "Opera"
+	default:
+		return "Other"
+	}
+}
+
+func urlDetailParseOS(ua string) string {
+	switch {
+	case strings.Contains(ua, "windows"):
+		return "Windows"
+	case strings.Contains(ua, "mac os"):
+		return "macOS"
+	case strings.Contains(ua, "linux"):
+		return "Linux"
+	case strings.Contains(ua, "android"):
+		return "Android"
+	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad"):
+		return "iOS"
+	default:
+		return "Other"
+	}
 }

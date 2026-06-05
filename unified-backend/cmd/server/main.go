@@ -39,10 +39,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	userRepo    := postgres.NewUserRepository(db)
-	auditRepo   := postgres.NewAuditRepository(db)
-	rolesRepo   := postgres.NewRolePermissionsRepository(db)
-	ownerRepo   := postgres.NewURLOwnershipRepository(db)
+	userRepo  := postgres.NewUserRepository(db)
+	auditRepo := postgres.NewAuditRepository(db)
+	rolesRepo := postgres.NewRolePermissionsRepository(db)
+	ownerRepo := postgres.NewURLOwnershipRepository(db)
 
 	// ── Shlink client ────────────────────────────────────────────────────────
 	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
@@ -75,7 +75,7 @@ func main() {
 	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
 	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
 	rolesH     := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
-	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
+	urlDetailH := handler.NewURLDetailHandler(shlinkSvc, ownerRepo)
 	settingsH  := handler.NewSettingsHandler(cfg, shlinkSvc)
 
 	// ── Router ────────────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Public — health probes (both variants for docker/k8s compatibility)
+	// Public — health probes
 	healthFn := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}
