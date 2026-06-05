@@ -119,6 +119,29 @@ func (c *Client) GetShortURLs(ctx context.Context, apiKey, rawQuery string) (*Sh
 	return doRequest[ShortURLsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 
+// GetShortURL — GET /rest/v3/short-urls/{shortCode}
+func (c *Client) GetShortURL(ctx context.Context, apiKey, shortCode string) (*ShortURL, error) {
+	url := fmt.Sprintf("%s/rest/v3/short-urls/%s", c.baseURL, shortCode)
+	return doRequest[ShortURL](ctx, c, http.MethodGet, url, apiKey, nil)
+}
+
+// GetShortURLVisits — GET /rest/v3/short-urls/{shortCode}/visits
+func (c *Client) GetShortURLVisits(ctx context.Context, apiKey, shortCode, startDate, endDate string, itemsPerPage int) (*VisitsResponse, error) {
+	if itemsPerPage <= 0 {
+		itemsPerPage = 1000
+	}
+	q := neturl.Values{}
+	if startDate != "" {
+		q.Set("startDate", startDate)
+	}
+	if endDate != "" {
+		q.Set("endDate", endDate)
+	}
+	q.Set("itemsPerPage", strconv.Itoa(itemsPerPage))
+	url := fmt.Sprintf("%s/rest/v3/short-urls/%s/visits?%s", c.baseURL, shortCode, q.Encode())
+	return doRequest[VisitsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
+}
+
 func (c *Client) CreateShortURL(ctx context.Context, apiKey string, body io.Reader) (*ShortURL, error) {
 	return doRequest[ShortURL](ctx, c, http.MethodPost, c.baseURL+"/rest/v3/short-urls", apiKey, body)
 }
