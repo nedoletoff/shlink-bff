@@ -116,11 +116,11 @@ func main() {
 
 		// Settings
 		r.Get("/api/settings", settingsH.GetSettings)
-		r.Patch("/api/settings", settingsH.UpdateSettings)
+		r.Patch("/api/settings", settingsH.PatchSettings)
 
 		// Admin
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.RequireAdmin)
+			r.Use(middleware.AdminOnly(cfg.AdminRole, auditRepo))
 
 			r.Get("/api/admin/users", adminH.ListUsers)
 			r.Get("/api/admin/users/{sub}", adminH.GetUser)
