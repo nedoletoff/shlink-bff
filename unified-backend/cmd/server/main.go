@@ -85,6 +85,8 @@ func main() {
 	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
 	adminH := handler.NewAdminHandler(userRepo, auditRepo)
 	rolesH := handler.NewRolesHandler(permsCache, permsRepo)
+	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
+	settingsH := handler.NewSettingsHandler(cfg, shlinkSvc)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Recoverer)
@@ -101,7 +103,15 @@ func main() {
 		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, provisioner, cfg))
 
 		r.Get("/api/me", meH.ServeHTTP)
-		r.Get("/api/dashboard", dashH.ServeHTTP)
+
+		// Dashboard — 4 отдельных endpointа (соответствуют вызовам с фронтенда)
+		r.Get("/api/dashboard/overview", dashH.GetOverview)
+		r.Get("/api/dashboard/users", dashH.GetUsersActivity)
+		r.Get("/api/dashboard/urls", dashH.GetUrlsStats)
+		r.Get("/api/dashboard/devices", dashH.GetDevicesStats)
+
+		// URL detail — детальная статистика отдельной ссылки
+		r.Get("/api/urls/{shortCode}/detail", urlDetailH.GetURLDetail)
 
 		// Shlink proxy — enforcement внутри хендлеров через PermissionsCache
 		r.Get("/api/shlink/short-urls", proxyH.ListShortURLs)
@@ -113,7 +123,7 @@ func main() {
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
 		r.Delete("/api/shlink/tags/{tagId}", proxyH.DeleteTag)
 
-		// Admin-only: управление пользователями, аудит, роли
+		// Admin-only: управление пользователями, аудит, роли, настройки
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.AdminOnly(cfg.AdminRole, auditRepo))
 
@@ -124,6 +134,10 @@ func main() {
 			r.Put("/api/admin/users/{sub}/prefix", adminH.UpdateSlugPrefix)
 			r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
 			r.Get("/api/admin/logs", adminH.ListLogs)
+
+			// Settings — чтение/обновление runtime-настроек
+			r.Get("/api/admin/settings", settingsH.GetSettings)
+			r.Patch("/api/admin/settings", settingsH.PatchSettings)
 
 			// Управление permissions ролей — только роли с can_manage_roles
 			r.With(
