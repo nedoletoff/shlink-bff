@@ -16,21 +16,27 @@ type RoleSource string
 
 const (
 	// RoleSourceKeycloak — роль читается из X-Auth-Request-Groups на каждый запрос.
-	// Keycloak — единственный источник истины. Изменение групп в Keycloak применяется сразу.
-	// Роль в БД обновляется при каждом логине (upsert role).
 	RoleSourceKeycloak RoleSource = "keycloak"
 
 	// RoleSourceDB — роль читается из БД (users.role).
-	// Первичный провизион берёт роль из Keycloak, далее роль управляется вручную через admin API.
-	// Изменение групп в Keycloak НЕ влияет на роль уже существующего пользователя.
 	RoleSourceDB RoleSource = "db"
 )
 
 type Config struct {
-	HTTPAddr            string
+	// HTTPAddr — адрес для прослушивания (например ":8080").
+	HTTPAddr string
+	// Port — только номер порта, извлекается из HTTPAddr. Используется в http.Server.Addr.
+	Port string
+
 	DatabaseURL         string
 	ShlinkURL           string
+	// ShlinkBaseURL — алиас ShlinkURL для обратной совместимости.
+	ShlinkBaseURL       string
 	ShlinkDefaultDomain string
+
+	// CORSAllowedOrigins — список разрешённых origins (CORS_ALLOWED_ORIGINS, через запятую).
+	// По умолчанию — ["*"].
+	CORSAllowedOrigins []string
 
 	// RoleGroups — маппинг keycloak-group (lower-case) → role-name.
 	RoleGroups map[string]string
@@ -39,39 +45,38 @@ type Config struct {
 	AdminRole string
 
 	// RoleSource — источник истины для роли пользователя.
-	// "keycloak" (default): роль берётся из Keycloak-групп на каждый запрос.
-	// "db": роль берётся из users.role, Keycloak только для первичного провизионирования.
 	RoleSource RoleSource
 
 	// Feature flags
 	UserSlugPrefixEnabled    bool
 	UserTagInternalIdEnabled bool
-
-	// FEATURE_USER_CUSTOM_SLUG=true|false (default: true)
-	// Если false — пользователи (не admin) вообще не могут задавать кастомный slug.
-	UserCustomSlugEnabled bool
+	UserCustomSlugEnabled    bool
 
 	// SHLINK_SHORT_ID_LENGTH=int (default: 0 = не передаём, shlink использует свой дефолт)
-	// Задаётся в .env, применяется глобально ко всем создаваемым ссылкам.
 	ShlinkShortIDLength int
 
-	// CLI provisioner — режим запуска shlink CLI для генерации API-ключей.
-	// SHLINK_RUNNER_MODE=docker|native (default: docker)
-	ShlinkRunnerMode string
-	// SHLINK_CONTAINER — имя docker-контейнера с shlink (используется в docker-режиме).
-	// Default: "shlink-api"
+	// CLI provisioner
+	ShlinkRunnerMode    string
 	ShlinkContainerName string
-	// SHLINK_BIN — путь до бинаря shlink (используется в native-режиме).
-	// Default: "shlink"
-	ShlinkBin string
+	ShlinkBin           string
+}
+
+// MustLoad загружает конфиг и завершает процесс при отсутствии обязательных переменных.
+func MustLoad() *Config {
+	return Load()
 }
 
 func Load() *Config {
+	httpAddr := getEnv("HTTP_ADDR", ":8080")
+	shlinkURL := mustGetEnv("SHLINK_INTERNAL_URL")
 	cfg := &Config{
-		HTTPAddr:                 getEnv("HTTP_ADDR", ":8080"),
+		HTTPAddr:                 httpAddr,
+		Port:                     strings.TrimPrefix(httpAddr, ":"),
 		DatabaseURL:              resolveDatabaseURL(),
-		ShlinkURL:                mustGetEnv("SHLINK_INTERNAL_URL"),
+		ShlinkURL:                shlinkURL,
+		ShlinkBaseURL:            shlinkURL,
 		ShlinkDefaultDomain:      getEnv("SHLINK_DEFAULT_DOMAIN", ""),
+		CORSAllowedOrigins:       parseCORSOrigins(),
 		RoleGroups:               parseRoleGroups(),
 		AdminRole:                getEnv("ADMIN_ROLE", "admin"),
 		RoleSource:               parseRoleSource(),
@@ -91,12 +96,31 @@ func Load() *Config {
 		"shlink_short_id_length", cfg.ShlinkShortIDLength,
 		"shlink_default_domain", cfg.ShlinkDefaultDomain,
 		"shlink_runner_mode", cfg.ShlinkRunnerMode,
+		"cors_origins", cfg.CORSAllowedOrigins,
 	)
 	return cfg
 }
 
+// parseCORSOrigins читает CORS_ALLOWED_ORIGINS (через запятую).
+// По умолчанию возвращает ["*"].
+func parseCORSOrigins() []string {
+	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
+	if raw == "" {
+		return []string{"*"}
+	}
+	var origins []string
+	for _, o := range strings.Split(raw, ",") {
+		if s := strings.TrimSpace(o); s != "" {
+			origins = append(origins, s)
+		}
+	}
+	if len(origins) == 0 {
+		return []string{"*"}
+	}
+	return origins
+}
+
 // parseRoleSource читает ROLE_SOURCE. Допустимые значения: "keycloak", "db".
-// По умолчанию — "keycloak".
 func parseRoleSource() RoleSource {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("ROLE_SOURCE")))
 	switch RoleSource(v) {
@@ -114,10 +138,9 @@ func parseRoleSource() RoleSource {
 	}
 }
 
-// resolveDatabaseURL строит DSN следующим образом (приоритет по убыванию):
-//  1. DATABASE_URL — если задан целиком, используется как есть (legacy / внешний запуск).
-//  2. DB_HOST + DB_PORT + DB_USER + DB_PASSWORD + DB_NAME + DB_SSLMODE — собирается DSN.
-//     DB_NAME обязателен в этом режиме.
+// resolveDatabaseURL строит DSN (приоритет по убыванию):
+//  1. DATABASE_URL — если задан целиком.
+//  2. DB_HOST + DB_PORT + DB_USER + DB_PASSWORD + DB_NAME + DB_SSLMODE.
 func resolveDatabaseURL() string {
 	if url := strings.TrimSpace(os.Getenv("DATABASE_URL")); url != "" {
 		return url
