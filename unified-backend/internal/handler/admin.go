@@ -6,8 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,245 +15,216 @@ import (
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
+	"unified-backend/internal/shlinkctl"
 )
 
 type AdminHandler struct {
 	userRepo  *postgres.UserRepository
 	auditRepo *postgres.AuditRepository
-	shlinkSvc *service.ShlinkService
+	rolesRepo *postgres.RolePermissionsRepository
+	prov      *shlinkctl.Provisioner
 }
 
-func NewAdminHandler(userRepo *postgres.UserRepository, auditRepo *postgres.AuditRepository, shlinkSvc *service.ShlinkService) *AdminHandler {
-	return &AdminHandler{userRepo: userRepo, auditRepo: auditRepo, shlinkSvc: shlinkSvc}
+func NewAdminHandler(
+	userRepo *postgres.UserRepository,
+	auditRepo *postgres.AuditRepository,
+	rolesRepo *postgres.RolePermissionsRepository,
+	prov *shlinkctl.Provisioner,
+) *AdminHandler {
+	return &AdminHandler{userRepo: userRepo, auditRepo: auditRepo, rolesRepo: rolesRepo, prov: prov}
 }
 
 // recordAuditAsync — записи аудита в горутине с детачнутым контекстом (#4):
-// r.Context() отменяется после возврата handler, и записи теряются.
+// аудит должен переживать отмену пользовательского запроса.
 func (h *AdminHandler) recordAuditAsync(entry *domain.AuditEntry) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		h.auditRepo.Record(ctx, entry)
-	}()
-}
-
-// AdminUserResponse — публичный контракт пользователя для admin UI.
-// ShlinkAPIKey НИКОГДА не включается.
-type AdminUserResponse struct {
-	ID         string `json:"id"`
-	Sub        string `json:"sub"`
-	Username   string `json:"username"`
-	Email      string `json:"email"`
-	Role       string `json:"role"`
-	SlugPrefix string `json:"slugPrefix"`
-	Status     string `json:"status"`
-	HasAPIKey  bool   `json:"hasApiKey"`
-	CreatedAt  string `json:"createdAt"`
-}
-
-func toAdminUserResponse(u *domain.User) AdminUserResponse {
-	return AdminUserResponse{
-		ID:         u.ID.String(),
-		Sub:        u.Sub,
-		Username:   u.Username,
-		Email:      u.Email,
-		Role:       string(u.Role),
-		SlugPrefix: u.SlugPrefix,
-		Status:     string(u.Status),
-		HasAPIKey:  u.ShlinkAPIKey != "",
-		CreatedAt:  u.CreatedAt.Format(time.RFC3339),
+	if h.auditRepo == nil || entry == nil {
+		return
 	}
+	go func(e *domain.AuditEntry) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := h.auditRepo.Append(ctx, e); err != nil {
+			slog.Warn("admin audit append failed", "err", err, "action", e.Action)
+		}
+	}(entry)
 }
 
 // GET /api/admin/users
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.userRepo.ListAll(r.Context())
 	if err != nil {
-		slog.Error("admin: list users failed", "err", err)
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
-
-	resp := make([]AdminUserResponse, 0, len(users))
-	for _, u := range users {
-		resp = append(resp, toAdminUserResponse(u))
-	}
-	writeJSON(w, resp, http.StatusOK)
-}
-
-// UserDetailResponse — расширенный ответ для страницы деталей пользователя.
-// Включает базовую инфу + агрегированные данные по ссылкам из shlink.
-type UserDetailResponse struct {
-	Sub            string            `json:"sub"`
-	Username       string            `json:"username"`
-	Email          string            `json:"email"`
-	Role           string            `json:"role"`
-	SlugPrefix     string            `json:"slugPrefix"`
-	Status         string            `json:"status"`
-	HasAPIKey      bool              `json:"hasApiKey"`
-	CreatedAt      string            `json:"createdAt"`
-	LinksCount     int               `json:"linksCount"`
-	VisitsTotal    int               `json:"visitsTotal"`
-	ActivityPerDay []adminClickPoint `json:"activityPerDay"`
-	Links          []adminShortURL   `json:"links"`
-}
-
-type adminClickPoint struct {
-	Date   string `json:"date"`
-	Clicks int    `json:"clicks"`
-}
-
-type adminShortURL struct {
-	ShortCode   string   `json:"shortCode"`
-	ShortURL    string   `json:"shortUrl"`
-	LongURL     string   `json:"longUrl"`
-	Title       string   `json:"title"`
-	Tags        []string `json:"tags"`
-	DateCreated string   `json:"dateCreated"`
-	VisitsTotal int      `json:"visitsTotal"`
+	writeJSON(w, users, http.StatusOK)
 }
 
 // GET /api/admin/users/{sub}
 func (h *AdminHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	sub := chi.URLParam(r, "sub")
+	if sub == "" {
+		writeJSON(w, map[string]string{"error": "sub required"}, http.StatusBadRequest)
+		return
+	}
 	user, err := h.userRepo.GetBySub(r.Context(), sub)
 	if err != nil || user == nil {
 		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
 		return
 	}
+	writeJSON(w, user, http.StatusOK)
+}
 
-	// Если у пользователя нет API-ключа — возвращаем базовую инфу без shlink-данных
-	if user.ShlinkAPIKey == "" {
-		writeJSON(w, UserDetailResponse{
-			Sub:            user.Sub,
-			Username:       user.Username,
-			Email:          user.Email,
-			Role:           string(user.Role),
-			SlugPrefix:     user.SlugPrefix,
-			Status:         string(user.Status),
-			HasAPIKey:      false,
-			CreatedAt:      user.CreatedAt.Format(time.RFC3339),
-			LinksCount:     0,
-			VisitsTotal:    0,
-			ActivityPerDay: []adminClickPoint{},
-			Links:          []adminShortURL{},
-		}, http.StatusOK)
+// GET /api/admin/users/{sub}/links
+// Пока возвращаем объясняющий ответ: список ссылок пользователя формируется через
+// /api/shlink/short-urls с пользовательским контекстом/фильтрацией. Оставляем route,
+// чтобы фронт не падал, и чтобы контракт был явным.
+func (h *AdminHandler) GetUserLinks(w http.ResponseWriter, r *http.Request) {
+	sub := chi.URLParam(r, "sub")
+	if sub == "" {
+		writeJSON(w, map[string]string{"error": "sub required"}, http.StatusBadRequest)
 		return
 	}
-
-	// Запрашиваем ссылки от имени пользователя (с его ключом)
-	urlsResp, err := h.shlinkSvc.Client().GetShortURLs(r.Context(), user.ShlinkAPIKey, "itemsPerPage=1000")
-	if err != nil {
-		slog.Warn("admin: get user links failed", "sub", sub, "err", err)
+	if _, err := h.userRepo.GetBySub(r.Context(), sub); err != nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
+		return
 	}
-
-	const dayFmt = "2006-01-02"
-	now := time.Now()
-	period := 30
-	buckets := make(map[string]int, period)
-	ordered := make([]string, 0, period)
-	for i := period - 1; i >= 0; i-- {
-		d := now.AddDate(0, 0, -i).Format(dayFmt)
-		buckets[d] = 0
-		ordered = append(ordered, d)
-	}
-
-	links := []adminShortURL{}
-	visitsTotal := 0
-
-	if urlsResp != nil {
-		for _, u := range urlsResp.ShortURLs.Data {
-			tags := u.Tags
-			if tags == nil {
-				tags = []string{}
-			}
-			links = append(links, adminShortURL{
-				ShortCode:   u.ShortCode,
-				ShortURL:    u.ShortURL,
-				LongURL:     u.LongURL,
-				Title:       u.Title,
-				Tags:        tags,
-				DateCreated: u.DateCreated,
-				VisitsTotal: u.VisitsSummary.Total,
-			})
-			visitsTotal += u.VisitsSummary.Total
-			if t, e := time.Parse(time.RFC3339, u.DateCreated); e == nil {
-				d := t.Format(dayFmt)
-				if _, ok := buckets[d]; ok {
-					buckets[d]++
-				}
-			}
-		}
-		sort.Slice(links, func(i, j int) bool {
-			return links[i].VisitsTotal > links[j].VisitsTotal
-		})
-	}
-
-	activity := make([]adminClickPoint, 0, period)
-	for _, d := range ordered {
-		activity = append(activity, adminClickPoint{Date: d, Clicks: buckets[d]})
-	}
-
-	writeJSON(w, UserDetailResponse{
-		Sub:            user.Sub,
-		Username:       user.Username,
-		Email:          user.Email,
-		Role:           string(user.Role),
-		SlugPrefix:     user.SlugPrefix,
-		Status:         string(user.Status),
-		HasAPIKey:      true,
-		CreatedAt:      user.CreatedAt.Format(time.RFC3339),
-		LinksCount:     len(links),
-		VisitsTotal:    visitsTotal,
-		ActivityPerDay: activity,
-		Links:          links,
+	writeJSON(w, map[string]any{
+		"items":   []any{},
+		"message": "use /api/shlink/short-urls with user context or add explicit aggregation later",
 	}, http.StatusOK)
 }
 
+// GET /api/admin/logs
+func (h *AdminHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	page := 1
+	perPage := 20
+	q := r.URL.Query()
+	if v := q.Get("page"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil {
+			page = n
+		}
+	}
+	if v := q.Get("perPage"); v != "" {
+		if n, err := parsePositiveInt(v); err == nil {
+			if n > 100 {
+				n = 100
+			}
+			perPage = n
+		}
+	}
+
+	items, total, err := h.auditRepo.List(r.Context(), postgres.AuditFilter{}, page, perPage)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"items":   items,
+		"page":    page,
+		"perPage": perPage,
+		"total":   total,
+	}, http.StatusOK)
+}
+
+// GET /api/admin/roles
+func (h *AdminHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.rolesRepo.List(r.Context())
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, rows, http.StatusOK)
+}
+
+// GET /api/admin/roles/{role}
+func (h *AdminHandler) GetRole(w http.ResponseWriter, r *http.Request) {
+	role := chi.URLParam(r, "role")
+	if strings.TrimSpace(role) == "" {
+		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
+		return
+	}
+	row, err := h.rolesRepo.Get(r.Context(), role)
+	if err != nil || row == nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
+		return
+	}
+	writeJSON(w, row, http.StatusOK)
+}
+
+// parsePositiveInt — небольшой локальный helper, чтобы не плодить package utils
+func parsePositiveInt(s string) (int, error) {
+	n := 0
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return 0, io.ErrUnexpectedEOF
+		}
+		n = n*10 + int(ch-'0')
+	}
+	if n <= 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return n, nil
+}
+
+type updateUserPayload struct {
+	Role       *string `json:"role"`
+	Status     *string `json:"status"`
+	SlugPrefix *string `json:"slugPrefix"`
+}
+
 // PUT /api/admin/users/{sub}
+// Обновляет роль, статус и/или slugPrefix пользователя. Поля опциональны.
 func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	sub := chi.URLParam(r, "sub")
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
+	if sub == "" {
+		writeJSON(w, map[string]string{"error": "sub required"}, http.StatusBadRequest)
+		return
+	}
+	if _, err := h.userRepo.GetBySub(r.Context(), sub); err != nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
 		return
 	}
 
-	var payload struct {
-		Role       *string `json:"role"`
-		Status     *string `json:"status"`
-		SlugPrefix *string `json:"slugPrefix"`
-	}
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+	bodyBytes, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+
+	var p updateUserPayload
+	if err := json.Unmarshal(bodyBytes, &p); err != nil {
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
 		return
 	}
 
 	fields := map[string]any{}
-	if payload.Role != nil {
-		fields["role"] = *payload.Role
+	if p.Role != nil {
+		fields["role"] = strings.TrimSpace(*p.Role)
 	}
-	if payload.Status != nil {
-		fields["status"] = *payload.Status
+	if p.Status != nil {
+		fields["status"] = strings.TrimSpace(*p.Status)
 	}
-	if payload.SlugPrefix != nil {
-		fields["slug_prefix"] = *payload.SlugPrefix
+	if p.SlugPrefix != nil {
+		fields["slug_prefix"] = strings.TrimSpace(*p.SlugPrefix)
+	}
+	if len(fields) == 0 {
+		writeJSON(w, map[string]string{"error": "no fields to update"}, http.StatusBadRequest)
+		return
 	}
 
 	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, fields); err != nil {
-		slog.Error("admin: update user failed", "sub", sub, "err", err)
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
 
-	actor := middleware.ClaimsFromContext(r.Context())
+	actor := middleware.UserFromCtx(r.Context())
+	actorSub, actorRole, actorUsername := "", "", ""
+	if actor != nil { actorSub = actor.Sub; actorRole = string(actor.Role); actorUsername = actor.Username }
 	h.recordAuditAsync(&domain.AuditEntry{
-		ActorSub:   actor.Sub,
-		TargetSub:  sub,
-		Action:     "admin.user.update",
-		ReqBody:    string(bodyBytes),
-		StatusCode: http.StatusOK,
+		UserSub:  actorSub,
+		Username: actorUsername,
+		Role:     actorRole,
+		Action:   "admin.user.update",
+		Resource: sub,
+		Result:   "success",
+		Details:  map[string]any{"body": string(bodyBytes)},
 	})
 
 	updated, _ := h.userRepo.GetBySub(r.Context(), sub)
@@ -262,167 +232,168 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 		return
 	}
-	writeJSON(w, toAdminUserResponse(updated), http.StatusOK)
+	writeJSON(w, updated, http.StatusOK)
+}
+
+type apiKeyPayload struct {
+	APIKey string `json:"apiKey"`
 }
 
 // PUT /api/admin/users/{sub}/apikey
-func (h *AdminHandler) UpdateAPIKey(w http.ResponseWriter, r *http.Request) {
+func (h *AdminHandler) UpdateUserAPIKey(w http.ResponseWriter, r *http.Request) {
 	sub := chi.URLParam(r, "sub")
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
+	if sub == "" {
+		writeJSON(w, map[string]string{"error": "sub required"}, http.StatusBadRequest)
+		return
+	}
+	if _, err := h.userRepo.GetBySub(r.Context(), sub); err != nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
 		return
 	}
 
-	var payload struct {
-		APIKey string `json:"apiKey"`
+	bodyBytes, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+
+	var p apiKeyPayload
+	if err := json.Unmarshal(bodyBytes, &p); err != nil {
+		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
+		return
 	}
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil || payload.APIKey == "" {
+	if strings.TrimSpace(p.APIKey) == "" {
 		writeJSON(w, map[string]string{"error": "apiKey required"}, http.StatusBadRequest)
 		return
 	}
 
-	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{
-		"shlink_api_key": payload.APIKey,
-	}); err != nil {
+	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{"shlink_api_key": p.APIKey}); err != nil {
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
 
-	actor := middleware.ClaimsFromContext(r.Context())
+	actor := middleware.UserFromCtx(r.Context())
+	actorSub2, actorRole2, actorUsername2 := "", "", ""
+	if actor != nil { actorSub2 = actor.Sub; actorRole2 = string(actor.Role); actorUsername2 = actor.Username }
 	h.recordAuditAsync(&domain.AuditEntry{
-		ActorSub:   actor.Sub,
-		TargetSub:  sub,
-		Action:     "admin.user.apikey.update",
-		ReqBody:    `{"apiKey":"[redacted]"}`,
-		StatusCode: http.StatusOK,
+		UserSub:  actorSub2,
+		Username: actorUsername2,
+		Role:     actorRole2,
+		Action:   "admin.user.apikey.update",
+		Resource: sub,
+		Result:   "success",
 	})
 
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
-// PUT /api/admin/users/{sub}/prefix
-func (h *AdminHandler) UpdateSlugPrefix(w http.ResponseWriter, r *http.Request) {
-	sub := chi.URLParam(r, "sub")
+type prefixPayload struct {
+	SlugPrefix string `json:"slugPrefix"`
+}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
+// PUT /api/admin/users/{sub}/prefix
+func (h *AdminHandler) UpdateUserPrefix(w http.ResponseWriter, r *http.Request) {
+	sub := chi.URLParam(r, "sub")
+	if sub == "" {
+		writeJSON(w, map[string]string{"error": "sub required"}, http.StatusBadRequest)
+		return
+	}
+	if _, err := h.userRepo.GetBySub(r.Context(), sub); err != nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
 		return
 	}
 
-	var payload struct {
-		Prefix string `json:"prefix"`
-	}
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+	bodyBytes, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+
+	var p prefixPayload
+	if err := json.Unmarshal(bodyBytes, &p); err != nil {
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
 		return
 	}
 
-	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{
-		"slug_prefix": payload.Prefix,
-	}); err != nil {
+	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{"slug_prefix": strings.TrimSpace(p.SlugPrefix)}); err != nil {
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
 
-	actor := middleware.ClaimsFromContext(r.Context())
+	actor := middleware.UserFromCtx(r.Context())
+	actorSub3, actorRole3, actorUsername3 := "", "", ""
+	if actor != nil { actorSub3 = actor.Sub; actorRole3 = string(actor.Role); actorUsername3 = actor.Username }
 	h.recordAuditAsync(&domain.AuditEntry{
-		ActorSub:   actor.Sub,
-		TargetSub:  sub,
-		Action:     "admin.user.prefix.update",
-		ReqBody:    string(bodyBytes),
-		StatusCode: http.StatusOK,
+		UserSub:  actorSub3,
+		Username: actorUsername3,
+		Role:     actorRole3,
+		Action:   "admin.user.prefix.update",
+		Resource: sub,
+		Result:   "success",
+		Details:  map[string]any{"body": string(bodyBytes)},
 	})
 
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
-// GET /api/admin/users/{sub}/links — устаревший endpoint, оставлен для совместимости
-func (h *AdminHandler) GetUserLinks(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{
-		"message": "use GET /api/admin/users/{sub} — links are included in the response",
+// GET /api/admin/settings — минимальный runtime config для фронта admin/settings
+func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
+	// Пока возвращаем stub-структуру: в проекте нет отдельного persisted settings store.
+	writeJSON(w, map[string]any{
+		"oidcEnabled":     true,
+		"proxyAuthEnabled": true,
+		"shlinkIntegration": true,
+		"auditEnabled":     h.auditRepo != nil,
 	}, http.StatusOK)
 }
 
-// GET /api/admin/logs
-func (h *AdminHandler) ListLogs(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-
-	limit := 50
-	if l := q.Get("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 500 {
-			limit = v
-		}
-	}
-	offset := 0
-	if o := q.Get("offset"); o != "" {
-		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
-			offset = v
-		}
-	}
-
-	entries, err := h.auditRepo.List(r.Context(), limit, offset)
-	if err != nil {
-		slog.Error("admin: list logs failed", "err", err)
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, entries, http.StatusOK)
+// PATCH /api/admin/settings — заглушка accept-only, чтобы web-ui не ломался.
+func (h *AdminHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
+	bodyBytes, _ := io.ReadAll(r.Body)
+	actor := middleware.UserFromCtx(r.Context())
+	actorSub4, actorRole4, actorUsername4 := "", "", ""
+	if actor != nil { actorSub4 = actor.Sub; actorRole4 = string(actor.Role); actorUsername4 = actor.Username }
+	h.recordAuditAsync(&domain.AuditEntry{
+		UserSub:  actorSub4,
+		Username: actorUsername4,
+		Role:     actorRole4,
+		Action:   "admin.settings.patch",
+		Result:   "success",
+		Details:  map[string]any{"body": string(bodyBytes)},
+	})
+	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
-// GET /api/admin/roles
-func (h *AdminHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
-	roles, err := h.userRepo.ListRolePermissions(r.Context())
-	if err != nil {
-		slog.Error("admin: list roles failed", "err", err)
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, roles, http.StatusOK)
-}
-
-// GET /api/admin/roles/{role}
-func (h *AdminHandler) GetRole(w http.ResponseWriter, r *http.Request) {
-	role := chi.URLParam(r, "role")
-	rp, err := h.userRepo.GetRolePermissions(r.Context(), role)
-	if err != nil || rp == nil {
-		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
-		return
-	}
-	writeJSON(w, rp, http.StatusOK)
+type rolePermissionsPayload struct {
+	Permissions []string `json:"permissions"`
 }
 
 // PUT /api/admin/roles/{role}/permissions
 func (h *AdminHandler) UpdateRolePermissions(w http.ResponseWriter, r *http.Request) {
 	role := chi.URLParam(r, "role")
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
+	if strings.TrimSpace(role) == "" {
+		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
 		return
 	}
 
-	var perms domain.RolePermissions
-	if err := json.Unmarshal(bodyBytes, &perms); err != nil {
+	bodyBytes, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+
+	var p rolePermissionsPayload
+	if err := json.Unmarshal(bodyBytes, &p); err != nil {
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
 		return
 	}
-	perms.Role = role
-
-	if err := h.userRepo.UpsertRolePermissions(r.Context(), &perms); err != nil {
-		slog.Error("admin: update role perms failed", "role", role, "err", err)
+	perms := service.NormalizePermissions(p.Permissions)
+	if err := h.rolesRepo.ReplacePermissions(r.Context(), role, perms); err != nil {
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
 
-	actor := middleware.ClaimsFromContext(r.Context())
+	actor := middleware.UserFromCtx(r.Context())
+	actorSub5, actorRole5, actorUsername5 := "", "", ""
+	if actor != nil { actorSub5 = actor.Sub; actorRole5 = string(actor.Role); actorUsername5 = actor.Username }
 	h.recordAuditAsync(&domain.AuditEntry{
-		ActorSub:   actor.Sub,
-		Action:     "admin.role.permissions.update",
-		ReqBody:    string(bodyBytes),
-		StatusCode: http.StatusOK,
+		UserSub:  actorSub5,
+		Username: actorUsername5,
+		Role:     actorRole5,
+		Action:   "admin.role.permissions.update",
+		Result:   "success",
+		Details:  map[string]any{"body": string(bodyBytes)},
 	})
 
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)

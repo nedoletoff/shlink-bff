@@ -110,11 +110,6 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type clickPoint struct {
-	Date   string `json:"date"`
-	Clicks int    `json:"clicks"`
-}
-
 type topLinkItem struct {
 	ShortCode   string `json:"shortCode"`
 	ShortURL    string `json:"shortUrl"`
@@ -196,69 +191,14 @@ func buildVisits(visits *shlink.VisitsResponse, days int) map[string]any {
 		}
 	}
 
-	points := make([]clickPoint, 0, days)
+	points := make([]ClickPoint, 0, days)
 	for _, d := range ordered {
-		points = append(points, clickPoint{Date: d, Clicks: buckets[d]})
+		points = append(points, ClickPoint{Date: d, Clicks: buckets[d]})
 	}
 
 	return map[string]any{
 		"clicksPerDay": points,
 		"clicksTotal":  total,
-	}
-}
-
-type countItem struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
-
-func topCountSlice(m map[string]int, limit int) []countItem {
-	items := make([]countItem, 0, len(m))
-	for k, v := range m {
-		items = append(items, countItem{Name: k, Count: v})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Count > items[j].Count
-	})
-	if len(items) > limit {
-		return items[:limit]
-	}
-	return items
-}
-
-func urlDetailParseBrowser(ua string) string {
-	ua = strings.ToLower(ua)
-	switch {
-	case strings.Contains(ua, "edg"):
-		return "Edge"
-	case strings.Contains(ua, "opr") || strings.Contains(ua, "opera"):
-		return "Opera"
-	case strings.Contains(ua, "chrome") || strings.Contains(ua, "chromium"):
-		return "Chrome"
-	case strings.Contains(ua, "firefox"):
-		return "Firefox"
-	case strings.Contains(ua, "safari"):
-		return "Safari"
-	default:
-		return "Other"
-	}
-}
-
-func urlDetailParseOS(ua string) string {
-	ua = strings.ToLower(ua)
-	switch {
-	case strings.Contains(ua, "android"):
-		return "Android"
-	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad") || strings.Contains(ua, "ipod"):
-		return "iOS"
-	case strings.Contains(ua, "windows"):
-		return "Windows"
-	case strings.Contains(ua, "mac os") || strings.Contains(ua, "macos") || strings.Contains(ua, "macintosh"):
-		return "macOS"
-	case strings.Contains(ua, "linux"):
-		return "Linux"
-	default:
-		return "Other"
 	}
 }
 

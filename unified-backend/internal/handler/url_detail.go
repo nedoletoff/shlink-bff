@@ -11,15 +11,15 @@ import (
 
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
+	"unified-backend/internal/shlink"
 )
 
-// URLDetailHandler отвечает за GET /api/urls/{shortCode}/detail
 type URLDetailHandler struct {
-	shlinkSvc *service.ShlinkService
+	svc *service.ShlinkService
 }
 
 func NewURLDetailHandler(svc *service.ShlinkService) *URLDetailHandler {
-	return &URLDetailHandler{shlinkSvc: svc}
+	return &URLDetailHandler{svc: svc}
 }
 
 type urlDetailResponse struct {
@@ -36,11 +36,6 @@ type urlDetailResponse struct {
 	Visits       []visitRow      `json:"visits"`
 }
 
-type namedCount struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
-
 type deviceBreakdown struct {
 	Desktop int `json:"desktop"`
 	Mobile  int `json:"mobile"`
@@ -48,104 +43,117 @@ type deviceBreakdown struct {
 }
 
 type visitRow struct {
-	Date    string  `json:"date"`
-	Device  string  `json:"device"`
-	OS      string  `json:"os"`
-	Browser string  `json:"browser"`
-	Country *string `json:"country"`
-	Referer *string `json:"referer"`
+	Date     string  `json:"date"`
+	Country  *string `json:"country,omitempty"`
+	Referer  *string `json:"referer,omitempty"`
+	Browser  string  `json:"browser"`
+	OS       string  `json:"os"`
+	Device   string  `json:"device"`
+	Visitor  *string `json:"visitor,omitempty"`
 }
 
-// GET /api/urls/{shortCode}/detail?period=30
+// GET /api/urls/{shortCode}/detail — страница деталей ссылки для web-ui
 func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) {
-	user := middleware.UserFromCtx(r.Context())
-	if user == nil {
-		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
-		return
-	}
-
 	shortCode := chi.URLParam(r, "shortCode")
 	if shortCode == "" {
 		writeJSON(w, map[string]string{"error": "shortCode required"}, http.StatusBadRequest)
 		return
 	}
 
-	period, _ := strconv.Atoi(r.URL.Query().Get("period"))
-	if period <= 0 {
-		period = 30
+	user := middleware.UserFromCtx(r.Context())
+	if user == nil || user.ShlinkAPIKey == "" {
+		writeJSON(w, map[string]string{"error": "user or API key missing"}, http.StatusUnauthorized)
+		return
 	}
 
-	now := time.Now()
-	endDate := now.Format("2006-01-02")
-	startDate := now.AddDate(0, 0, -(period - 1)).Format("2006-01-02")
+	query := r.URL.Query()
+	period := 30
+	if ps := query.Get("period"); ps != "" {
+		if n, err := strconv.Atoi(ps); err == nil && n > 0 && n <= 365 {
+			period = n
+		}
+	}
 
-	// Метаданные ссылки
-	urlInfo, err := h.shlinkSvc.Client().GetShortURL(r.Context(), user.ShlinkAPIKey, shortCode)
+	info, err := h.svc.Client().GetShortURL(r.Context(), user.ShlinkAPIKey, shortCode)
 	if err != nil {
-		slog.Error("url_detail: get short-url failed", "shortCode", shortCode, "err", err)
+		slog.Warn("url detail: get short url failed", "shortCode", shortCode, "err", err)
 		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
 		return
 	}
 
-	// Визиты
-	visitsResp, err := h.shlinkSvc.Client().GetShortURLVisits(r.Context(), user.ShlinkAPIKey, shortCode, startDate, endDate, 0)
-	if err != nil {
-		slog.Warn("url_detail: get visits failed", "shortCode", shortCode, "err", err)
+	// RBAC: обычный пользователь видит только свои ссылки (по tags/prefix policy сервиса).
+	if !h.svc.CanAccessShortURL(user, info) {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
 	}
 
-	// Строим buckets для clicksPerDay
+	end := time.Now()
+	start := end.AddDate(0, 0, -period)
+	visitsResp, err := h.svc.Client().GetShortURLVisits(
+		r.Context(),
+		user.ShlinkAPIKey,
+		shortCode,
+		start.Format(time.RFC3339),
+		end.Format(time.RFC3339),
+		1000,
+	)
+	if err != nil {
+		slog.Warn("url detail: get visits failed", "shortCode", shortCode, "err", err)
+		writeJSON(w, map[string]string{"error": "failed to load visits"}, http.StatusBadGateway)
+		return
+	}
+
+	var visits []shlink.Visit
+	if visitsResp != nil {
+		visits = visitsResp.Visits.Data
+	}
+
+	// clicks per day
 	const dayFmt = "2006-01-02"
 	buckets := make(map[string]int, period)
 	ordered := make([]string, 0, period)
 	for i := period - 1; i >= 0; i-- {
-		d := now.AddDate(0, 0, -i).Format(dayFmt)
+		d := end.AddDate(0, 0, -i).Format(dayFmt)
 		buckets[d] = 0
 		ordered = append(ordered, d)
 	}
 
+	desktop, mobile, tablet := 0, 0, 0
 	browsersMap := map[string]int{}
 	osMap := map[string]int{}
-	dev := deviceBreakdown{}
-	var rows []visitRow
+	visitRows := make([]visitRow, 0, len(visits))
 
-	if visitsResp != nil {
-		for _, v := range visitsResp.Visits.Data {
-			t, perr := time.Parse(time.RFC3339, v.Date)
-			day := v.Date
-			if perr == nil {
-				day = t.Format(dayFmt)
-			} else if len(day) >= 10 {
-				day = day[:10]
+	for _, v := range visits {
+		t, err := time.Parse(time.RFC3339, v.Date)
+		if err == nil {
+			d := t.Format(dayFmt)
+			if _, ok := buckets[d]; ok {
+				buckets[d]++
 			}
-			if _, ok := buckets[day]; ok {
-				buckets[day]++
-			}
-
-			ua := strings.ToLower(v.UserAgent)
-			devType := urlDetailDetectDevice(ua)
-			switch devType {
-			case "mobile":
-				dev.Mobile++
-			case "tablet":
-				dev.Tablet++
-			default:
-				dev.Desktop++
-			}
-
-			browsersMap[urlDetailParseBrowser(ua)]++
-			osMap[urlDetailParseOS(ua)]++
-
-			country := nullStrPtr(v.VisitLocation.CountryName)
-			referer := nullStrPtr(v.Referer)
-			rows = append(rows, visitRow{
-				Date:    v.Date,
-				Device:  devType,
-				OS:      urlDetailParseOS(ua),
-				Browser: urlDetailParseBrowser(ua),
-				Country: country,
-				Referer: referer,
-			})
 		}
+
+		ua := strings.ToLower(v.UserAgent)
+		dev := urlDetailDetectDevice(ua)
+		switch dev {
+		case "mobile":
+			mobile++
+		case "tablet":
+			tablet++
+		default:
+			desktop++
+		}
+		browsersMap[urlDetailParseBrowser(ua)]++
+		osMap[urlDetailParseOS(ua)]++
+
+		visitRows = append(visitRows, visitRow{
+			Date:    v.Date,
+			Country: nullStrPtr(v.CountryCode),
+			Referer: nullStrPtr(v.Referer),
+			Browser: urlDetailParseBrowser(ua),
+			OS:      urlDetailParseOS(ua),
+			Device:  dev,
+			Visitor: nullStrPtr(v.PotentialBot),
+		})
 	}
 
 	points := make([]ClickPoint, 0, period)
@@ -153,87 +161,40 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		points = append(points, ClickPoint{Date: d, Clicks: buckets[d]})
 	}
 
-	if rows == nil {
-		rows = []visitRow{}
-	}
-
-	writeJSON(w, urlDetailResponse{
-		ShortCode:    urlInfo.ShortCode,
-		Title:        urlInfo.Title,
-		ShortURL:     urlInfo.ShortURL,
-		LongURL:      urlInfo.LongURL,
-		DateCreated:  urlInfo.DateCreated,
-		VisitsTotal:  urlInfo.VisitsSummary.Total,
+	resp := urlDetailResponse{
+		ShortCode:    info.ShortCode,
+		Title:        info.Title,
+		ShortURL:     info.ShortURL,
+		LongURL:      info.LongURL,
+		DateCreated:  info.DateCreated,
+		VisitsTotal:  info.VisitsSummary.Total,
 		ClicksPerDay: points,
-		Devices:      dev,
+		Devices: deviceBreakdown{
+			Desktop: desktop,
+			Mobile:  mobile,
+			Tablet:  tablet,
+		},
 		Browsers:     topCountSlice(browsersMap, 10),
 		OS:           topCountSlice(osMap, 10),
-		Visits:       rows,
-	}, http.StatusOK)
+		Visits:       visitRows,
+	}
+
+	writeJSON(w, resp, http.StatusOK)
 }
 
 func nullStrPtr(s string) *string {
-	if s == "" {
+	if strings.TrimSpace(s) == "" {
 		return nil
 	}
 	return &s
 }
 
 func urlDetailDetectDevice(ua string) string {
-	if strings.Contains(ua, "mobile") || (strings.Contains(ua, "android") && !strings.Contains(ua, "tablet")) {
+	if strings.Contains(ua, "mobi") || strings.Contains(ua, "android") {
 		return "mobile"
 	}
 	if strings.Contains(ua, "tablet") || strings.Contains(ua, "ipad") {
 		return "tablet"
 	}
 	return "desktop"
-}
-
-func urlDetailParseBrowser(ua string) string {
-	switch {
-	case strings.Contains(ua, "edg"):
-		return "Edge"
-	case strings.Contains(ua, "chrome") && !strings.Contains(ua, "chromium"):
-		return "Chrome"
-	case strings.Contains(ua, "firefox"):
-		return "Firefox"
-	case strings.Contains(ua, "safari"):
-		return "Safari"
-	default:
-		return "Other"
-	}
-}
-
-func urlDetailParseOS(ua string) string {
-	switch {
-	case strings.Contains(ua, "windows"):
-		return "Windows"
-	case strings.Contains(ua, "android"):
-		return "Android"
-	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad"):
-		return "iOS"
-	case strings.Contains(ua, "mac"):
-		return "macOS"
-	case strings.Contains(ua, "linux"):
-		return "Linux"
-	default:
-		return "Other"
-	}
-}
-
-func topCountSlice(m map[string]int, n int) []namedCount {
-	out := make([]namedCount, 0, len(m))
-	for k, v := range m {
-		out = append(out, namedCount{Name: k, Count: v})
-	}
-	// simple insertion sort (small slices)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].Count > out[j-1].Count; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	if len(out) > n {
-		out = out[:n]
-	}
-	return out
 }
