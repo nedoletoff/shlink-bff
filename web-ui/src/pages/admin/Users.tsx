@@ -66,7 +66,8 @@ export function AdminUsers() {
     if (!roleTarget) return;
     setRoleSaving(true);
     try {
-      await api.patch(`/api/admin/users/${encodeURIComponent(roleTarget.sub)}/role`, {
+      // Используем PUT /api/admin/users/:sub (общий update endpoint)
+      await api.put(`/api/admin/users/${encodeURIComponent(roleTarget.sub)}`, {
         role: selectedRole,
       });
       notifications.show({ message: 'Роль обновлена', color: 'green' });
@@ -282,15 +283,18 @@ function EditUserModal({
           <Group align="flex-end">
             <TextInput
               type="password"
-              label="Повторите ключ"
-              placeholder="Повторный ввод ключа"
+              placeholder="Подтвердите ключ"
               value={confirmKey}
               onChange={e => setConfirmKey(e.currentTarget.value)}
-              error={confirmKey !== '' && newKey !== confirmKey ? 'Ключи не совпадают' : undefined}
               style={{ flex: 1 }}
             />
-            <Button color="orange" onClick={saveApiKey} loading={loading} disabled={!keysMatch} leftSection={<IconKey size={14} />}>
-              Обновить
+            <Button
+              onClick={saveApiKey}
+              loading={loading}
+              disabled={!keysMatch}
+              leftSection={<IconKey size={14} />}
+            >
+              {RU.save}
             </Button>
           </Group>
         </Stack>
