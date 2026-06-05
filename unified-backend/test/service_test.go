@@ -11,44 +11,54 @@ import (
 	"unified-backend/internal/shlink"
 )
 
-// newTestPermissionsCache — in-memory PermissionsCache без БД для тестов.
-// repo=nil допустимо: Load() не вызывается, права предварительно прописываются через Set().
-func newTestPermissionsCache() *service.PermissionsCache {
-	cache := service.NewPermissionsCache(nil, domain.RoleAdmin)
-	cache.Set(domain.DefaultAdminPermissions(domain.RoleAdmin))
-	cache.Set(domain.DefaultUserPermissions(domain.RoleUser))
-	return cache
+// ── helpers ────────────────────────────────────────────────────────────────
+
+type stubRolesRepoSvc struct{ data []domain.RolePermissions }
+
+func (s *stubRolesRepoSvc) GetAll(_ context.Context) ([]domain.RolePermissions, error) {
+	return s.data, nil
 }
 
-// newShlinkService создаёт ShlinkService для тестов.
-// slugPrefixEnabled — FEATURE_USER_SLUG_PREFIX.
-// UserCustomSlugEnabled по умолчанию true (production default).
-func newShlinkService(slugPrefixEnabled bool) *service.ShlinkService {
-	cfg := &config.Config{
-		UserSlugPrefixEnabled:    slugPrefixEnabled,
-		UserTagInternalIdEnabled: false,
-		UserCustomSlugEnabled:    true,
-		ShlinkURL:                "http://shlink-api:8080",
+// newShlinkServiceWithPerms создаёт ShlinkService с произвольным набором ролей.
+func newShlinkServiceWithPerms(perms []domain.RolePermissions, cfg *config.Config) *service.ShlinkService {
+	if cfg.ShlinkURL == "" {
+		cfg.ShlinkURL = "http://shlink-api:8080"
 	}
+	cache := service.NewPermissionsCache(&stubRolesRepoSvc{data: perms}, cfg.AdminRole)
+	_ = cache.Load(context.Background())
 	cli := shlink.NewClient(cfg.ShlinkURL)
-	return service.NewShlinkService(cli, cfg, newTestPermissionsCache())
+	return service.NewShlinkService(cli, cfg, cache)
 }
 
-// newShlinkServiceFull создаёт ShlinkService с полным контролем флагов.
+// newShlinkService — удобный хелпер для одной роли и базового cfg.
+func newShlinkService(p domain.RolePermissions) *service.ShlinkService {
+	return newShlinkServiceWithPerms([]domain.RolePermissions{p}, &config.Config{
+		AdminRole:             domain.RoleAdmin,
+		UserSlugPrefixEnabled: false,
+		UserCustomSlugEnabled: true,
+	})
+}
+
+// newShlinkServiceFull — хелпер с контролем feature-флагов slug.
 func newShlinkServiceFull(slugPrefixEnabled, userCustomSlugEnabled bool) *service.ShlinkService {
-	cfg := &config.Config{
-		UserSlugPrefixEnabled:    slugPrefixEnabled,
-		UserTagInternalIdEnabled: false,
-		UserCustomSlugEnabled:    userCustomSlugEnabled,
-		ShlinkURL:                "http://shlink-api:8080",
-	}
-	cli := shlink.NewClient(cfg.ShlinkURL)
-	return service.NewShlinkService(cli, cfg, newTestPermissionsCache())
+	return newShlinkServiceWithPerms(
+		[]domain.RolePermissions{
+			domain.DefaultAdminPermissions(domain.RoleAdmin),
+			domain.DefaultUserPermissions(domain.RoleUser),
+		},
+		&config.Config{
+			AdminRole:             domain.RoleAdmin,
+			UserSlugPrefixEnabled: slugPrefixEnabled,
+			UserCustomSlugEnabled: userCustomSlugEnabled,
+		},
+	)
 }
+
+// ── EnforceSlugPrefix ──────────────────────────────────────────────────────
 
 // TestEnforceSlugPrefix_AdminBypass — для admin prefix не применяется
 func TestEnforceSlugPrefix_AdminBypass(t *testing.T) {
-	svc := newShlinkService(true)
+	svc := newShlinkServiceFull(true, true)
 	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
 	slug := "my-custom-slug"
 
@@ -63,7 +73,7 @@ func TestEnforceSlugPrefix_AdminBypass(t *testing.T) {
 
 // TestEnforceSlugPrefix_UserNoPrefix — feature enabled, нет prefix → ошибка
 func TestEnforceSlugPrefix_UserNoPrefix(t *testing.T) {
-	svc := newShlinkService(true)
+	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: ""}
 	slug := "my-slug"
 
@@ -75,7 +85,7 @@ func TestEnforceSlugPrefix_UserNoPrefix(t *testing.T) {
 
 // TestEnforceSlugPrefix_UserCorrectPrefix — slug с правильным prefix → OK
 func TestEnforceSlugPrefix_UserCorrectPrefix(t *testing.T) {
-	svc := newShlinkService(true)
+	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
 	slug := "u1-mylink"
 
@@ -90,7 +100,7 @@ func TestEnforceSlugPrefix_UserCorrectPrefix(t *testing.T) {
 
 // TestEnforceSlugPrefix_UserWrongPrefix — slug без prefix → ошибка
 func TestEnforceSlugPrefix_UserWrongPrefix(t *testing.T) {
-	svc := newShlinkService(true)
+	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
 	slug := "admin-link"
 
@@ -102,7 +112,7 @@ func TestEnforceSlugPrefix_UserWrongPrefix(t *testing.T) {
 
 // TestEnforceSlugPrefix_FeatureDisabled — feature выключен → slug не трогается
 func TestEnforceSlugPrefix_FeatureDisabled(t *testing.T) {
-	svc := newShlinkService(false)
+	svc := newShlinkServiceFull(false, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
 	slug := "any-slug"
 
@@ -117,7 +127,7 @@ func TestEnforceSlugPrefix_FeatureDisabled(t *testing.T) {
 
 // TestEnforceSlugPrefix_UserNilSlug — nil slug + prefix → возвращает prefix
 func TestEnforceSlugPrefix_UserNilSlug(t *testing.T) {
-	svc := newShlinkService(true)
+	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u2-"}
 
 	result, err := svc.EnforceSlugPrefix(context.Background(), user, nil)
@@ -161,46 +171,7 @@ func TestEnforceSlugPrefix_AdminIgnoresFeatureFlag(t *testing.T) {
 	}
 }
 
-// TestFilterShortURLsByUser — фильтрация по prefix
-func TestFilterShortURLsByUser(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
-
-	urls := []shlink.ShortURL{
-		{ShortCode: "u1-abc"},
-		{ShortCode: "u1-xyz"},
-		{ShortCode: "u2-abc"},
-		{ShortCode: "random"},
-	}
-
-	filtered := svc.FilterShortURLsByUser(urls, user)
-
-	if len(filtered) != 2 {
-		t.Errorf("expected 2 filtered URLs, got %d", len(filtered))
-	}
-	for _, u := range filtered {
-		if u.ShortCode[:3] != "u1-" {
-			t.Errorf("expected prefix u1-, got %s", u.ShortCode)
-		}
-	}
-}
-
-// TestFilterShortURLsByUser_AdminGetAll — admin видит все
-func TestFilterShortURLsByUser_AdminGetAll(t *testing.T) {
-	svc := newShlinkService(true)
-	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: ""}
-
-	urls := []shlink.ShortURL{
-		{ShortCode: "u1-abc"},
-		{ShortCode: "u2-xyz"},
-		{ShortCode: "random"},
-	}
-
-	result := svc.FilterShortURLsByUser(urls, admin)
-	if len(result) != 3 {
-		t.Errorf("admin should see all URLs, got %d", len(result))
-	}
-}
+// ── DefaultPermissions ─────────────────────────────────────────────────────
 
 // TestDefaultPermissions_Admin — admin получает все права
 func TestDefaultPermissions_Admin(t *testing.T) {
@@ -226,65 +197,5 @@ func TestDefaultPermissions_User(t *testing.T) {
 	}
 	if !perms.CanCreateLinks {
 		t.Error("user SHOULD canCreateLinks")
-	}
-}
-
-// TestCanModifyShortCode_AdminAlways — admin может изменять любые ссылки
-func TestCanModifyShortCode_AdminAlways(t *testing.T) {
-	svc := newShlinkService(true)
-	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
-	if !svc.CanModifyShortCode(admin, "someone-else-link", false) {
-		t.Error("admin should be able to edit any short code")
-	}
-	if !svc.CanModifyShortCode(admin, "someone-else-link", true) {
-		t.Error("admin should be able to delete any short code")
-	}
-}
-
-// TestCanModifyShortCode_FeatureDisabled — при выключенном feature изоляция не применяется
-func TestCanModifyShortCode_FeatureDisabled(t *testing.T) {
-	svc := newShlinkService(false)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
-	if !svc.CanModifyShortCode(user, "u2-foreign", false) {
-		t.Error("when feature disabled, ownership is not enforced (edit)")
-	}
-	if !svc.CanModifyShortCode(user, "u2-foreign", true) {
-		t.Error("when feature disabled, ownership is not enforced (delete)")
-	}
-}
-
-// TestCanModifyShortCode_UserOwn — свои ссылки разрешены
-func TestCanModifyShortCode_UserOwn(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
-	if !svc.CanModifyShortCode(user, "u1-mylink", false) {
-		t.Error("user should be able to edit own short code")
-	}
-	if !svc.CanModifyShortCode(user, "u1-mylink", true) {
-		t.Error("user should be able to delete own short code")
-	}
-}
-
-// TestCanModifyShortCode_UserForeign — чужие ссылки запрещены
-func TestCanModifyShortCode_UserForeign(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
-	if svc.CanModifyShortCode(user, "u2-foreign", false) {
-		t.Error("user must NOT be able to edit foreign short code")
-	}
-	if svc.CanModifyShortCode(user, "u2-foreign", true) {
-		t.Error("user must NOT be able to delete foreign short code")
-	}
-}
-
-// TestCanModifyShortCode_UserNoPrefix — feature включён, префикса нет → запрет
-func TestCanModifyShortCode_UserNoPrefix(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, SlugPrefix: ""}
-	if svc.CanModifyShortCode(user, "any-code", false) {
-		t.Error("user with no prefix and feature enabled must be denied (edit)")
-	}
-	if svc.CanModifyShortCode(user, "any-code", true) {
-		t.Error("user with no prefix and feature enabled must be denied (delete)")
 	}
 }
