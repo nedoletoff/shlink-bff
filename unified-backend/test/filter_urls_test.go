@@ -1,7 +1,6 @@
 package test
 
 import (
-	"context"
 	"testing"
 
 	"unified-backend/internal/domain"
@@ -10,7 +9,6 @@ import (
 
 // ── FilterShortURLsByUser ──────────────────────────────────────────────────
 
-// TestFilterShortURLsByUser_AdminSeesAll — admin с CanViewAllLinks видит все ссылки.
 func TestFilterShortURLsByUser_AdminSeesAll(t *testing.T) {
 	svc := newShlinkService(false)
 	admin := &domain.User{Role: domain.RoleAdmin, Sub: "admin1"}
@@ -27,7 +25,6 @@ func TestFilterShortURLsByUser_AdminSeesAll(t *testing.T) {
 	}
 }
 
-// TestFilterShortURLsByUser_UserSeesOnlyOwn — обычный пользователь видит только свои ссылки.
 func TestFilterShortURLsByUser_UserSeesOnlyOwn(t *testing.T) {
 	svc := newShlinkServiceFull(false, false)
 	user := &domain.User{Role: domain.RoleUser, Sub: "user1"}
@@ -55,7 +52,6 @@ func TestFilterShortURLsByUser_UserSeesOnlyOwn(t *testing.T) {
 	}
 }
 
-// TestFilterShortURLsByUser_EmptyList — пустой список → пустой результат.
 func TestFilterShortURLsByUser_EmptyList(t *testing.T) {
 	svc := newShlinkService(false)
 	user := &domain.User{Role: domain.RoleUser, Sub: "user1"}
@@ -65,7 +61,6 @@ func TestFilterShortURLsByUser_EmptyList(t *testing.T) {
 	}
 }
 
-// TestFilterShortURLsByUser_NoMatchingTag — нет ссылок с тегом пользователя.
 func TestFilterShortURLsByUser_NoMatchingTag(t *testing.T) {
 	svc := newShlinkServiceFull(false, false)
 	user := &domain.User{Role: domain.RoleUser, Sub: "user-orphan"}
@@ -83,46 +78,50 @@ func TestFilterShortURLsByUser_NoMatchingTag(t *testing.T) {
 
 // ── CanModifyShortCode ────────────────────────────────────────────────────
 
-// TestCanModifyShortCode_AdminCanModifyAll — admin может изменить любой шорткод.
 func TestCanModifyShortCode_AdminCanModifyAll(t *testing.T) {
 	svc := newShlinkService(false)
 	admin := &domain.User{Role: domain.RoleAdmin, Sub: "admin1", SlugPrefix: "adm-"}
 
 	for _, code := range []string{"adm-link", "user-link", "any-code", ""} {
-		if !svc.CanModifyShortCode(context.Background(), admin, code) {
+		if !svc.CanModifyShortCode(admin, code, false) {
 			t.Errorf("admin should be able to modify %q", code)
 		}
 	}
 }
 
-// TestCanModifyShortCode_UserOwnPrefix — пользователь может изменять свои ссылки (совпадает prefix).
 func TestCanModifyShortCode_UserOwnPrefix(t *testing.T) {
 	svc := newShlinkService(true)
 	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
 
-	if !svc.CanModifyShortCode(context.Background(), user, "u1-mylink") {
+	if !svc.CanModifyShortCode(user, "u1-mylink", false) {
 		t.Error("user should be able to modify own prefixed link")
 	}
 }
 
-// TestCanModifyShortCode_UserForeignPrefix — пользователь не может изменить чужую ссылку.
 func TestCanModifyShortCode_UserForeignPrefix(t *testing.T) {
 	svc := newShlinkService(true)
 	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
 
-	if svc.CanModifyShortCode(context.Background(), user, "u2-otherlink") {
+	if svc.CanModifyShortCode(user, "u2-otherlink", false) {
 		t.Error("user should NOT be able to modify another user's link")
 	}
 }
 
-// TestCanModifyShortCode_PrefixDisabled_UserCanModify — при выключенном prefix
-// пользователь может изменять любой код (контроль отсутствует).
 func TestCanModifyShortCode_PrefixDisabled_UserCanModify(t *testing.T) {
 	svc := newShlinkService(false)
 	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
 
-	// без prefix enforcement — любой код разрешён
-	if !svc.CanModifyShortCode(context.Background(), user, "totally-foreign-code") {
+	if !svc.CanModifyShortCode(user, "totally-foreign-code", false) {
 		t.Error("when prefix disabled, user should be able to modify any code")
+	}
+}
+
+func TestCanModifyShortCode_DeleteRequiresDeletePerm(t *testing.T) {
+	svc := newShlinkServiceFull(false, false)
+	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
+
+	// без CanDeleteOwnLinks — нельзя удалять даже свои
+	if svc.CanModifyShortCode(user, "u1-mylink", true) {
+		t.Error("user without delete perm should not be able to delete")
 	}
 }

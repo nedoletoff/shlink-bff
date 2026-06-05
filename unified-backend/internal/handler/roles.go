@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,19 +11,25 @@ import (
 
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
-	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 )
+
+// RolesRepository — минимальный интерфейс для персистентности permissions ролей.
+// Позволяет подменять реализацию в тестах без зависимости от пакета postgres.
+type RolesRepository interface {
+	GetAll(ctx context.Context) ([]domain.RolePermissions, error)
+	Upsert(ctx context.Context, p *domain.RolePermissions) error
+}
 
 // RolesHandler — управление permissions ролей.
 // Доступен только ролям с can_manage_roles = true.
 type RolesHandler struct {
 	cache     *service.PermissionsCache
-	permsRepo *postgres.RolePermissionsRepository
+	permsRepo RolesRepository
 	cfg       *config.Config
 }
 
-func NewRolesHandler(cache *service.PermissionsCache, repo *postgres.RolePermissionsRepository, cfg *config.Config) *RolesHandler {
+func NewRolesHandler(cache *service.PermissionsCache, repo RolesRepository, cfg *config.Config) *RolesHandler {
 	return &RolesHandler{cache: cache, permsRepo: repo, cfg: cfg}
 }
 
@@ -111,21 +118,21 @@ func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Requ
 // permToStringSlice переводит флаги RolePermissions в список строк (только true-флаги).
 func permToStringSlice(p domain.RolePermissions) []string {
 	var out []string
-	if p.CanViewOwnLinks          { out = append(out, "canViewOwnLinks") }
-	if p.CanViewAllLinks          { out = append(out, "canViewAllLinks") }
-	if p.CanCreateLinks           { out = append(out, "canCreateLinks") }
-	if p.CanCreateWithCustomSlug  { out = append(out, "canCreateWithCustomSlug") }
-	if p.CanCreateWithoutSlug     { out = append(out, "canCreateWithoutSlug") }
-	if p.CanEditOwnLinks          { out = append(out, "canEditOwnLinks") }
-	if p.CanEditAllLinks          { out = append(out, "canEditAllLinks") }
-	if p.CanDeleteOwnLinks        { out = append(out, "canDeleteOwnLinks") }
-	if p.CanDeleteAllLinks        { out = append(out, "canDeleteAllLinks") }
-	if p.CanManageOwnTags         { out = append(out, "canManageOwnTags") }
-	if p.CanManageAllTags         { out = append(out, "canManageAllTags") }
-	if p.CanViewOwnStats          { out = append(out, "canViewOwnStats") }
-	if p.CanViewAllStats          { out = append(out, "canViewAllStats") }
-	if p.CanViewAuditLogs         { out = append(out, "canViewAuditLogs") }
-	if p.CanManageUsers           { out = append(out, "canManageUsers") }
-	if p.CanManageRoles           { out = append(out, "canManageRoles") }
+	if p.CanViewOwnLinks         { out = append(out, "canViewOwnLinks") }
+	if p.CanViewAllLinks         { out = append(out, "canViewAllLinks") }
+	if p.CanCreateLinks          { out = append(out, "canCreateLinks") }
+	if p.CanCreateWithCustomSlug { out = append(out, "canCreateWithCustomSlug") }
+	if p.CanCreateWithoutSlug    { out = append(out, "canCreateWithoutSlug") }
+	if p.CanEditOwnLinks         { out = append(out, "canEditOwnLinks") }
+	if p.CanEditAllLinks         { out = append(out, "canEditAllLinks") }
+	if p.CanDeleteOwnLinks       { out = append(out, "canDeleteOwnLinks") }
+	if p.CanDeleteAllLinks       { out = append(out, "canDeleteAllLinks") }
+	if p.CanManageOwnTags        { out = append(out, "canManageOwnTags") }
+	if p.CanManageAllTags        { out = append(out, "canManageAllTags") }
+	if p.CanViewOwnStats         { out = append(out, "canViewOwnStats") }
+	if p.CanViewAllStats         { out = append(out, "canViewAllStats") }
+	if p.CanViewAuditLogs        { out = append(out, "canViewAuditLogs") }
+	if p.CanManageUsers          { out = append(out, "canManageUsers") }
+	if p.CanManageRoles          { out = append(out, "canManageRoles") }
 	return out
 }

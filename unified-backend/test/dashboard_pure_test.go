@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 
 // ── buildOverview ──────────────────────────────────────────────────────────
 
-// TestBuildOverview_Empty — нет ссылок → нули.
 func TestBuildOverview_Empty(t *testing.T) {
 	out := buildOverviewExported(nil)
 	if out.LinksCount != 0 {
@@ -23,12 +23,11 @@ func TestBuildOverview_Empty(t *testing.T) {
 	}
 }
 
-// TestBuildOverview_TopLinksSorted — топ-10 отсортирован по убыванию визитов.
 func TestBuildOverview_TopLinksSorted(t *testing.T) {
 	urls := make([]shlink.ShortURL, 15)
 	for i := range urls {
 		urls[i] = shlink.ShortURL{
-			ShortCode: mustSprintf("code-%d", i),
+			ShortCode:     fmt.Sprintf("code-%d", i),
 			VisitsSummary: shlink.VisitsSummary{Total: i},
 		}
 	}
@@ -40,17 +39,15 @@ func TestBuildOverview_TopLinksSorted(t *testing.T) {
 	if len(out.TopLinks) != 10 {
 		t.Errorf("TopLinks cap: want 10, got %d", len(out.TopLinks))
 	}
-	// первый должен иметь наибольшее кол-во визитов
 	if out.TopLinks[0].VisitsTotal < out.TopLinks[1].VisitsTotal {
 		t.Error("TopLinks not sorted descending")
 	}
 }
 
-// TestBuildOverview_RecentLinks — не более 5 в recentLinks.
 func TestBuildOverview_RecentLinks(t *testing.T) {
 	urls := make([]shlink.ShortURL, 8)
 	for i := range urls {
-		urls[i] = shlink.ShortURL{ShortCode: mustSprintf("c%d", i)}
+		urls[i] = shlink.ShortURL{ShortCode: fmt.Sprintf("c%d", i)}
 	}
 	out := buildOverviewExported(urls)
 	if len(out.RecentLinks) != 5 {
@@ -58,7 +55,6 @@ func TestBuildOverview_RecentLinks(t *testing.T) {
 	}
 }
 
-// TestBuildOverview_VisitsTotals — сумма визитов считается корректно.
 func TestBuildOverview_VisitsTotals(t *testing.T) {
 	urls := []shlink.ShortURL{
 		{ShortCode: "a", VisitsSummary: shlink.VisitsSummary{Total: 10}},
@@ -73,7 +69,6 @@ func TestBuildOverview_VisitsTotals(t *testing.T) {
 
 // ── buildVisits ────────────────────────────────────────────────────────────
 
-// TestBuildVisits_NilVisits — nil visits → все бакеты = 0, total = 0.
 func TestBuildVisits_NilVisits(t *testing.T) {
 	out := buildVisitsExported(nil, 7)
 	if out.ClicksTotal != 0 {
@@ -89,11 +84,13 @@ func TestBuildVisits_NilVisits(t *testing.T) {
 	}
 }
 
-// TestBuildVisits_CountsToday — визит сегодня попадает в последний бакет.
 func TestBuildVisits_CountsToday(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	resp := &shlink.VisitsResponse{
-		Visits: shlink.Pagination[shlink.Visit]{
+		Visits: struct {
+			Data       []shlink.Visit    `json:"data"`
+			Pagination shlink.Pagination `json:"pagination"`
+		}{
 			Data: []shlink.Visit{
 				{Date: now},
 				{Date: now},
@@ -106,11 +103,13 @@ func TestBuildVisits_CountsToday(t *testing.T) {
 	}
 }
 
-// TestBuildVisits_IgnoresOutOfRange — визит за пределами окна не считается.
 func TestBuildVisits_IgnoresOutOfRange(t *testing.T) {
 	old := time.Now().AddDate(0, -2, 0).UTC().Format(time.RFC3339)
 	resp := &shlink.VisitsResponse{
-		Visits: shlink.Pagination[shlink.Visit]{
+		Visits: struct {
+			Data       []shlink.Visit    `json:"data"`
+			Pagination shlink.Pagination `json:"pagination"`
+		}{
 			Data: []shlink.Visit{{Date: old}},
 		},
 	}
@@ -120,7 +119,6 @@ func TestBuildVisits_IgnoresOutOfRange(t *testing.T) {
 	}
 }
 
-// TestBuildVisits_CorrectBucketCount — число бакетов соответствует параметру days.
 func TestBuildVisits_CorrectBucketCount(t *testing.T) {
 	for _, days := range []int{1, 7, 30} {
 		out := buildVisitsExported(nil, days)
@@ -130,10 +128,12 @@ func TestBuildVisits_CorrectBucketCount(t *testing.T) {
 	}
 }
 
-// TestBuildVisits_InvalidDateIgnored — не-RFC3339 дата не ломает функцию.
 func TestBuildVisits_InvalidDateIgnored(t *testing.T) {
 	resp := &shlink.VisitsResponse{
-		Visits: shlink.Pagination[shlink.Visit]{
+		Visits: struct {
+			Data       []shlink.Visit    `json:"data"`
+			Pagination shlink.Pagination `json:"pagination"`
+		}{
 			Data: []shlink.Visit{
 				{Date: "not-a-date"},
 				{Date: "2024-99-99T00:00:00Z"},
@@ -148,7 +148,6 @@ func TestBuildVisits_InvalidDateIgnored(t *testing.T) {
 
 // ── buildDevices ───────────────────────────────────────────────────────────
 
-// TestBuildDevices_NilVisits — nil visits → все счётчики нули.
 func TestBuildDevices_NilVisits(t *testing.T) {
 	out := buildDevicesExported(nil)
 	if out.Desktop != 0 || out.Mobile != 0 || out.Tablet != 0 {
@@ -160,10 +159,12 @@ func TestBuildDevices_NilVisits(t *testing.T) {
 	}
 }
 
-// TestBuildDevices_ClassifyMobile — User-Agent с 'Mobi' → mobile.
 func TestBuildDevices_ClassifyMobile(t *testing.T) {
 	resp := &shlink.VisitsResponse{
-		Visits: shlink.Pagination[shlink.Visit]{
+		Visits: struct {
+			Data       []shlink.Visit    `json:"data"`
+			Pagination shlink.Pagination `json:"pagination"`
+		}{
 			Data: []shlink.Visit{
 				{UserAgent: "Mozilla/5.0 (Linux; Android 10; Mobile)"},
 				{UserAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0) Mobi"},
@@ -179,10 +180,12 @@ func TestBuildDevices_ClassifyMobile(t *testing.T) {
 	}
 }
 
-// TestBuildDevices_ClassifyTablet — User-Agent с 'iPad' → tablet.
 func TestBuildDevices_ClassifyTablet(t *testing.T) {
 	resp := &shlink.VisitsResponse{
-		Visits: shlink.Pagination[shlink.Visit]{
+		Visits: struct {
+			Data       []shlink.Visit    `json:"data"`
+			Pagination shlink.Pagination `json:"pagination"`
+		}{
 			Data: []shlink.Visit{
 				{UserAgent: "Mozilla/5.0 (iPad; CPU OS 15_0 like Mac OS X)"},
 			},
@@ -194,10 +197,12 @@ func TestBuildDevices_ClassifyTablet(t *testing.T) {
 	}
 }
 
-// TestBuildDevices_ClassifyDesktop — обычный desktop UA.
 func TestBuildDevices_ClassifyDesktop(t *testing.T) {
 	resp := &shlink.VisitsResponse{
-		Visits: shlink.Pagination[shlink.Visit]{
+		Visits: struct {
+			Data       []shlink.Visit    `json:"data"`
+			Pagination shlink.Pagination `json:"pagination"`
+		}{
 			Data: []shlink.Visit{
 				{UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
 				{UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
@@ -210,31 +215,20 @@ func TestBuildDevices_ClassifyDesktop(t *testing.T) {
 	}
 }
 
-// TestBuildDevices_HeatmapNonZeroOnly — heatmap содержит только ненулевые ячейки.
 func TestBuildDevices_HeatmapNonZeroOnly(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	resp := &shlink.VisitsResponse{
-		Visits: shlink.Pagination[shlink.Visit]{
+		Visits: struct {
+			Data       []shlink.Visit    `json:"data"`
+			Pagination shlink.Pagination `json:"pagination"`
+		}{
 			Data: []shlink.Visit{
 				{UserAgent: "Desktop", Date: now},
 			},
 		},
 	}
 	out := buildDevicesExported(resp)
-	// heatmap должен содержать ровно одну ячейку (для текущего wd+hr)
 	if len(out.Heatmap) != 1 {
 		t.Errorf("heatmap should contain 1 cell, got %d", len(out.Heatmap))
 	}
-}
-
-// ── helpers ────────────────────────────────────────────────────────────────
-
-func mustSprintf(format string, a ...any) string {
-	import_fmt_sprintf := func(f string, args ...any) string {
-		s := f
-		_ = args
-		return s
-	}
-	_ = import_fmt_sprintf
-	return ""
 }

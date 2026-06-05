@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -43,13 +44,13 @@ func TestParsePositiveInt_Valid(t *testing.T) {
 
 func TestParsePositiveInt_Invalid(t *testing.T) {
 	cases := []string{
-		"",       // пустая строка
-		"0",      // ноль — не positive
-		"-1",     // отрицательное
-		"abc",    // не число
-		"1.5",    // float
-		"1 2",    // пробел
-		"12abc",  // смешанный
+		"",      // пустая строка
+		"0",     // ноль — не positive
+		"-1",    // отрицательное
+		"abc",   // не число
+		"1.5",   // float
+		"1 2",   // пробел
+		"12abc", // смешанный
 	}
 	for _, tc := range cases {
 		_, err := parsePositiveInt(tc)
@@ -60,7 +61,6 @@ func TestParsePositiveInt_Invalid(t *testing.T) {
 }
 
 func TestParsePositiveInt_Boundary(t *testing.T) {
-	// perPage > 100 клэмпится снаружи, но парсер сам по себе должен работать
 	got, err := parsePositiveInt("200")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,7 +20,7 @@ import (
 // ── stubs ─────────────────────────────────────────────────────────────────────
 
 type stubRolesRepo struct {
-	data   []domain.RolePermissions
+	data      []domain.RolePermissions
 	upsertErr error
 }
 
@@ -144,7 +145,7 @@ func TestUpsertRolePermissions_Valid(t *testing.T) {
 	h := handler.NewRolesHandler(cache, repo, testCfg())
 
 	body, _ := json.Marshal(map[string]bool{
-		"canCreateLinks": true,
+		"canCreateLinks":  true,
 		"canViewOwnLinks": true,
 	})
 	rec := httptest.NewRecorder()
@@ -156,7 +157,6 @@ func TestUpsertRolePermissions_Valid(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	// проверяем что кеш обновился
 	p := cache.Get("editor")
 	if !p.CanCreateLinks || !p.CanViewOwnLinks {
 		t.Errorf("cache not updated: %+v", p)
@@ -203,7 +203,6 @@ func TestPermToStringSlice_OnlyTrueFlags(t *testing.T) {
 			Role:            "tester",
 			CanCreateLinks:  true,
 			CanViewOwnLinks: true,
-			// остальные false
 		},
 	)
 	h := handler.NewRolesHandler(cache, &stubRolesRepo{}, testCfg())
@@ -238,9 +237,10 @@ func TestPermToStringSlice_OnlyTrueFlags(t *testing.T) {
 var errHandlerStub = &handlerErr{"stub"}
 
 type handlerErr struct{ msg string }
+
 func (e *handlerErr) Error() string { return e.msg }
 
-func chiRequest(method, url string, body interface{ Read([]byte) (int, error); }, params chi.RouteParams) *http.Request {
+func chiRequest(method, url string, body io.Reader, params chi.RouteParams) *http.Request {
 	var req *http.Request
 	if body != nil {
 		req = httptest.NewRequest(method, url, body)
