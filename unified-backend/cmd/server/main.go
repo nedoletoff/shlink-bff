@@ -142,8 +142,11 @@ func main() {
 	})
 
 	// ── Server ────────────────────────────────────────────────────────────────
+	// cfg.HTTPAddr уже содержит валидный listen-адрес (":8080" или "0.0.0.0:8080").
+	// cfg.Port НЕ использовать: при HTTP_ADDR=0.0.0.0:8080 TrimPrefix не срабатывает
+	// и ":" + cfg.Port = ":0.0.0.0:8080" → too many colons in address.
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
+		Addr:         cfg.HTTPAddr,
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -151,7 +154,7 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("server starting", "port", cfg.Port)
+		slog.Info("server starting", "port", cfg.HTTPAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "err", err)
 			os.Exit(1)
