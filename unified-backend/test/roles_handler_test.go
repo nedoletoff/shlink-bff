@@ -121,7 +121,9 @@ func TestGetRole_KnownRole(t *testing.T) {
 	}
 }
 
-func TestGetRole_UnknownRoleReturnsZeroPerms(t *testing.T) {
+// TestGetRole_UnknownRoleReturnsMinimalDefaults verifies that an unknown role
+// falls back to DefaultUserPermissions (own-only flags), not an all-false struct.
+func TestGetRole_UnknownRoleReturnsMinimalDefaults(t *testing.T) {
 	h := newRolesHandler()
 	w, r := newChiRequest(http.MethodGet, "/api/admin/roles/ghost", "", "role", "ghost")
 	h.GetRole(w, r)
@@ -131,8 +133,18 @@ func TestGetRole_UnknownRoleReturnsZeroPerms(t *testing.T) {
 	}
 	var p domain.RolePermissions
 	_ = json.NewDecoder(w.Body).Decode(&p)
-	if p.CanViewAllLinks || p.CanCreateLinks || p.CanManageUsers {
-		t.Error("unknown role: expected all-false permissions")
+	// minimal defaults: own-only flags are true, elevated flags are false
+	if !p.CanViewOwnLinks {
+		t.Error("unknown role: CanViewOwnLinks should be true (minimal default)")
+	}
+	if p.CanViewAllLinks {
+		t.Error("unknown role: CanViewAllLinks must be false (no elevation)")
+	}
+	if p.CanManageUsers {
+		t.Error("unknown role: CanManageUsers must be false")
+	}
+	if p.CanManageRoles {
+		t.Error("unknown role: CanManageRoles must be false")
 	}
 }
 
