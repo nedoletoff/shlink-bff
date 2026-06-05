@@ -89,10 +89,12 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Public
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+	// Public — health probes (both variants for docker/k8s compatibility)
+	healthFn := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
+	}
+	r.Get("/health", healthFn)
+	r.Get("/healthz", healthFn)
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
@@ -131,7 +133,6 @@ func main() {
 			r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
 			r.Get("/api/admin/logs", adminH.ListLogs)
 
-			// Roles — используем RolesHandler: обновляет PermissionsCache без рестарта
 			r.Get("/api/admin/roles", rolesH.ListRoles)
 			r.Get("/api/admin/roles/{role}", rolesH.GetRole)
 			r.Put("/api/admin/roles/{role}/permissions", rolesH.UpsertRolePermissions)
@@ -142,9 +143,6 @@ func main() {
 	})
 
 	// ── Server ────────────────────────────────────────────────────────────────
-	// cfg.HTTPAddr уже содержит валидный listen-адрес (":8080" или "0.0.0.0:8080").
-	// cfg.Port НЕ использовать: при HTTP_ADDR=0.0.0.0:8080 TrimPrefix не срабатывает
-	// и ":" + cfg.Port = ":0.0.0.0:8080" → too many colons in address.
 	srv := &http.Server{
 		Addr:         cfg.HTTPAddr,
 		Handler:      r,
