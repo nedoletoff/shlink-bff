@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"testing"
 
 	"unified-backend/internal/domain"
@@ -9,17 +10,17 @@ import (
 
 // rbacCase describes one RBAC scenario: permissions + expected outcomes.
 type rbacCase struct {
-	name   string
-	perms  domain.RolePermissions
+	name  string
+	perms domain.RolePermissions
 	// FilterShortURLsByUser expectations
 	ownedCodes   []string
 	allURLs      []shlink.ShortURL
 	wantURLCount int
 	// CanModifyShortCodeByPerms expectations
-	wantCanEditAll  bool
-	wantCanEditOwn  bool
-	wantCanDelAll   bool
-	wantCanDelOwn   bool
+	wantCanEditAll bool
+	wantCanEditOwn bool
+	wantCanDelAll  bool
+	wantCanDelOwn  bool
 }
 
 var rbacMatrix = []rbacCase{
@@ -29,7 +30,7 @@ var rbacMatrix = []rbacCase{
 		allURLs: []shlink.ShortURL{
 			{ShortCode: "a"}, {ShortCode: "b"}, {ShortCode: "c"},
 		},
-		ownedCodes:   []string{"a"}, // ownership irrelevant for CanViewAllLinks
+		ownedCodes:   []string{"a"},
 		wantURLCount: 3,
 		wantCanEditAll: true, wantCanEditOwn: true,
 		wantCanDelAll:  true, wantCanDelOwn:  true,
@@ -55,21 +56,21 @@ var rbacMatrix = []rbacCase{
 			{ShortCode: "x"}, {ShortCode: "y"},
 		},
 		ownedCodes:   []string{"x"},
-		wantURLCount: 2, // CanViewAllLinks=true → sees all
+		wantURLCount: 2,
 		wantCanEditAll: false, wantCanEditOwn: false,
 		wantCanDelAll:  false, wantCanDelOwn:  false,
 	},
 	{
 		name: "no_view_permission",
 		perms: domain.RolePermissions{
-			Role:        "creator_only",
+			Role:           "creator_only",
 			CanCreateLinks: true,
 		},
 		allURLs: []shlink.ShortURL{
 			{ShortCode: "z"},
 		},
 		ownedCodes:   []string{"z"},
-		wantURLCount: 0, // neither CanViewOwnLinks nor CanViewAllLinks
+		wantURLCount: 0,
 		wantCanEditAll: false, wantCanEditOwn: false,
 		wantCanDelAll:  false, wantCanDelOwn:  false,
 	},
@@ -86,7 +87,7 @@ var rbacMatrix = []rbacCase{
 		ownedCodes:   nil,
 		wantURLCount: 2,
 		wantCanEditAll: false, wantCanEditOwn: false,
-		wantCanDelAll:  true,  wantCanDelOwn:  false,
+		wantCanDelAll:  true, wantCanDelOwn:  false,
 	},
 	{
 		name: "own_stats_only",
@@ -145,8 +146,7 @@ func TestEnforceSlugPrefix_AdminNoPrefix(t *testing.T) {
 	svc := newShlinkService(domain.DefaultAdminPermissions(domain.RoleAdmin))
 	admin := &domain.User{Role: domain.RoleAdmin, Sub: "admin1", SlugPrefix: "adm-"}
 
-	// Admin with CanViewAllLinks — prefix not enforced
-	result, err := svc.EnforceSlugPrefix(nil, admin, strPtr("my-custom-slug"))
+	result, err := svc.EnforceSlugPrefix(context.TODO(), admin, strPtr("my-custom-slug"))
 	if err != nil {
 		t.Fatalf("admin: unexpected error: %v", err)
 	}
@@ -159,14 +159,12 @@ func TestEnforceSlugPrefix_UserPrefixEnforced(t *testing.T) {
 	svc := newShlinkService(domain.DefaultUserPermissions(domain.RoleUser))
 	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
 
-	// Provide slug without prefix → error
-	_, err := svc.EnforceSlugPrefix(nil, user, strPtr("no-prefix"))
+	_, err := svc.EnforceSlugPrefix(context.TODO(), user, strPtr("no-prefix"))
 	if err == nil {
 		t.Error("expected error when slug doesn't start with user prefix")
 	}
 
-	// Provide slug with correct prefix → OK
-	result, err := svc.EnforceSlugPrefix(nil, user, strPtr("u1-link"))
+	result, err := svc.EnforceSlugPrefix(context.TODO(), user, strPtr("u1-link"))
 	if err != nil {
 		t.Fatalf("valid slug: unexpected error: %v", err)
 	}
@@ -183,7 +181,7 @@ func TestEnforceSlugPrefix_NoCreatePermission(t *testing.T) {
 	svc := newShlinkService(p)
 	user := &domain.User{Role: "viewer", Sub: "v1"}
 
-	_, err := svc.EnforceSlugPrefix(nil, user, nil)
+	_, err := svc.EnforceSlugPrefix(context.TODO(), user, nil)
 	if err == nil {
 		t.Error("viewer with CanCreateLinks=false must be denied")
 	}
@@ -191,15 +189,15 @@ func TestEnforceSlugPrefix_NoCreatePermission(t *testing.T) {
 
 func TestEnforceSlugPrefix_NoSlugAndMustProvide(t *testing.T) {
 	p := domain.RolePermissions{
-		Role:                   "strictuser",
-		CanCreateLinks:         true,
+		Role:                    "strictuser",
+		CanCreateLinks:          true,
 		CanCreateWithCustomSlug: true,
 		// CanCreateWithoutSlug = false
 	}
 	svc := newShlinkService(p)
 	user := &domain.User{Role: "strictuser", Sub: "s1", SlugPrefix: ""}
 
-	_, err := svc.EnforceSlugPrefix(nil, user, nil)
+	_, err := svc.EnforceSlugPrefix(context.TODO(), user, nil)
 	if err == nil {
 		t.Error("role without CanCreateWithoutSlug must be denied when no slug provided")
 	}

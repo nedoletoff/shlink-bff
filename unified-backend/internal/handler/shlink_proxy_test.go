@@ -27,23 +27,19 @@ func (s *stubRolesRepoH) GetAll(_ context.Context) ([]domain.RolePermissions, er
 }
 
 // stubOwnerRepo реализует интерфейс URLOwnershipRepository для тестов без БД.
-// Использует простую in-memory map.
 type stubOwnerRepo struct {
-	// ownerSub → []shortCode
-	byOwner  map[string][]string
-	// shortCode → ownerSub
-	ownedBy  map[string]string
-	// softDeleted short_codes
-	deleted  map[string]bool
-	saveCalls int
+	byOwner         map[string][]string
+	ownedBy         map[string]string
+	deleted         map[string]bool
+	saveCalls       int
 	softDeleteCalls int
 }
 
 func newStubOwnerRepo() *stubOwnerRepo {
 	return &stubOwnerRepo{
 		byOwner: make(map[string][]string),
-		ownedBy:  make(map[string]string),
-		deleted:  make(map[string]bool),
+		ownedBy: make(map[string]string),
+		deleted: make(map[string]bool),
 	}
 }
 
@@ -136,12 +132,6 @@ func userReq(method, target string, user *domain.User, body []byte) *http.Reques
 	}
 	ctx := middleware.WithUser(r.Context(), user)
 	return r.WithContext(ctx)
-}
-
-func okHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
 }
 
 // ─── ListShortURLs ─────────────────────────────────────────────────────────────
@@ -312,7 +302,7 @@ func TestUpdateShortURL_NonOwner_Forbidden(t *testing.T) {
 	defer shlinkSrv.Close()
 
 	ownerRepo := newStubOwnerRepo()
-	_ = ownerRepo.Save(context.Background(), "abc", "u1", "") // owned by u1
+	_ = ownerRepo.Save(context.Background(), "abc", "u1", "")
 
 	cfg := &config.Config{AdminRole: "admin", ShlinkURL: shlinkSrv.server.URL, ShlinkDefaultDomain: "http://s.local"}
 	perms := []domain.RolePermissions{
@@ -321,7 +311,7 @@ func TestUpdateShortURL_NonOwner_Forbidden(t *testing.T) {
 	h := newProxyHandler(perms, ownerRepo, shlinkSrv.server.URL, cfg)
 
 	body, _ := json.Marshal(map[string]string{"title": "new title"})
-	user := &domain.User{Sub: "u2", Role: "user", ShlinkAPIKey: "key"} // u2 tries to edit u1's link
+	user := &domain.User{Sub: "u2", Role: "user", ShlinkAPIKey: "key"}
 
 	r := userReq(http.MethodPatch, "/api/shlink/short-urls/abc", user, body)
 	rctx := chi.NewRouteContext()
