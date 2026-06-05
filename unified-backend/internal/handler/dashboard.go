@@ -118,7 +118,6 @@ func (h *DashboardHandler) GetUsersActivity(w http.ResponseWriter, r *http.Reque
 		period = 30
 	}
 
-	// Загружаем всех пользователей из БД
 	dbUsers, err := h.userRepo.ListAll(r.Context())
 	if err != nil {
 		slog.Error("dashboard/users: list users failed", "err", err)
@@ -126,13 +125,11 @@ func (h *DashboardHandler) GetUsersActivity(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Загружаем все ссылки через admin API key (у текущего юзера — admin)
 	urlsResp, err := h.shlinkSvc.Client().GetShortURLs(r.Context(), user.ShlinkAPIKey, "itemsPerPage=1000")
 	if err != nil {
 		slog.Warn("dashboard/users: get short-urls failed", "err", err)
 	}
 
-	// Строим map: slug_prefix -> (linksCount, visitsTotal, lastDateCreated)
 	type prefixStat struct {
 		LinksCount  int
 		VisitsTotal int
@@ -141,8 +138,6 @@ func (h *DashboardHandler) GetUsersActivity(w http.ResponseWriter, r *http.Reque
 	prefixStats := map[string]*prefixStat{}
 	if urlsResp != nil {
 		for _, u := range urlsResp.ShortURLs.Data {
-			// Определяем prefix как первый сегмент shortCode до первого '-', если есть.
-			// Более надёжно: ищем пользователя чей slug_prefix является префиксом shortCode.
 			for _, dbU := range dbUsers {
 				if dbU.SlugPrefix != "" && strings.HasPrefix(u.ShortCode, dbU.SlugPrefix) {
 					ps := prefixStats[dbU.Sub]
@@ -191,7 +186,6 @@ func (h *DashboardHandler) GetUsersActivity(w http.ResponseWriter, r *http.Reque
 		})
 	}
 
-	// newLinksPerDay — считаем из дат создания ссылок
 	const dayFmt = "2006-01-02"
 	now := time.Now()
 	newLinksBuckets := map[string]int{}
@@ -237,43 +231,13 @@ func (h *DashboardHandler) GetUrlsStats(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Запрашиваем визиты за 7 дней для подсчёта visitsToday и visits7d
 	now := time.Now()
 	startDate7d := now.AddDate(0, 0, -6).Format("2006-01-02")
 	endDate := now.Format("2006-01-02")
 	today := now.Format("2006-01-02")
 
-	visitsResp, err := h.shlinkSvc.Client().GetNonOrphanVisits(r.Context(), user.ShlinkAPIKey, startDate7d, endDate, 0)
-
-	// visits7dMap[shortCode] = (today, 7d)
-	type shortCodeVisits struct {
-		Today int
-		Days7 int
-	}
-	visitsMap := map[string]*shortCodeVisits{}
-	if err == nil && visitsResp != nil {
-		for _, v := range visitsResp.Visits.Data {
-			// /non-orphan-visits не содержит shortCode напрямую;
-			// используем дату — только агрегированные by-date цифры нам нужны.
-			// В данном случае просто считаем today/7d по всем ссылкам —
-			// точная разбивка per-shortCode требует N запросов, что дорого.
-			_ = v
-		}
-	}
-
-	// Считаем visitsToday и visits7d из VisitsSummary + дополнительного запроса
-	// GetShortURLVisits только если нужна точность; иначе используем total как visits7d.
-	// Для visitsToday делаем один запрос GetNonOrphanVisits за сегодня.
-	type todayVisit struct {
-		Date string `json:"date"`
-	}
-	todayMap := map[string]int{} // shortCode -> visits today (приближение через total за today)
-	days7Map := map[string]int{} // shortCode -> visits 7d
-
-	// Стратегия: для каждой ссылки считаем из уже полученных визитов non-orphan по дате.
-	// non-orphan не даёт shortCode, поэтому используем индивидуальный запрос только для
-	// топовых ссылок (первые 50 по total). Остальные — оставляем 0.
 	urls := urlsResp.ShortURLs.Data
+
 	sorted := make([]int, len(urls))
 	for i := range sorted {
 		sorted[i] = i
@@ -281,6 +245,9 @@ func (h *DashboardHandler) GetUrlsStats(w http.ResponseWriter, r *http.Request) 
 	sort.Slice(sorted, func(a, b int) bool {
 		return urls[sorted[a]].VisitsSummary.Total > urls[sorted[b]].VisitsSummary.Total
 	})
+
+	todayMap := map[string]int{}
+	days7Map := map[string]int{}
 
 	limit := 50
 	if len(sorted) < limit {
@@ -311,7 +278,6 @@ func (h *DashboardHandler) GetUrlsStats(w http.ResponseWriter, r *http.Request) 
 		todayMap[u.ShortCode] = td
 		days7Map[u.ShortCode] = t7
 	}
-	_ = visitsMap // used above for potential extension
 
 	type urlStatRow struct {
 		ShortCode   string   `json:"shortCode"`
