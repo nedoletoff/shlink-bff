@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -83,9 +82,7 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// RBAC: проверяем права на просмотр детальной страницы.
-	// admin (CanViewAllLinks) → пропускаем.
-	// обычный пользователь с CanViewOwnLinks → проверяем ownership в url_ownership.
+	// RBAC: admin видит всё; обычный пользователь — только свои ссылки через ownership.
 	perms := h.svc.Perms(user)
 	if !perms.CanViewAllLinks {
 		if !perms.CanViewOwnLinks {
@@ -93,7 +90,7 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		isOwner, ownerErr := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
-		if ownerErr != nil && !errors.Is(ownerErr, errors.New("no rows")) {
+		if ownerErr != nil {
 			slog.Error("url detail: ownership check failed", "shortCode", shortCode, "err", ownerErr)
 			writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 			return
@@ -149,7 +146,7 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		}
 
 		ua := strings.ToLower(v.UserAgent)
-		dev := urlDetailDetectDevice(ua)
+		dev := urlDetailDevice(ua)
 		switch dev {
 		case "mobile":
 			mobile++
@@ -158,15 +155,15 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		default:
 			desktop++
 		}
-		browsersMap[urlDetailParseBrowser(ua)]++
-		osMap[urlDetailParseOS(ua)]++
+		browsersMap[urlDetailBrowser(ua)]++
+		osMap[urlDetailOS(ua)]++
 
 		visitRows = append(visitRows, visitRow{
 			Date:    v.Date,
-			Country: nullStrPtr(v.VisitLocation.CountryName),
-			Referer: nullStrPtr(v.Referer),
-			Browser: urlDetailParseBrowser(ua),
-			OS:      urlDetailParseOS(ua),
+			Country: urlDetailNullStr(v.VisitLocation.CountryName),
+			Referer: urlDetailNullStr(v.Referer),
+			Browser: urlDetailBrowser(ua),
+			OS:      urlDetailOS(ua),
 			Device:  dev,
 		})
 	}
@@ -197,14 +194,14 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, resp, http.StatusOK)
 }
 
-func nullStrPtr(s string) *string {
+func urlDetailNullStr(s string) *string {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
 	return &s
 }
 
-func urlDetailDetectDevice(ua string) string {
+func urlDetailDevice(ua string) string {
 	if strings.Contains(ua, "mobi") || strings.Contains(ua, "android") {
 		return "mobile"
 	}
@@ -214,7 +211,7 @@ func urlDetailDetectDevice(ua string) string {
 	return "desktop"
 }
 
-func urlDetailParseBrowser(ua string) string {
+func urlDetailBrowser(ua string) string {
 	switch {
 	case strings.Contains(ua, "firefox"):
 		return "Firefox"
@@ -231,7 +228,7 @@ func urlDetailParseBrowser(ua string) string {
 	}
 }
 
-func urlDetailParseOS(ua string) string {
+func urlDetailOS(ua string) string {
 	switch {
 	case strings.Contains(ua, "windows"):
 		return "Windows"

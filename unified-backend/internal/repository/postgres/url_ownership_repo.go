@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,9 +27,6 @@ func NewURLOwnershipRepository(pool *pgxpool.Pool) *URLOwnershipRepository {
 	return &URLOwnershipRepository{pool: pool}
 }
 
-// errNoRows — sentinel для отсутствующей записи (не экспортируем).
-var errNoRows = errors.New("no rows")
-
 // Save сохраняет новую запись ownership.
 // При конфликте (повторное создание с тем же short_code+domain) — игнорируется (DO NOTHING).
 func (r *URLOwnershipRepository) Save(ctx context.Context, shortCode, ownerSub, domain string) error {
@@ -44,7 +40,6 @@ func (r *URLOwnershipRepository) Save(ctx context.Context, shortCode, ownerSub, 
 }
 
 // GetOwner возвращает owner_sub для данного short_code+domain.
-// Возвращает errNoRows если ссылка не найдена.
 func (r *URLOwnershipRepository) GetOwner(ctx context.Context, shortCode, domain string) (string, error) {
 	var ownerSub string
 	err := r.pool.QueryRow(ctx,
@@ -53,9 +48,6 @@ func (r *URLOwnershipRepository) GetOwner(ctx context.Context, shortCode, domain
 		shortCode, domain,
 	).Scan(&ownerSub)
 	if err != nil {
-		if isNoRows(err) {
-			return "", errNoRows
-		}
 		return "", err
 	}
 	return ownerSub, nil
@@ -78,7 +70,6 @@ func (r *URLOwnershipRepository) IsOwner(ctx context.Context, shortCode, domain,
 }
 
 // SoftDelete помечает ссылку как удалённую (заполняет deleted_at и deleted_by).
-// Не изменяет запись если она уже удалена.
 func (r *URLOwnershipRepository) SoftDelete(ctx context.Context, shortCode, domain, deletedBy string) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE url_ownership
@@ -122,7 +113,7 @@ func (r *URLOwnershipRepository) GetByOwner(ctx context.Context, ownerSub string
 	return records, rows.Err()
 }
 
-// GetShortCodeSet возвращает set активных short_code владельца (для последующей фильтрации списка ссылок).
+// GetShortCodeSet возвращает set активных short_code владельца.
 func (r *URLOwnershipRepository) GetShortCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT short_code FROM url_ownership
@@ -143,12 +134,4 @@ func (r *URLOwnershipRepository) GetShortCodeSet(ctx context.Context, ownerSub s
 		set[sc] = struct{}{}
 	}
 	return set, rows.Err()
-}
-
-// isNoRows проверяет является ли ошибка «запись не найдена» от pgx.
-func isNoRows(err error) bool {
-	if err == nil {
-		return false
-	}
-	return err.Error() == "no rows in result set"
 }
