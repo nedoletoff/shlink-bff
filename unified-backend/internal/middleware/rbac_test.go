@@ -35,12 +35,6 @@ func userCtx(u *domain.User) context.Context {
 	return middleware.WithUser(context.Background(), u)
 }
 
-func okHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-}
-
 // ── AdminOnly ─────────────────────────────────────────────────────────────────
 
 func TestAdminOnly_AdminRole_Passes(t *testing.T) {
