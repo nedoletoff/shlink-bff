@@ -73,6 +73,7 @@ func main() {
 	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo)
 	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
 	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
+	rolesH     := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
 	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
 	settingsH  := handler.NewSettingsHandler(cfg, shlinkSvc)
 
@@ -130,9 +131,10 @@ func main() {
 			r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
 			r.Get("/api/admin/logs", adminH.ListLogs)
 
-			r.Get("/api/admin/roles", adminH.ListRoles)
-			r.Get("/api/admin/roles/{role}", adminH.GetRole)
-			r.Put("/api/admin/roles/{role}/permissions", adminH.UpdateRolePermissions)
+			// Roles — используем RolesHandler: обновляет PermissionsCache без рестарта
+			r.Get("/api/admin/roles", rolesH.ListRoles)
+			r.Get("/api/admin/roles/{role}", rolesH.GetRole)
+			r.Put("/api/admin/roles/{role}/permissions", rolesH.UpsertRolePermissions)
 
 			r.Get("/api/admin/settings", adminH.GetSettings)
 			r.Patch("/api/admin/settings", adminH.PatchSettings)

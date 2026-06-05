@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -117,31 +116,6 @@ func (h *AdminHandler) ListLogs(w http.ResponseWriter, r *http.Request) {
 		"perPage": perPage,
 		"total":   result.Total,
 	}, http.StatusOK)
-}
-
-// GET /api/admin/roles
-func (h *AdminHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.rolesRepo.GetAll(r.Context())
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, rows, http.StatusOK)
-}
-
-// GET /api/admin/roles/{role}
-func (h *AdminHandler) GetRole(w http.ResponseWriter, r *http.Request) {
-	role := chi.URLParam(r, "role")
-	if strings.TrimSpace(role) == "" {
-		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
-		return
-	}
-	row, err := h.rolesRepo.GetByRole(r.Context(), role)
-	if err != nil || row == nil {
-		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
-		return
-	}
-	writeJSON(w, row, http.StatusOK)
 }
 
 // parsePositiveInt — небольшой локальный helper
@@ -334,58 +308,13 @@ func (h *AdminHandler) UpdateSlugPrefix(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
-type rolePermissionsPayload struct {
-	Permissions []string `json:"permissions"`
-}
-
-// PUT /api/admin/roles/{role}/permissions
-func (h *AdminHandler) UpdateRolePermissions(w http.ResponseWriter, r *http.Request) {
-	role := chi.URLParam(r, "role")
-	if strings.TrimSpace(role) == "" {
-		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
-		return
-	}
-
-	body, _ := io.ReadAll(r.Body)
-
-	var p domain.RolePermissions
-	if err := json.Unmarshal(body, &p); err != nil {
-		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
-		return
-	}
-	p.Role = role
-
-	if err := h.rolesRepo.Upsert(r.Context(), &p); err != nil {
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
-		return
-	}
-
-	actor := middleware.UserFromCtx(r.Context())
-	actorSub5, actorRole5, actorUsername5 := "", "", ""
-	if actor != nil {
-		actorSub5 = actor.Sub
-		actorRole5 = string(actor.Role)
-		actorUsername5 = actor.Username
-	}
-	h.recordAuditAsync(&domain.AuditEntry{
-		UserSub:  actorSub5,
-		Username: actorUsername5,
-		Role:     actorRole5,
-		Action:   "admin.role.permissions.update",
-		Result:   "success",
-		Details:  map[string]any{"body": string(body)},
-	})
-
-	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
-}
-
 // GET /api/admin/settings
 func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
-		"oidcEnabled":        true,
-		"proxyAuthEnabled":   true,
-		"shlinkIntegration":  true,
-		"auditEnabled":       h.auditRepo != nil,
+		"oidcEnabled":       true,
+		"proxyAuthEnabled":  true,
+		"shlinkIntegration": true,
+		"auditEnabled":      h.auditRepo != nil,
 	}, http.StatusOK)
 }
 
@@ -409,6 +338,3 @@ func (h *AdminHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	})
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
-
-// stubbed slog reference to avoid unused import if logging removed later
-var _ = slog.Info
