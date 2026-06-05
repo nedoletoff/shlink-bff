@@ -42,7 +42,7 @@ func (c *PermissionsCache) Load(ctx context.Context) error {
 	return nil
 }
 
-// Get возвращает permissions для роли.
+// Get возвращает permissions для одной роли.
 // Если роль не найдена и это adminRole — возвращает DefaultAdminPermissions.
 // Иначе — DefaultUserPermissions (deny all management флаги).
 func (c *PermissionsCache) Get(role string) domain.RolePermissions {
@@ -58,6 +58,39 @@ func (c *PermissionsCache) Get(role string) domain.RolePermissions {
 	}
 	slog.Warn("permissions cache: unknown role, using minimal defaults", "role", role)
 	return domain.DefaultUserPermissions(role)
+}
+
+// GetMerged возвращает объединённые permissions для набора ролей (OR-семантика).
+// Если пользователь имеет несколько ролей — получает все флаги, разрешённые хотя бы в одной.
+// Поле Role в результате — пустая строка (merged не привязан к одной роли).
+func (c *PermissionsCache) GetMerged(roles []string) domain.RolePermissions {
+	if len(roles) == 0 {
+		return domain.RolePermissions{}
+	}
+	if len(roles) == 1 {
+		return c.Get(roles[0])
+	}
+	merged := domain.RolePermissions{Role: ""}
+	for _, r := range roles {
+		p := c.Get(r)
+		merged.CanViewOwnLinks = merged.CanViewOwnLinks || p.CanViewOwnLinks
+		merged.CanViewAllLinks = merged.CanViewAllLinks || p.CanViewAllLinks
+		merged.CanCreateLinks = merged.CanCreateLinks || p.CanCreateLinks
+		merged.CanCreateWithCustomSlug = merged.CanCreateWithCustomSlug || p.CanCreateWithCustomSlug
+		merged.CanCreateWithoutSlug = merged.CanCreateWithoutSlug || p.CanCreateWithoutSlug
+		merged.CanEditOwnLinks = merged.CanEditOwnLinks || p.CanEditOwnLinks
+		merged.CanEditAllLinks = merged.CanEditAllLinks || p.CanEditAllLinks
+		merged.CanDeleteOwnLinks = merged.CanDeleteOwnLinks || p.CanDeleteOwnLinks
+		merged.CanDeleteAllLinks = merged.CanDeleteAllLinks || p.CanDeleteAllLinks
+		merged.CanManageOwnTags = merged.CanManageOwnTags || p.CanManageOwnTags
+		merged.CanManageAllTags = merged.CanManageAllTags || p.CanManageAllTags
+		merged.CanViewOwnStats = merged.CanViewOwnStats || p.CanViewOwnStats
+		merged.CanViewAllStats = merged.CanViewAllStats || p.CanViewAllStats
+		merged.CanViewAuditLogs = merged.CanViewAuditLogs || p.CanViewAuditLogs
+		merged.CanManageUsers = merged.CanManageUsers || p.CanManageUsers
+		merged.CanManageRoles = merged.CanManageRoles || p.CanManageRoles
+	}
+	return merged
 }
 
 // Set обновляет одну роль в кеше (вызывается после Upsert в БД).

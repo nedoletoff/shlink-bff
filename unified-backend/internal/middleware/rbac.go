@@ -29,8 +29,9 @@ func AdminOnly(adminRole string, auditRepo *postgres.AuditRepository) func(http.
 	}
 }
 
-// RequirePermission проверяет конкретный флаг permissions через PermissionsCache.
-// Используется для гранулярного контроля отдельных эндпоинтов.
+// RequirePermission проверяет конкретный флаг permissions с учётом всех ролей пользователя.
+// Использует OR-семантику: разрешение выдаётся, если хотя бы одна роль его имеет.
+// Роли берутся из CtxKeyRoles (все Keycloak-группы) или fallback на user.Role из БД.
 func RequirePermission(
 	perms *service.PermissionsCache,
 	check func(domain.RolePermissions) bool,
@@ -43,7 +44,10 @@ func RequirePermission(
 				writeForbidden(w, r, user, auditRepo, "no identity")
 				return
 			}
-			p := perms.Get(user.Role)
+
+			// Собираем все роли: из контекста (Keycloak) + роль из БД (если не пересекается).
+			roles := effectiveRoles(r.Context(), user.Role)
+			p := perms.GetMerged(roles)
 			if !check(p) {
 				writeForbidden(w, r, user, auditRepo, "permission denied")
 				return
@@ -51,6 +55,30 @@ func RequirePermission(
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// effectiveRoles возвращает объединённый список ролей для проверки permissions.
+// Приоритет: все роли из Keycloak-групп (CtxKeyRoles), дополненные ролью из БД.
+func effectiveRoles(ctx context.Context, dbRole string) []string {
+	keycloakRoles := rolesFromCtx(ctx) // все роли из групп Keycloak
+	if len(keycloakRoles) == 0 {
+		// Fallback: только роль из БД (ROLE_SOURCE=db или заголовки отсутствуют)
+		if dbRole != "" {
+			return []string{dbRole}
+		}
+		return nil
+	}
+	// Добавляем dbRole если она не входит в keycloakRoles (ROLE_SOURCE=db)
+	seen := make(map[string]struct{}, len(keycloakRoles))
+	for _, r := range keycloakRoles {
+		seen[r] = struct{}{}
+	}
+	if dbRole != "" {
+		if _, ok := seen[dbRole]; !ok {
+			return append(keycloakRoles, dbRole)
+		}
+	}
+	return keycloakRoles
 }
 
 // RequireRole оставлен для обратной совместимости.
