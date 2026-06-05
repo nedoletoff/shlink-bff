@@ -3,7 +3,7 @@ import {
   Container, Title, Text, Group, Stack, Grid, Card,
   Badge, Table, Anchor, Select, Tabs, Loader, Center,
   Avatar, SimpleGrid, Progress, Tooltip, ThemeIcon,
-  RingProgress, Skeleton, Box,
+  Skeleton, Box,
 } from '@mantine/core';
 import {
   IconLink, IconClick, IconUsers, IconTrendingUp,
@@ -19,7 +19,7 @@ import { useIsAdmin } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import { formatDate } from '../utils/date';
 
-// ─── types ──────────────────────────────────────────────────────────────────
+// ─── types ────────────────────────────────────────────────────────────────────────────
 interface ClickPoint  { date: string; clicks: number; }
 interface TopLink {
   shortCode: string; shortUrl: string; longUrl: string;
@@ -52,7 +52,7 @@ interface DashboardData {
   };
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── helpers ──────────────────────────────────────────────────────────────────────────────
 const DAYS = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
 
 function trendIcon(val: number, prev: number) {
@@ -62,7 +62,7 @@ function trendIcon(val: number, prev: number) {
     : <IconArrowDownRight size={14} color="var(--mantine-color-red-5)" />;
 }
 
-// ─── KPI Card ────────────────────────────────────────────────────────────────
+// ─── KPI Card ──────────────────────────────────────────────────────────────────────────────
 function StatCard({
   icon, label, value, sub, color = 'blue', loading = false,
 }: {
@@ -97,76 +97,64 @@ function StatCard({
   );
 }
 
-// ─── Area chart ──────────────────────────────────────────────────────────────
+// ─── Area chart ──────────────────────────────────────────────────────────────────────────────
 function VisitsAreaChart({ data }: { data: ClickPoint[] }) {
   if (!data || data.length === 0)
     return <Center h={140}><Text c="dimmed" size="sm">Нет данных</Text></Center>;
-
-  const formatted = data.map(d => ({
-    date: d.date.slice(5),   // MM-DD
-    clicks: d.clicks,
-  }));
-
   return (
     <ResponsiveContainer width="100%" height={140}>
-      <AreaChart data={formatted} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+      <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -24 }}>
         <defs>
-          <linearGradient id="clicksGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%"  stopColor="#4dabf7" stopOpacity={0.35} />
-            <stop offset="95%" stopColor="#4dabf7" stopOpacity={0} />
+          <linearGradient id="visitsGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%"  stopColor="var(--mantine-color-blue-5)"  stopOpacity={0.3} />
+            <stop offset="95%" stopColor="var(--mantine-color-blue-5)"  stopOpacity={0.02} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--mantine-color-default-border)" />
-        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--mantine-color-gray-2)" />
+        <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={d => d.slice(5)} />
+        <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
         <RTooltip
-          contentStyle={{
-            background: 'var(--mantine-color-dark-7)',
-            border: '1px solid var(--mantine-color-dark-4)',
-            borderRadius: 6,
-            fontSize: 12,
-          }}
-          formatter={(v: number) => [v, 'Кликов']}
+          contentStyle={{ fontSize: 12, borderRadius: 6 }}
+          formatter={(v: number) => [v, 'Переходов']}
         />
-        <Area type="monotone" dataKey="clicks" stroke="#4dabf7" fill="url(#clicksGrad)" strokeWidth={2} dot={false} />
+        <Area
+          type="monotone" dataKey="clicks"
+          stroke="var(--mantine-color-blue-5)" strokeWidth={2}
+          fill="url(#visitsGrad)"
+        />
       </AreaChart>
     </ResponsiveContainer>
   );
 }
 
-// ─── Heatmap ─────────────────────────────────────────────────────────────────
-function HeatmapChart({ data }: { data: HeatCell[] }) {
-  if (!data || data.length === 0)
-    return <Center h={80}><Text c="dimmed" size="sm">Нет данных</Text></Center>;
-
-  const maxVal = Math.max(...data.map(d => d.value), 1);
-  const grid: Record<string, number> = {};
-  for (const d of data) grid[`${d.weekday}-${d.hour}`] = d.value;
+// ─── Heatmap ─────────────────────────────────────────────────────────────────────────────────
+function HeatmapChart({ cells }: { cells: HeatCell[] }) {
+  const maxVal = Math.max(...cells.map(c => c.value), 1);
+  const grid: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  cells.forEach(c => { grid[c.weekday][c.hour] = c.value; });
 
   return (
     <Box style={{ overflowX: 'auto' }}>
-      <Box style={{ display: 'grid', gridTemplateColumns: '32px repeat(24, 1fr)', gap: 2, minWidth: 520 }}>
-        <div />
+      <Box style={{ display: 'grid', gridTemplateColumns: 'auto repeat(24, 1fr)', gap: 2, minWidth: 580 }}>
+        <Box />
         {Array.from({ length: 24 }, (_, h) => (
-          <Text key={h} size="xs" c="dimmed" ta="center" style={{ lineHeight: 1.2 }}>
-            {h % 3 === 0 ? h : ''}
-          </Text>
+          <Text key={h} size="xs" c="dimmed" ta="center" style={{ fontSize: 9 }}>{h}</Text>
         ))}
-        {DAYS.map((day, wd) => (
+        {grid.map((row, wd) => (
           <>
-            <Text key={`lbl-${wd}`} size="xs" c="dimmed" style={{ alignSelf: 'center', lineHeight: 1.2 }}>
-              {day}
+            <Text key={`d${wd}`} size="xs" c="dimmed" style={{ fontSize: 10, paddingRight: 4, alignSelf: 'center' }}>
+              {DAYS[wd]}
             </Text>
-            {Array.from({ length: 24 }, (_, h) => {
-              const v = grid[`${wd}-${h}`] ?? 0;
-              const alpha = v === 0 ? 0 : 0.15 + (v / maxVal) * 0.85;
+            {row.map((val, hr) => {
+              const intensity = val ? Math.max(0.15, val / maxVal) : 0;
               return (
-                <Tooltip key={h} label={`${day} ${h}:00 — ${v} кл.`} withArrow position="top">
+                <Tooltip key={`${wd}-${hr}`} label={`${DAYS[wd]} ${hr}:00 — ${val} переходов`} withArrow>
                   <Box
                     style={{
-                      height: 14,
-                      borderRadius: 2,
-                      background: `rgba(77,171,247,${alpha})`,
+                      height: 14, borderRadius: 2,
+                      background: val
+                        ? `rgba(34,139,230,${intensity})`
+                        : 'var(--mantine-color-gray-1)',
                     }}
                   />
                 </Tooltip>
@@ -179,8 +167,8 @@ function HeatmapChart({ data }: { data: HeatCell[] }) {
   );
 }
 
-// ─── Top URLs tab ─────────────────────────────────────────────────────────────
-function UrlsTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
+// ─── Top URLs tab ────────────────────────────────────────────────────────────────────────────────
+function UrlsTab({ period }: { period: string }) {
   const navigate = useNavigate();
   const [urls, setUrls] = useState<TopLink[]>([]);
   const [loading, setLoading] = useState(true);
@@ -190,7 +178,7 @@ function UrlsTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
     api.get<{ urls: TopLink[] }>('/api/shlink/short-urls', {
       params: { page: 1, itemsPerPage: 10, orderBy: 'visits', period },
     })
-      .then(r => setUrls((r as any).shortUrls?.data ?? []))
+      .then((r: { shortUrls?: { data: TopLink[] } }) => setUrls(r.shortUrls?.data ?? []))
       .catch(() => setUrls([]))
       .finally(() => setLoading(false));
   }, [period]);
@@ -230,7 +218,7 @@ function UrlsTab({ period, isAdmin }: { period: string; isAdmin: boolean }) {
   );
 }
 
-// ─── Main component ──────────────────────────────────────────────────────────
+// ─── Main component ──────────────────────────────────────────────────────────────────────────────
 export function Dashboard() {
   const navigate  = useNavigate();
   const isAdmin   = useIsAdmin();
@@ -242,7 +230,7 @@ export function Dashboard() {
   useEffect(() => {
     setLoading(true);
     api.get<DashboardData>('/api/dashboard', { params: { period } })
-      .then(setData)
+      .then(d => setData(d))
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, [period]);
@@ -252,254 +240,239 @@ export function Dashboard() {
   const devices  = data?.devices;
   const users    = data?.users;
 
-  const devTotal = devices
-    ? (devices.devices.desktop + devices.devices.mobile + devices.devices.tablet) || 1
-    : 1;
-
-  // Сравниваем первую и вторую половины периода для trend
-  const clickArr  = visits?.clicksPerDay ?? [];
-  const half      = Math.floor(clickArr.length / 2);
-  const prevHalf  = clickArr.slice(0, half).reduce((s, d) => s + d.clicks, 0);
-  const currHalf  = clickArr.slice(half).reduce((s, d) => s + d.clicks, 0);
-
   return (
-    <Container fluid px={0}>
-      <Stack gap="lg">
-        {/* Header */}
-        <Group justify="space-between" wrap="nowrap">
-          <div>
-            <Title order={2} fw={700}>Дашборд</Title>
-            <Text size="sm" c="dimmed">Статистика и аналитика</Text>
-          </div>
-          <Select
-            size="xs"
-            value={period}
-            onChange={v => v && setPeriod(v)}
-            data={[
-              { value: '7',  label: '7 дней' },
-              { value: '30', label: '30 дней' },
-              { value: '90', label: '90 дней' },
-            ]}
-            w={110}
-            styles={{ input: { fontWeight: 600 } }}
-          />
-        </Group>
+    <Container size="xl" py="lg">
+      <Group justify="space-between" mb="lg">
+        <Stack gap={2}>
+          <Title order={2}>Дашборд</Title>
+          <Text c="dimmed" size="sm">Статистика за период</Text>
+        </Stack>
+        <Select
+          size="xs"
+          value={period}
+          onChange={v => v && setPeriod(v)}
+          data={[
+            { value: '7',  label: '7 дней' },
+            { value: '14', label: '14 дней' },
+            { value: '30', label: '30 дней' },
+            { value: '90', label: '90 дней' },
+          ]}
+          w={120}
+        />
+      </Group>
 
-        {/* KPI */}
-        <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
+      {/* KPI row */}
+      <SimpleGrid cols={{ base: 2, sm: 2, md: isAdmin ? 4 : 2 }} mb="lg">
+        <StatCard
+          icon={<IconLink size={14} />} label="Ссылок" color="blue" loading={loading}
+          value={overview?.linksCount ?? 0}
+        />
+        <StatCard
+          icon={<IconClick size={14} />} label="Переходов" color="teal" loading={loading}
+          value={overview?.visitsTotal ?? 0}
+          sub={visits && <>
+            {trendIcon(visits.clicksTotal, 0)}
+            <Text size="xs" c="dimmed">за {period} д.</Text>
+          </>}
+        />
+        {isAdmin && (
           <StatCard
-            icon={<IconLink size={14} />}
-            label="Активных ссылок"
-            value={loading ? '…' : (overview?.linksCount ?? 0)}
-            color="blue"
-            loading={loading}
+            icon={<IconUsers size={14} />} label="Пользователей" color="grape" loading={loading}
+            value={users?.length ?? 0}
           />
+        )}
+        {isAdmin && (
           <StatCard
-            icon={<IconClick size={14} />}
-            label="Переходов всего"
-            value={loading ? '…' : (overview?.visitsTotal ?? 0)}
-            color="teal"
-            loading={loading}
+            icon={<IconTrendingUp size={14} />} label="Активных" color="orange" loading={loading}
+            value={users?.filter(u => u.status === 'active').length ?? 0}
           />
-          <StatCard
-            icon={<IconTrendingUp size={14} />}
-            label={`Кликов за ${period} д.`}
-            value={loading ? '…' : (visits?.clicksTotal ?? 0)}
-            color="violet"
-            loading={loading}
-            sub={
-              !loading && [
-                trendIcon(currHalf, prevHalf),
-                <Text key="t" size="xs" c={currHalf >= prevHalf ? 'green' : 'red'}>
-                  {prevHalf > 0
-                    ? `${Math.abs(Math.round((currHalf - prevHalf) / prevHalf * 100))}% к пред. периоду`
-                    : 'Нет данных для сравнения'
-                  }
-                </Text>,
-              ]
-            }
-          />
-          {isAdmin && (
-            <StatCard
-              icon={<IconUsers size={14} />}
-              label="Пользователей"
-              value={loading ? '…' : (users?.length ?? 0)}
-              color="orange"
-              loading={loading}
-            />
-          )}
-        </SimpleGrid>
+        )}
+      </SimpleGrid>
 
-        {/* Clicks area chart */}
-        <Card withBorder p="md" radius="md">
-          <Group justify="space-between" mb="sm">
-            <Text fw={600} size="sm">Клики по дням</Text>
-            {!loading && visits && (
-              <Badge variant="light" color="blue" size="sm">
-                {visits.clicksTotal} всего
-              </Badge>
-            )}
-          </Group>
-          {loading ? <Skeleton height={140} radius="sm" /> : <VisitsAreaChart data={visits?.clicksPerDay ?? []} />}
-        </Card>
+      {/* Visits chart */}
+      <Card withBorder mb="lg" p="md">
+        <Text fw={600} size="sm" mb="xs">Переходы по дням</Text>
+        {loading
+          ? <Skeleton height={140} radius="sm" />
+          : <VisitsAreaChart data={visits?.clicksPerDay ?? []} />
+        }
+      </Card>
 
-        {/* Devices + Browsers + Users */}
-        <Grid gutter="sm">
-          {/* Devices */}
-          <Grid.Col span={{ base: 12, md: devices && isAdmin ? 4 : 6 }}>
-            <Card withBorder p="md" radius="md" h="100%">
-              <Text fw={600} size="sm" mb="md">Устройства</Text>
-              {loading ? (
-                <Stack gap="xs">{[1,2,3].map(i => <Skeleton key={i} height={20} radius="sm" />)}</Stack>
-              ) : (
-                <Stack gap="md">
-                  {[
-                    { label: 'Desktop', val: devices?.devices.desktop ?? 0, icon: <IconDeviceDesktop size={14} />, color: 'blue'   },
-                    { label: 'Mobile',  val: devices?.devices.mobile  ?? 0, icon: <IconDeviceMobile  size={14} />, color: 'teal'   },
-                    { label: 'Tablet',  val: devices?.devices.tablet  ?? 0, icon: <IconDeviceTablet  size={14} />, color: 'violet' },
-                  ].map(({ label, val, icon, color }) => (
-                    <div key={label}>
-                      <Group justify="space-between" mb={4}>
-                        <Group gap={6}>{icon}<Text size="sm">{label}</Text></Group>
-                        <Text size="sm" fw={600} ff="monospace">{val}</Text>
-                      </Group>
-                      <Progress value={(val / devTotal) * 100} color={color} size="xs" radius="xl" />
-                    </div>
+      {/* Device breakdown */}
+      <Grid mb="lg">
+        <Grid.Col span={{ base: 12, md: devices && isAdmin ? 4 : 6 }}>
+          <Card withBorder p="md" h="100%">
+            <Text fw={600} size="sm" mb="xs">Устройства</Text>
+            {loading ? <Skeleton height={80} /> : devices ? (
+              <Stack gap="xs">
+                {([
+                  ['desktop', 'Компьютер', <IconDeviceDesktop size={14} />],
+                  ['mobile',  'Мобильный', <IconDeviceMobile  size={14} />],
+                  ['tablet',  'Планшет',   <IconDeviceTablet  size={14} />],
+                ] as const).map(([key, label, icon]) => {
+                  const val  = devices.devices[key as keyof typeof devices.devices] ?? 0;
+                  const total = Object.values(devices.devices).reduce((a, b) => a + b, 0);
+                  const pct  = total ? Math.round(val / total * 100) : 0;
+                  return (
+                    <Group key={key} gap="xs">
+                      {icon}
+                      <Text size="xs" w={80}>{label}</Text>
+                      <Progress value={pct} flex={1} size="sm" color="blue" />
+                      <Text size="xs" c="dimmed" w={36} ta="right">{pct}%</Text>
+                    </Group>
+                  );
+                })}
+              </Stack>
+            ) : <Text c="dimmed" size="sm">Нет данных</Text>}
+          </Card>
+        </Grid.Col>
+
+        <Grid.Col span={{ base: 12, md: devices && isAdmin ? 4 : 6 }}>
+          <Card withBorder p="md" h="100%">
+            <Text fw={600} size="sm" mb="xs">Браузеры</Text>
+            {loading ? <Skeleton height={80} /> : devices?.browsers?.length ? (
+              <Stack gap={4}>
+                {devices.browsers.slice(0, 5).map(b => (
+                  <Group key={b.name} gap="xs" justify="space-between">
+                    <Text size="xs">{b.name}</Text>
+                    <Badge variant="light" size="xs">{b.count}</Badge>
+                  </Group>
+                ))}
+              </Stack>
+            ) : <Text c="dimmed" size="sm">Нет данных</Text>}
+          </Card>
+        </Grid.Col>
+
+        {isAdmin && (
+          <Grid.Col span={{ base: 12, md: 4 }}>
+            <Card withBorder p="md" h="100%">
+              <Text fw={600} size="sm" mb="xs">Операционные системы</Text>
+              {loading ? <Skeleton height={80} /> : devices?.os?.length ? (
+                <Stack gap={4}>
+                  {devices.os.slice(0, 5).map(o => (
+                    <Group key={o.name} gap="xs" justify="space-between">
+                      <Text size="xs">{o.name}</Text>
+                      <Badge variant="light" size="xs" color="grape">{o.count}</Badge>
+                    </Group>
                   ))}
                 </Stack>
-              )}
+              ) : <Text c="dimmed" size="sm">Нет данных</Text>}
             </Card>
           </Grid.Col>
+        )}
+      </Grid>
 
-          {/* Browsers */}
-          <Grid.Col span={{ base: 12, md: devices && isAdmin ? 4 : 6 }}>
-            <Card withBorder p="md" radius="md" h="100%">
-              <Text fw={600} size="sm" mb="md">Браузеры</Text>
-              {loading ? (
-                <Stack gap="xs">{[1,2,3,4].map(i => <Skeleton key={i} height={18} radius="sm" />)}</Stack>
-              ) : (
-                <Stack gap="xs">
-                  {(devices?.browsers ?? []).slice(0, 6).map((b, i) => {
-                    const total = (devices?.browsers ?? []).reduce((s, x) => s + x.count, 0) || 1;
-                    return (
-                      <div key={b.name}>
-                        <Group justify="space-between" mb={2}>
-                          <Text size="sm">{b.name}</Text>
-                          <Text size="xs" c="dimmed" ff="monospace">{b.count}</Text>
-                        </Group>
-                        <Progress value={(b.count / total) * 100} color={['blue','teal','violet','orange','green','red'][i % 6]} size="xs" radius="xl" />
-                      </div>
-                    );
-                  })}
-                </Stack>
-              )}
-            </Card>
-          </Grid.Col>
+      {/* Heatmap */}
+      {devices?.heatmap?.length ? (
+        <Card withBorder mb="lg" p="md">
+          <Text fw={600} size="sm" mb="xs">Активность по часам / дням</Text>
+          <HeatmapChart cells={devices.heatmap} />
+        </Card>
+      ) : null}
 
-          {/* Users (admin only) */}
+      {/* Users table (admin) */}
+      {isAdmin && users && (
+        <Card withBorder mb="lg" p="md">
+          <Text fw={600} size="sm" mb="xs">Пользователи</Text>
+          <Table highlightOnHover withTableBorder withColumnBorders={false}>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Пользователь</Table.Th>
+                <Table.Th>Email</Table.Th>
+                <Table.Th>Роль</Table.Th>
+                <Table.Th>Статус</Table.Th>
+                <Table.Th>Действия</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {users.map(u => (
+                <Table.Tr key={u.sub}>
+                  <Table.Td>
+                    <Group gap="xs">
+                      <Avatar size="sm" radius="xl" color="blue">
+                        {u.username.slice(0, 2).toUpperCase()}
+                      </Avatar>
+                      <Text size="sm">{u.username}</Text>
+                    </Group>
+                  </Table.Td>
+                  <Table.Td><Text size="sm" c="dimmed">{u.email}</Text></Table.Td>
+                  <Table.Td><Badge variant="light" size="sm">{u.role}</Badge></Table.Td>
+                  <Table.Td>
+                    <Badge
+                      variant="light" size="sm"
+                      color={u.status === 'active' ? 'green' : 'red'}
+                    >
+                      {u.status === 'active' ? 'Активен' : 'Отключён'}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Anchor
+                      size="xs"
+                      onClick={() => navigate(`/admin/users/${u.sub}`)}
+                    >
+                      Профиль
+                    </Anchor>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Card>
+      )}
+
+      {/* Links tabs */}
+      <Card withBorder p="md">
+        <Tabs defaultValue="top">
+          <Tabs.List mb="md">
+            <Tabs.Tab value="top">Популярные</Tabs.Tab>
+            {isAdmin && <Tabs.Tab value="recent">Последние</Tabs.Tab>}
+          </Tabs.List>
+          <Tabs.Panel value="top">
+            <UrlsTab period={period} />
+          </Tabs.Panel>
           {isAdmin && (
-            <Grid.Col span={{ base: 12, md: 4 }}>
-              <Card withBorder p="md" radius="md" h="100%">
-                <Group justify="space-between" mb="md">
-                  <Text fw={600} size="sm">Пользователи</Text>
-                  <Anchor size="xs" onClick={() => navigate('/admin/users')}>Все →</Anchor>
-                </Group>
-                {loading ? (
-                  <Stack gap="xs">{[1,2,3].map(i => <Skeleton key={i} height={36} radius="sm" />)}</Stack>
-                ) : (
-                  <Stack gap="xs">
-                    {(users ?? []).slice(0, 5).map(u => (
-                      <Group
-                        key={u.sub}
-                        justify="space-between"
+            <Tabs.Panel value="recent">
+              {overview?.recentLinks && (
+                <Table highlightOnHover withTableBorder withColumnBorders={false}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Ссылка</Table.Th>
+                      <Table.Th>Назначение</Table.Th>
+                      <Table.Th ta="right">Переходов</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {overview.recentLinks.map(u => (
+                      <Table.Tr
+                        key={u.shortCode}
                         style={{ cursor: 'pointer' }}
-                        onClick={() => navigate(`/admin/users/${u.sub}`)}
-                        p={4}
-                        styles={{ root: { borderRadius: 6, '&:hover': { background: 'var(--mantine-color-default-hover)' } } }}
+                        onClick={() => navigate(`/links/${u.shortCode}`)}
                       >
-                        <Group gap="xs">
-                          <Avatar size="xs" radius="xl" color={u.role === 'admin' ? 'red' : 'blue'}>
-                            {u.username[0]?.toUpperCase()}
-                          </Avatar>
-                          <div>
-                            <Text size="xs" fw={500}>{u.username}</Text>
-                            <Text size="xs" c="dimmed">{u.email}</Text>
-                          </div>
-                        </Group>
-                        <Badge
-                          variant="light"
-                          color={u.status === 'active' ? 'green' : 'gray'}
-                          size="xs"
-                        >
-                          {u.role}
-                        </Badge>
-                      </Group>
+                        <Table.Td>
+                          <Text size="sm" ff="monospace" c="blue">{u.shortCode}</Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text size="sm" truncate maw={340} c="dimmed">
+                            {u.title || u.longUrl}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td ta="right">
+                          <Badge variant="light" color="teal" size="sm">{u.visitsTotal}</Badge>
+                        </Table.Td>
+                      </Table.Tr>
                     ))}
-                  </Stack>
-                )}
-              </Card>
-            </Grid.Col>
-          )}
-        </Grid>
-
-        {/* Heatmap */}
-        <Card withBorder p="md" radius="md">
-          <Text fw={600} size="sm" mb="md">Тепловая карта активности</Text>
-          {loading
-            ? <Skeleton height={120} radius="sm" />
-            : <HeatmapChart data={devices?.heatmap ?? []} />
-          }
-        </Card>
-
-        {/* Tabs: top / recent */}
-        <Card withBorder p={0} radius="md" style={{ overflow: 'hidden' }}>
-          <Tabs defaultValue="top">
-            <Tabs.List px="md" pt="xs">
-              <Tabs.Tab value="top">Топ ссылок</Tabs.Tab>
-              {isAdmin && <Tabs.Tab value="recent">Последние</Tabs.Tab>}
-            </Tabs.List>
-
-            <Box p="md">
-              <Tabs.Panel value="top">
-                <UrlsTab period={period} isAdmin={isAdmin} />
-              </Tabs.Panel>
-
-              {isAdmin && (
-                <Tabs.Panel value="recent">
-                  {loading ? (
-                    <Center h={80}><Loader size="sm" /></Center>
-                  ) : (
-                    <Table highlightOnHover withTableBorder={false}>
-                      <Table.Thead>
-                        <Table.Tr>
-                          <Table.Th>Код</Table.Th>
-                          <Table.Th>Назначение</Table.Th>
-                          <Table.Th>Создана</Table.Th>
-                          <Table.Th ta="right">Кликов</Table.Th>
-                        </Table.Tr>
-                      </Table.Thead>
-                      <Table.Tbody>
-                        {(overview?.recentLinks ?? []).map(u => (
-                          <Table.Tr
-                            key={u.shortCode}
-                            style={{ cursor: 'pointer' }}
-                            onClick={() => navigate(`/admin/urls/${u.shortCode}`)}
-                          >
-                            <Table.Td><Text size="sm" ff="monospace" c="blue">{u.shortCode}</Text></Table.Td>
-                            <Table.Td><Text size="sm" truncate maw={280} c="dimmed">{u.title || u.longUrl}</Text></Table.Td>
-                            <Table.Td><Text size="xs" c="dimmed">{formatDate(u.longUrl)}</Text></Table.Td>
-                            <Table.Td ta="right"><Badge variant="light" size="xs">{u.visitsTotal}</Badge></Table.Td>
-                          </Table.Tr>
-                        ))}
-                      </Table.Tbody>
-                    </Table>
-                  )}
-                </Tabs.Panel>
+                  </Table.Tbody>
+                </Table>
               )}
-            </Box>
-          </Tabs>
-        </Card>
-      </Stack>
+            </Tabs.Panel>
+          )}
+        </Tabs>
+      </Card>
+
+      <Text size="xs" c="dimmed" ta="center" mt="lg">
+        Данные обновляются при каждом открытии дашборда · Период: {period} дней
+        {data && <> · {formatDate(new Date().toISOString())}</>}
+      </Text>
     </Container>
   );
 }
