@@ -19,17 +19,30 @@ import (
 	"unified-backend/internal/service"
 )
 
+// URLOwnershipRepo — интерфейс для ownership репозитория.
+// Конкретная реализация — postgres.URLOwnershipRepository.
+// В тестах подменяется stub-ом.
+type URLOwnershipRepo interface {
+	Save(ctx context.Context, shortCode, ownerSub, domain string) error
+	IsOwner(ctx context.Context, shortCode, domain, sub string) (bool, error)
+	SoftDelete(ctx context.Context, shortCode, domain, deletedBy string) error
+	GetShortCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error)
+}
+
+// Compile-time check: postgres.URLOwnershipRepository реализует URLOwnershipRepo.
+var _ URLOwnershipRepo = (*postgres.URLOwnershipRepository)(nil)
+
 type ShlinkProxyHandler struct {
 	shlinkSvc *service.ShlinkService
 	auditRepo *postgres.AuditRepository
-	ownerRepo *postgres.URLOwnershipRepository
+	ownerRepo URLOwnershipRepo
 	cfg       *config.Config
 }
 
 func NewShlinkProxyHandler(
 	svc *service.ShlinkService,
 	auditRepo *postgres.AuditRepository,
-	ownerRepo *postgres.URLOwnershipRepository,
+	ownerRepo URLOwnershipRepo,
 	cfg *config.Config,
 ) *ShlinkProxyHandler {
 	return &ShlinkProxyHandler{
@@ -258,8 +271,6 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 }
 
 // PUT /api/shlink/tags
-// Body: {"oldName": "...", "newName": "..."}
-// Требует CanManageAllTags (глобальное управление тегами).
 func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -279,14 +290,12 @@ func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// shlink PUT /rest/v3/tags: body {"oldName":"...","newName":"..."}, returns error only
 	if err := h.shlinkSvc.Client().RenameTag(r.Context(), user.ShlinkAPIKey, bytes.NewReader(bodyBytes)); err != nil {
 		slog.Error("proxy: rename tag failed", "sub", user.Sub, "err", err)
 		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadGateway)
 		return
 	}
 
-	// Extract oldName for audit log
 	var names struct{ OldName string `json:"oldName"` }
 	_ = json.Unmarshal(bodyBytes, &names)
 	h.recordAudit(r, user, "rename_tag", "success", map[string]any{"oldName": names.OldName})
@@ -294,7 +303,6 @@ func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 }
 
 // DELETE /api/shlink/tags/{tagName}
-// Требует CanManageAllTags.
 func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -314,7 +322,6 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// shlink DELETE /rest/v3/tags?tags[]=... accepts a slice
 	if err := h.shlinkSvc.Client().DeleteTags(r.Context(), user.ShlinkAPIKey, []string{tagName}); err != nil {
 		slog.Error("proxy: delete tag failed", "sub", user.Sub, "tag", tagName, "err", err)
 		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadGateway)
@@ -325,8 +332,7 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recordAudit — тонкая обёртка над AuditRepository.Record.
-// Не блокирует обработчик: ошибка логируется внутри Record.
+// recordAudit — не блокирует обработчик.
 func (h *ShlinkProxyHandler) recordAudit(
 	r *http.Request,
 	user *domain.User,
@@ -340,7 +346,7 @@ func (h *ShlinkProxyHandler) recordAudit(
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ip = xff
 	}
-	details := make(map[string]any, len(extra)+3)
+	details := make(map[string]any, len(extra)+2)
 	for k, v := range extra {
 		details[k] = v
 	}
