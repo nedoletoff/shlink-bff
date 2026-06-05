@@ -52,6 +52,14 @@ interface DashboardData {
   };
 }
 
+// Shlink proxy response shape for /api/shlink/short-urls
+interface ShlinkURLsResponse {
+  shortURLs: {
+    data: TopLink[];
+    pagination: { currentPage: number; pagesCount: number; itemsPerPage: number; itemsInCurrentPage: number; totalItems: number; };
+  };
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────────────────
 const DAYS = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
 
@@ -175,10 +183,10 @@ function UrlsTab({ period }: { period: string }) {
 
   useEffect(() => {
     setLoading(true);
-    api.get<{ urls: TopLink[] }>('/api/shlink/short-urls', {
+    api.get<ShlinkURLsResponse>('/api/shlink/short-urls', {
       params: { page: 1, itemsPerPage: 10, orderBy: 'visits', period },
     })
-      .then((r: { shortUrls?: { data: TopLink[] } }) => setUrls(r.shortUrls?.data ?? []))
+      .then(r => setUrls(r.shortURLs?.data ?? []))
       .catch(() => setUrls([]))
       .finally(() => setLoading(false));
   }, [period]);
@@ -283,196 +291,161 @@ export function Dashboard() {
         )}
         {isAdmin && (
           <StatCard
-            icon={<IconTrendingUp size={14} />} label="Активных" color="orange" loading={loading}
-            value={users?.filter(u => u.status === 'active').length ?? 0}
+            icon={<IconTrendingUp size={14} />} label="Посещений (период)" color="orange" loading={loading}
+            value={visits?.clicksTotal ?? 0}
           />
         )}
       </SimpleGrid>
 
-      {/* Visits chart */}
-      <Card withBorder mb="lg" p="md">
-        <Text fw={600} size="sm" mb="xs">Переходы по дням</Text>
-        {loading
-          ? <Skeleton height={140} radius="sm" />
-          : <VisitsAreaChart data={visits?.clicksPerDay ?? []} />
-        }
-      </Card>
-
-      {/* Device breakdown */}
-      <Grid mb="lg">
-        <Grid.Col span={{ base: 12, md: devices && isAdmin ? 4 : 6 }}>
-          <Card withBorder p="md" h="100%">
-            <Text fw={600} size="sm" mb="xs">Устройства</Text>
-            {loading ? <Skeleton height={80} /> : devices ? (
-              <Stack gap="xs">
-                {([
-                  ['desktop', 'Компьютер', <IconDeviceDesktop size={14} />],
-                  ['mobile',  'Мобильный', <IconDeviceMobile  size={14} />],
-                  ['tablet',  'Планшет',   <IconDeviceTablet  size={14} />],
-                ] as const).map(([key, label, icon]) => {
-                  const val  = devices.devices[key as keyof typeof devices.devices] ?? 0;
-                  const total = Object.values(devices.devices).reduce((a, b) => a + b, 0);
-                  const pct  = total ? Math.round(val / total * 100) : 0;
-                  return (
-                    <Group key={key} gap="xs">
-                      {icon}
-                      <Text size="xs" w={80}>{label}</Text>
-                      <Progress value={pct} flex={1} size="sm" color="blue" />
-                      <Text size="xs" c="dimmed" w={36} ta="right">{pct}%</Text>
-                    </Group>
-                  );
-                })}
-              </Stack>
-            ) : <Text c="dimmed" size="sm">Нет данных</Text>}
+      <Grid gutter="md" mb="lg">
+        {/* Visits chart */}
+        <Grid.Col span={{ base: 12, md: 8 }}>
+          <Card withBorder p="md" radius="md" h="100%">
+            <Text fw={600} size="sm" mb="sm">Переходы по дням</Text>
+            {loading
+              ? <Skeleton height={140} radius="sm" />
+              : <VisitsAreaChart data={visits?.clicksPerDay ?? []} />
+            }
           </Card>
         </Grid.Col>
 
-        <Grid.Col span={{ base: 12, md: devices && isAdmin ? 4 : 6 }}>
-          <Card withBorder p="md" h="100%">
-            <Text fw={600} size="sm" mb="xs">Браузеры</Text>
-            {loading ? <Skeleton height={80} /> : devices?.browsers?.length ? (
-              <Stack gap={4}>
-                {devices.browsers.slice(0, 5).map(b => (
-                  <Group key={b.name} gap="xs" justify="space-between">
-                    <Text size="xs">{b.name}</Text>
-                    <Badge variant="light" size="xs">{b.count}</Badge>
-                  </Group>
-                ))}
-              </Stack>
-            ) : <Text c="dimmed" size="sm">Нет данных</Text>}
-          </Card>
-        </Grid.Col>
-
-        {isAdmin && (
-          <Grid.Col span={{ base: 12, md: 4 }}>
-            <Card withBorder p="md" h="100%">
-              <Text fw={600} size="sm" mb="xs">Операционные системы</Text>
-              {loading ? <Skeleton height={80} /> : devices?.os?.length ? (
-                <Stack gap={4}>
-                  {devices.os.slice(0, 5).map(o => (
-                    <Group key={o.name} gap="xs" justify="space-between">
-                      <Text size="xs">{o.name}</Text>
-                      <Badge variant="light" size="xs" color="grape">{o.count}</Badge>
-                    </Group>
+        {/* Devices */}
+        <Grid.Col span={{ base: 12, md: 4 }}>
+          <Card withBorder p="md" radius="md" h="100%">
+            <Text fw={600} size="sm" mb="sm">Устройства</Text>
+            {loading ? <Skeleton height={140} radius="sm" /> : (() => {
+              const d = devices?.devices;
+              if (!d) return <Text c="dimmed" size="sm">Нет данных</Text>;
+              const total = (d.desktop + d.mobile + d.tablet) || 1;
+              return (
+                <Stack gap="xs">
+                  {([
+                    { icon: <IconDeviceDesktop size={14} />, label: 'Desktop', val: d.desktop, color: 'blue' },
+                    { icon: <IconDeviceMobile  size={14} />, label: 'Mobile',  val: d.mobile,  color: 'teal' },
+                    { icon: <IconDeviceTablet  size={14} />, label: 'Tablet',  val: d.tablet,  color: 'grape' },
+                  ] as const).map(({ icon, label, val, color }) => (
+                    <Box key={label}>
+                      <Group justify="space-between" mb={2}>
+                        <Group gap={4}>{icon}<Text size="xs">{label}</Text></Group>
+                        <Text size="xs" c="dimmed">{val} ({Math.round(val / total * 100)}%)</Text>
+                      </Group>
+                      <Progress value={val / total * 100} color={color} size="xs" radius="xl" />
+                    </Box>
                   ))}
                 </Stack>
-              ) : <Text c="dimmed" size="sm">Нет данных</Text>}
-            </Card>
-          </Grid.Col>
-        )}
+              );
+            })()}
+          </Card>
+        </Grid.Col>
       </Grid>
 
-      {/* Heatmap */}
-      {devices?.heatmap?.length ? (
-        <Card withBorder mb="lg" p="md">
-          <Text fw={600} size="sm" mb="xs">Активность по часам / дням</Text>
-          <HeatmapChart cells={devices.heatmap} />
-        </Card>
-      ) : null}
+      {/* Main tabs */}
+      <Tabs defaultValue="top">
+        <Tabs.List mb="md">
+          <Tabs.Tab value="top">Топ ссылок</Tabs.Tab>
+          <Tabs.Tab value="recent">Последние</Tabs.Tab>
+          {devices?.browsers?.length ? <Tabs.Tab value="browsers">Браузеры</Tabs.Tab> : null}
+          {devices?.heatmap?.length  ? <Tabs.Tab value="heatmap">Тепловая карта</Tabs.Tab> : null}
+          {isAdmin && users?.length  ? <Tabs.Tab value="users">Пользователи</Tabs.Tab> : null}
+        </Tabs.List>
 
-      {/* Users table (admin) */}
-      {isAdmin && users && (
-        <Card withBorder mb="lg" p="md">
-          <Text fw={600} size="sm" mb="xs">Пользователи</Text>
-          <Table highlightOnHover withTableBorder withColumnBorders={false}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Пользователь</Table.Th>
-                <Table.Th>Email</Table.Th>
-                <Table.Th>Роль</Table.Th>
-                <Table.Th>Статус</Table.Th>
-                <Table.Th>Действия</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {users.map(u => (
-                <Table.Tr key={u.sub}>
-                  <Table.Td>
-                    <Group gap="xs">
-                      <Avatar size="sm" radius="xl" color="blue">
-                        {u.username.slice(0, 2).toUpperCase()}
-                      </Avatar>
-                      <Text size="sm">{u.username}</Text>
-                    </Group>
-                  </Table.Td>
-                  <Table.Td><Text size="sm" c="dimmed">{u.email}</Text></Table.Td>
-                  <Table.Td><Badge variant="light" size="sm">{u.role}</Badge></Table.Td>
-                  <Table.Td>
-                    <Badge
-                      variant="light" size="sm"
-                      color={u.status === 'active' ? 'green' : 'red'}
-                    >
-                      {u.status === 'active' ? 'Активен' : 'Отключён'}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Anchor
-                      size="xs"
-                      onClick={() => navigate(`/admin/users/${u.sub}`)}
-                    >
-                      Профиль
-                    </Anchor>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Card>
-      )}
+        <Tabs.Panel value="top">
+          <UrlsTab period={period} />
+        </Tabs.Panel>
 
-      {/* Links tabs */}
-      <Card withBorder p="md">
-        <Tabs defaultValue="top">
-          <Tabs.List mb="md">
-            <Tabs.Tab value="top">Популярные</Tabs.Tab>
-            {isAdmin && <Tabs.Tab value="recent">Последние</Tabs.Tab>}
-          </Tabs.List>
-          <Tabs.Panel value="top">
-            <UrlsTab period={period} />
-          </Tabs.Panel>
-          {isAdmin && (
-            <Tabs.Panel value="recent">
-              {overview?.recentLinks && (
-                <Table highlightOnHover withTableBorder withColumnBorders={false}>
+        <Tabs.Panel value="recent">
+          {loading ? <Center h={100}><Loader size="sm" /></Center> : (
+            overview?.recentLinks?.length
+              ? (
+                <Table highlightOnHover withTableBorder>
                   <Table.Thead>
                     <Table.Tr>
                       <Table.Th>Ссылка</Table.Th>
                       <Table.Th>Назначение</Table.Th>
+                      <Table.Th>Создана</Table.Th>
                       <Table.Th ta="right">Переходов</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
                     {overview.recentLinks.map(u => (
-                      <Table.Tr
-                        key={u.shortCode}
-                        style={{ cursor: 'pointer' }}
-                        onClick={() => navigate(`/links/${u.shortCode}`)}
-                      >
-                        <Table.Td>
-                          <Text size="sm" ff="monospace" c="blue">{u.shortCode}</Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text size="sm" truncate maw={340} c="dimmed">
-                            {u.title || u.longUrl}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td ta="right">
-                          <Badge variant="light" color="teal" size="sm">{u.visitsTotal}</Badge>
-                        </Table.Td>
+                      <Table.Tr key={u.shortCode}>
+                        <Table.Td><Text size="sm" ff="monospace" c="blue">{u.shortCode}</Text></Table.Td>
+                        <Table.Td><Text size="sm" truncate maw={320} c="dimmed">{u.title || u.longUrl}</Text></Table.Td>
+                        <Table.Td><Text size="sm" c="dimmed">—</Text></Table.Td>
+                        <Table.Td ta="right"><Badge variant="light" size="sm">{u.visitsTotal}</Badge></Table.Td>
                       </Table.Tr>
                     ))}
                   </Table.Tbody>
                 </Table>
-              )}
-            </Tabs.Panel>
+              )
+              : <Text c="dimmed" size="sm">Нет данных</Text>
           )}
-        </Tabs>
-      </Card>
+        </Tabs.Panel>
 
-      <Text size="xs" c="dimmed" ta="center" mt="lg">
-        Данные обновляются при каждом открытии дашборда · Период: {period} дней
-        {data && <> · {formatDate(new Date().toISOString())}</>}
-      </Text>
+        <Tabs.Panel value="browsers">
+          {loading ? <Center h={100}><Loader size="sm" /></Center> : (
+            <Stack gap="xs" maw={400}>
+              {(devices?.browsers ?? []).map(b => (
+                <Group key={b.name} justify="space-between">
+                  <Text size="sm">{b.name}</Text>
+                  <Badge variant="light" size="sm">{b.count}</Badge>
+                </Group>
+              ))}
+            </Stack>
+          )}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="heatmap">
+          {loading ? <Center h={100}><Loader size="sm" /></Center> : (
+            <HeatmapChart cells={devices?.heatmap ?? []} />
+          )}
+        </Tabs.Panel>
+
+        {isAdmin && (
+          <Tabs.Panel value="users">
+            {loading ? <Center h={100}><Loader size="sm" /></Center> : (
+              users?.length
+                ? (
+                  <Table highlightOnHover withTableBorder>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Пользователь</Table.Th>
+                        <Table.Th>Email</Table.Th>
+                        <Table.Th>Роль</Table.Th>
+                        <Table.Th>Статус</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {users.map(u => (
+                        <Table.Tr key={u.sub}>
+                          <Table.Td>
+                            <Group gap="xs">
+                              <Avatar size="sm" radius="xl" color="blue">
+                                {u.username?.[0]?.toUpperCase() ?? '?'}
+                              </Avatar>
+                              <Text size="sm">{u.username}</Text>
+                            </Group>
+                          </Table.Td>
+                          <Table.Td><Text size="sm" c="dimmed">{u.email}</Text></Table.Td>
+                          <Table.Td><Badge size="sm" variant="light">{u.role}</Badge></Table.Td>
+                          <Table.Td>
+                            <Badge
+                              size="sm"
+                              color={u.status === 'active' ? 'green' : u.status === 'disabled' ? 'red' : 'yellow'}
+                            >
+                              {u.status}
+                            </Badge>
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                )
+                : <Text c="dimmed" size="sm">Нет пользователей</Text>
+            )}
+          </Tabs.Panel>
+        )}
+      </Tabs>
     </Container>
   );
 }

@@ -40,48 +40,73 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	p := h.shlinkSvc.Perms(user)
-
-	// --- short URLs ---
-	urls, err := h.shlinkSvc.Client().GetAllShortURLs(r.Context(), user.ShlinkAPIKey)
-	if err != nil {
-		slog.Error("dashboard: get short-urls failed", "sub", user.Sub, "err", err)
-		writeJSON(w, map[string]string{"error": "shlink unavailable"}, http.StatusBadGateway)
+	if user.ShlinkAPIKey == "" {
+		writeJSON(w, map[string]any{
+			"overview": map[string]any{
+				"linksCount":  0,
+				"visitsTotal": 0,
+				"topLinks":    []any{},
+				"recentLinks": []any{},
+			},
+			"users":   nil,
+			"visits":  map[string]any{"clicksPerDay": []any{}, "clicksTotal": 0},
+			"devices": map[string]any{"devices": map[string]int{"desktop": 0, "mobile": 0, "tablet": 0}, "browsers": []any{}, "os": []any{}, "heatmap": []any{}},
+		}, http.StatusOK)
 		return
 	}
 
-	if !p.CanViewAllLinks {
-		urls = []shlink.ShortURL{}
-	}
+	p := h.shlinkSvc.Perms(user)
 
-	// --- visits ---
-	now := time.Now()
-	start := now.AddDate(0, 0, -days)
-	visitsResp, err := h.shlinkSvc.Client().GetVisits(
-		r.Context(), user.ShlinkAPIKey,
-		start.Format(time.RFC3339), now.Format(time.RFC3339), 1000,
-	)
+	// ── Short URLs ────────────────────────────────────────────────────────────
+	urlsResp, err := h.shlinkSvc.Client().GetShortURLs(r.Context(), user.ShlinkAPIKey, "itemsPerPage=1000")
+	var urls []shlink.ShortURL
 	if err != nil {
-		slog.Warn("dashboard: get visits failed", "sub", user.Sub, "err", err)
+		slog.Warn("dashboard: get short urls failed", "sub", user.Sub, "err", err)
+	} else if urlsResp != nil {
+		// Ownership-based filtering: admins see all, users see only owned.
+		// For dashboard we use permission-based shortcut: CanViewAllLinks skips ownership lookup.
+		if p.CanViewAllLinks {
+			urls = urlsResp.ShortURLs.Data
+		} else if p.CanViewOwnLinks {
+			// Dashboard doesn't have ownerRepo injected — return empty slice;
+			// full ownership filtering happens in shlink_proxy ListShortURLs.
+			urls = []shlink.ShortURL{}
+		}
 	}
+	overview := buildOverview(urls)
 
-	// --- users (admin only) ---
-	var usersData any
-	if p.CanManageUsers {
-		users, err := h.userRepo.List(r.Context())
-		if err != nil {
-			slog.Warn("dashboard: list users failed", "sub", user.Sub, "err", err)
+	// ── Visits (clicksPerDay) ─────────────────────────────────────────────────
+	endDate := time.Now().Format(time.RFC3339)
+	startDate := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+	var visitsResp *shlink.VisitsResponse
+	if p.CanViewAllStats || p.CanViewOwnStats {
+		v, verr := h.shlinkSvc.Client().GetNonOrphanVisits(r.Context(), user.ShlinkAPIKey, startDate, endDate, 1000)
+		if verr != nil {
+			slog.Warn("dashboard: get visits failed", "sub", user.Sub, "err", verr)
 		} else {
-			type userItem struct {
+			visitsResp = v
+		}
+	}
+	visitsBlock := buildVisits(visitsResp, days)
+	devicesBlock := buildDevices(visitsResp)
+
+	// ── Admin: users list ────────────────────────────────────────────────────
+	var usersBlock any
+	if p.CanManageUsers {
+		users, uerr := h.userRepo.ListAll(r.Context())
+		if uerr != nil {
+			slog.Warn("dashboard: list users failed", "sub", user.Sub, "err", uerr)
+		} else {
+			type userRow struct {
 				Sub      string `json:"sub"`
 				Username string `json:"username"`
 				Email    string `json:"email"`
 				Role     string `json:"role"`
 				Status   string `json:"status"`
 			}
-			items := make([]userItem, 0, len(users))
+			rows := make([]userRow, 0, len(users))
 			for _, u := range users {
-				items = append(items, userItem{
+				rows = append(rows, userRow{
 					Sub:      u.Sub,
 					Username: u.Username,
 					Email:    u.Email,
@@ -89,29 +114,51 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 					Status:   string(u.Status),
 				})
 			}
-			usersData = items
+			usersBlock = rows
 		}
 	}
 
-	resp := map[string]any{
-		"overview": buildOverview(urls),
-		"visits":   buildVisits(visitsResp, days),
-		"devices":  buildDevices(visitsResp),
-		"users":    usersData,
+	// ── Admin: tag stats ─────────────────────────────────────────────────────
+	var tagsBlock any
+	if p.CanManageAllTags {
+		tagsResp, terr := h.shlinkSvc.Client().GetTags(r.Context(), user.ShlinkAPIKey)
+		if terr != nil {
+			slog.Warn("dashboard: get tags failed", "sub", user.Sub, "err", terr)
+		} else if tagsResp != nil {
+			type tagStat struct {
+				Tag    string `json:"tag"`
+				Visits int    `json:"visits"`
+				URLs   int    `json:"urls"`
+			}
+			stats := make([]tagStat, 0, len(tagsResp.Tags.Data))
+			for _, t := range tagsResp.Tags.Data {
+				stats = append(stats, tagStat{
+					Tag:    t.Tag,
+					Visits: t.VisitsSummary.Total,
+					URLs:   t.ShortURLsCount,
+				})
+			}
+			sort.Slice(stats, func(i, j int) bool { return stats[i].Visits > stats[j].Visits })
+			if len(stats) > 20 {
+				stats = stats[:20]
+			}
+			tagsBlock = stats
+		}
 	}
 
-	writeJSON(w, resp, http.StatusOK)
+	writeJSON(w, map[string]any{
+		"overview": overview,
+		"users":    usersBlock,
+		"tags":     tagsBlock,
+		"visits":   visitsBlock,
+		"devices":  devicesBlock,
+	}, http.StatusOK)
 }
 
-type ClickPoint struct {
-	Date   string `json:"date"`
-	Clicks int    `json:"clicks"`
-}
-
-type namedCount struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared local types (ClickPoint, namedCount, topCountSlice are defined in
+// url_detail.go — same package, no redeclaration needed).
+// ─────────────────────────────────────────────────────────────────────────────
 
 type topLinkItem struct {
 	ShortCode   string `json:"shortCode"`
@@ -121,33 +168,12 @@ type topLinkItem struct {
 	VisitsTotal int    `json:"visitsTotal"`
 }
 
-func topCountSlice(m map[string]int, n int) []namedCount {
-	slice := make([]namedCount, 0, len(m))
-	for k, v := range m {
-		slice = append(slice, namedCount{Name: k, Count: v})
-	}
-	sort.Slice(slice, func(i, j int) bool { return slice[i].Count > slice[j].Count })
-	if len(slice) > n {
-		slice = slice[:n]
-	}
-	return slice
-}
-
 func buildOverview(urls []shlink.ShortURL) map[string]any {
 	visitsTotal := 0
+	items := make([]topLinkItem, 0, len(urls))
 	for _, u := range urls {
 		visitsTotal += u.VisitsSummary.Total
-	}
-
-	sorted := make([]shlink.ShortURL, len(urls))
-	copy(sorted, urls)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].VisitsSummary.Total > sorted[j].VisitsSummary.Total
-	})
-
-	top := make([]topLinkItem, 0, len(sorted))
-	for _, u := range sorted {
-		top = append(top, topLinkItem{
+		items = append(items, topLinkItem{
 			ShortCode:   u.ShortCode,
 			ShortURL:    u.ShortURL,
 			LongURL:     u.LongURL,
@@ -155,10 +181,13 @@ func buildOverview(urls []shlink.ShortURL) map[string]any {
 			VisitsTotal: u.VisitsSummary.Total,
 		})
 	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].VisitsTotal > items[j].VisitsTotal
+	})
+	top := items
 	if len(top) > 10 {
 		top = top[:10]
 	}
-
 	recent := make([]topLinkItem, 0, len(urls))
 	for _, u := range urls {
 		recent = append(recent, topLinkItem{
@@ -172,7 +201,6 @@ func buildOverview(urls []shlink.ShortURL) map[string]any {
 	if len(recent) > 5 {
 		recent = recent[:5]
 	}
-
 	return map[string]any{
 		"linksCount":  len(urls),
 		"visitsTotal": visitsTotal,
@@ -184,7 +212,6 @@ func buildOverview(urls []shlink.ShortURL) map[string]any {
 func buildVisits(visits *shlink.VisitsResponse, days int) map[string]any {
 	const dayFmt = "2006-01-02"
 	now := time.Now()
-
 	buckets := make(map[string]int, days)
 	ordered := make([]string, 0, days)
 	for i := days - 1; i >= 0; i-- {
@@ -192,7 +219,6 @@ func buildVisits(visits *shlink.VisitsResponse, days int) map[string]any {
 		buckets[d] = 0
 		ordered = append(ordered, d)
 	}
-
 	total := 0
 	if visits != nil {
 		for _, v := range visits.Visits.Data {
@@ -207,12 +233,11 @@ func buildVisits(visits *shlink.VisitsResponse, days int) map[string]any {
 			}
 		}
 	}
-
+	// ClickPoint is declared in url_detail.go (same package)
 	points := make([]ClickPoint, 0, days)
 	for _, d := range ordered {
 		points = append(points, ClickPoint{Date: d, Clicks: buckets[d]})
 	}
-
 	return map[string]any{
 		"clicksPerDay": points,
 		"clicksTotal":  total,
@@ -227,18 +252,18 @@ func buildDevices(visits *shlink.VisitsResponse) map[string]any {
 
 	if visits != nil {
 		for _, v := range visits.Visits.Data {
-			ua := v.UserAgent
-			uaLower := strings.ToLower(ua)
+			ua := strings.ToLower(v.UserAgent)
 			switch {
-			case strings.Contains(uaLower, "mobi") || strings.Contains(uaLower, "android"):
+			case strings.Contains(ua, "mobi") || strings.Contains(ua, "android"):
 				mobile++
-			case strings.Contains(uaLower, "tablet") || strings.Contains(uaLower, "ipad"):
+			case strings.Contains(ua, "tablet") || strings.Contains(ua, "ipad"):
 				tablet++
 			default:
 				desktop++
 			}
-			browsersMap[urlDetailBrowser(uaLower)]++
-			osMap[urlDetailOS(uaLower)]++
+			// urlDetailBrowser / urlDetailOS are defined in url_detail.go (same package)
+			browsersMap[urlDetailBrowser(ua)]++
+			osMap[urlDetailOS(ua)]++
 
 			t, perr := time.Parse(time.RFC3339, v.Date)
 			if perr == nil {
@@ -264,6 +289,7 @@ func buildDevices(visits *shlink.VisitsResponse) map[string]any {
 		}
 	}
 
+	// topCountSlice is declared in url_detail.go (same package)
 	return map[string]any{
 		"devices": map[string]int{
 			"desktop": desktop,
