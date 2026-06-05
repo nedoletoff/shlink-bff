@@ -6,6 +6,7 @@ import (
 
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
+	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
 )
 
@@ -141,7 +142,7 @@ func TestRBACMatrix(t *testing.T) {
 	}
 }
 
-// ── newShlinkServicePrefixed ──────────────────────────────────────────────────
+// ── newShlinkServicePrefixed ─────────────────────────────────────────────────
 
 // newShlinkServicePrefixed creates a service with UserSlugPrefixEnabled=true
 // and UserCustomSlugEnabled=true, for tests that exercise prefix enforcement.
@@ -153,7 +154,7 @@ func newShlinkServicePrefixed(p domain.RolePermissions) *service.ShlinkService {
 	})
 }
 
-// ── EnforceSlugPrefix RBAC ─────────────────────────────────────────────────
+// ── EnforceSlugPrefix RBAC ───────────────────────────────────────────────
 
 func TestEnforceSlugPrefix_AdminNoPrefix(t *testing.T) {
 	svc := newShlinkServicePrefixed(domain.DefaultAdminPermissions(domain.RoleAdmin))
@@ -169,7 +170,6 @@ func TestEnforceSlugPrefix_AdminNoPrefix(t *testing.T) {
 }
 
 func TestEnforceSlugPrefix_UserPrefixEnforced(t *testing.T) {
-	// UserSlugPrefixEnabled=true: prefix must be validated.
 	svc := newShlinkServicePrefixed(domain.DefaultUserPermissions(domain.RoleUser))
 	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
 
