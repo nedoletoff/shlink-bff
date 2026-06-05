@@ -50,7 +50,7 @@ func (r *memRolesRepo) Upsert(_ context.Context, p *domain.RolePermissions) erro
 // ── fixtures ───────────────────────────────────────────────────────────────
 
 func newRolesHandler(initial ...domain.RolePermissions) *handler.RolesHandler {
-	cache := service.NewPermissionsCache(nil)
+	cache := service.NewPermissionsCache(nil, domain.RoleAdmin)
 	for _, p := range initial {
 		cache.Set(p)
 	}

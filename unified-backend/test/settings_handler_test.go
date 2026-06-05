@@ -17,9 +17,9 @@ import (
 
 func newSettingsHandler(cfg *config.Config) *handler.SettingsHandler {
 	client := shlink.NewClient("http://localhost:9999") // unreachable — GetHealth will fail gracefully
-	cache := service.NewPermissionsCache(nil)
+	cache := service.NewPermissionsCache(nil, "")
 	svc := service.NewShlinkService(client, cfg, cache)
-	return handler.NewSettingsHandler(cfg, svc)
+	return handler.NewSettingsHandler(cfg, svc, nil)
 }
 
 func defaultCfg() *config.Config {
@@ -193,7 +193,6 @@ func TestPatchSettings_EmptyDomainIgnored(t *testing.T) {
 	}
 }
 
-// itoa is a minimal int-to-string helper to avoid importing strconv just for test body building.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
