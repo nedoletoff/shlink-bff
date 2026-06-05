@@ -111,9 +111,8 @@ func (h *DashboardHandler) GetUsersActivity(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Данные по активности пользователей будут реализованы после добавления per-user API
 	writeJSON(w, map[string]any{
-		"users":         []any{},
+		"users":          []any{},
 		"newLinksPerDay": []any{},
 	}, http.StatusOK)
 }
@@ -279,24 +278,4 @@ func (h *DashboardHandler) buildClicksOverTimeN(r *http.Request, apiKey string, 
 		points = append(points, ClickPoint{Date: d, Clicks: buckets[d]})
 	}
 	return points
-}
-
-func topNTags(m map[string]int, n int) []TagCount {
-	type kv struct {
-		Key string
-		Val int
-	}
-	sorted := make([]kv, 0, len(m))
-	for k, v := range m {
-		sorted = append(sorted, kv{k, v})
-	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Val > sorted[j].Val })
-	if len(sorted) > n {
-		sorted = sorted[:n]
-	}
-	result := make([]TagCount, len(sorted))
-	for i, kv := range sorted {
-		result[i] = TagCount{Tag: kv.Key, Count: kv.Val}
-	}
-	return result
 }
