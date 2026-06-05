@@ -39,10 +39,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	userRepo  := postgres.NewUserRepository(db)
-	auditRepo := postgres.NewAuditRepository(db)
-	rolesRepo := postgres.NewRolePermissionsRepository(db)
-	ownerRepo := postgres.NewURLOwnershipRepository(db)
+	userRepo     := postgres.NewUserRepository(db)
+	auditRepo    := postgres.NewAuditRepository(db)
+	rolesRepo    := postgres.NewRolePermissionsRepository(db)
+	ownerRepo    := postgres.NewURLOwnershipRepository(db)
+	settingsRepo := postgres.NewServerSettingsRepository(db)
+
+	// ── DB config overrides (если config_source=db) ──────────────────────────
+	if src, _ := settingsRepo.Get(ctx, "config_source"); src == "db" {
+		dbSettings, err := settingsRepo.GetAll(ctx)
+		if err != nil {
+			slog.Warn("config: failed to load db overrides", "err", err)
+		} else {
+			handler.ApplyDBOverrides(cfg, dbSettings)
+			slog.Info("config: applied db overrides", "keys", len(dbSettings))
+		}
+	}
 
 	// ── Shlink client ────────────────────────────────────────────────────────
 	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
@@ -76,7 +88,7 @@ func main() {
 	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
 	rolesH     := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
 	urlDetailH := handler.NewURLDetailHandler(shlinkSvc, ownerRepo)
-	settingsH  := handler.NewSettingsHandler(cfg, shlinkSvc)
+	settingsH  := handler.NewSettingsHandler(cfg, shlinkSvc, settingsRepo)
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -118,7 +130,7 @@ func main() {
 		// URL detail
 		r.Get("/api/urls/{shortCode}/detail", urlDetailH.GetURLDetail)
 
-		// Settings
+		// Settings (authenticated, any role)
 		r.Get("/api/settings", settingsH.GetSettings)
 		r.Patch("/api/settings", settingsH.PatchSettings)
 

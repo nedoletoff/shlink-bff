@@ -109,6 +109,16 @@ type CreateShortURLRequest struct {
 	ShortCodeLength int `json:"shortCodeLength,omitempty"`
 }
 
+// ShlinkSettings — тело PATCH /rest/v3/settings (shlink >= v3.5).
+// Только shortCodesLength передаётся сейчас; при необходимости расширить.
+type ShlinkSettings struct {
+	ShortURLCreation *ShlinkShortURLCreationSettings `json:"shortUrlCreation,omitempty"`
+}
+
+type ShlinkShortURLCreationSettings struct {
+	DefaultShortCodesLength int `json:"defaultShortCodesLength"`
+}
+
 // --- Методы клиента ---
 
 func (c *Client) GetShortURLs(ctx context.Context, apiKey, rawQuery string) (*ShortURLsResponse, error) {
@@ -211,8 +221,6 @@ func (c *Client) GetVisitsSummary(ctx context.Context, apiKey string) (map[strin
 }
 
 // GetNonOrphanVisits возвращает реальные визиты по всем ссылкам в заданном диапазоне дат.
-// Используется для построения реального графика clicksOverTime (#2, #3) вместо захардкоженных данных.
-// startDate/endDate — в формате ISO-8601 (например "2006-01-02").
 func (c *Client) GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endDate string, itemsPerPage int) (*VisitsResponse, error) {
 	if itemsPerPage <= 0 {
 		itemsPerPage = 1000
@@ -227,6 +235,26 @@ func (c *Client) GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endD
 	q.Set("itemsPerPage", strconv.Itoa(itemsPerPage))
 	url := c.baseURL + "/rest/v3/visits/non-orphan?" + q.Encode()
 	return doRequest[VisitsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
+}
+
+// PatchSettings применяет shortCodesLength к shlink через PATCH /rest/v3/settings.
+// Требует глобального admin API-ключа. Доступен начиная с shlink v3.5.
+func (c *Client) PatchSettings(ctx context.Context, adminAPIKey string, shortCodeLength int) error {
+	if adminAPIKey == "" {
+		return fmt.Errorf("shlink: admin API key not configured (SHLINK_ADMIN_API_KEY)")
+	}
+	payload := ShlinkSettings{
+		ShortURLCreation: &ShlinkShortURLCreationSettings{
+			DefaultShortCodesLength: shortCodeLength,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := c.baseURL + "/rest/v3/settings"
+	_, err = doRequest[struct{}](ctx, c, http.MethodPatch, url, adminAPIKey, bytes.NewReader(body))
+	return err
 }
 
 // HealthResponse — ответ GET /rest/health (например {"status":"pass","version":"5.0.2"}).
@@ -258,10 +286,6 @@ func (c *Client) GetHealth(ctx context.Context) (*HealthResponse, error) {
 }
 
 // ValidateVersion проверяет совместимость версии Shlink API на старте (#16).
-//
-// Делает несколько попыток (Shlink может ещё подниматься). Возвращает ошибку,
-// если сервис доступен, но мажорная версия < minMajor. Если сервис недоступен после
-// всех попыток — возвращает ошибку доступности (решение fatal/warn принимает вызывающий).
 func (c *Client) ValidateVersion(ctx context.Context, minMajor int, attempts int, delay time.Duration) error {
 	if attempts <= 0 {
 		attempts = 1
@@ -302,7 +326,6 @@ func majorVersion(v string) int {
 }
 
 // doRequest — обобщённый исполнитель HTTP-запросов к Shlink.
-// API-ключ подставляется в заголовок X-Api-Key здесь, на сервере.
 func doRequest[T any](
 	ctx context.Context,
 	c *Client,
@@ -316,7 +339,7 @@ func doRequest[T any](
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("X-Api-Key", apiKey) // ключ подставляется только здесь
+	req.Header.Set("X-Api-Key", apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
