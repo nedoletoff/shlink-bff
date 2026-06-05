@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Stack, Title, Card, Text, Switch, NumberInput,
-  Button, Group, Badge, Divider, Skeleton, Center,
+  Button, Group, Badge, Divider, Skeleton, Center, TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { api } from '../../api/client';
@@ -21,10 +21,10 @@ export function Settings() {
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
 
-  // Локальное состояние редактируемых полей
-  const [codeLen,       setCodeLen]       = useState<number>(6);
-  const [allowSlugs,    setAllowSlugs]    = useState(true);
-  const [slugPrefix,    setSlugPrefix]    = useState(false);
+  const [codeLen,    setCodeLen]    = useState<number>(6);
+  const [allowSlugs, setAllowSlugs] = useState(true);
+  const [slugPrefix, setSlugPrefix] = useState(false);
+  const [domain,     setDomain]     = useState('');
 
   useEffect(() => {
     api.get<ShlinkSettings>('/api/admin/settings')
@@ -33,6 +33,7 @@ export function Settings() {
         setCodeLen(s.shortCodeLength);
         setAllowSlugs(s.allowCustomSlugs);
         setSlugPrefix(s.userSlugPrefix);
+        setDomain(s.domain ?? '');
       })
       .catch(() => setSettings(null))
       .finally(() => setLoading(false));
@@ -45,11 +46,15 @@ export function Settings() {
         shortCodeLength:  codeLen,
         allowCustomSlugs: allowSlugs,
         userSlugPrefix:   slugPrefix,
+        domain:           domain.trim() || undefined,
       });
       notifications.show({ message: RU.settings.saved, color: 'green' });
-      // Обновляем локальное состояние
       setSettings(prev => prev ? {
-        ...prev, shortCodeLength: codeLen, allowCustomSlugs: allowSlugs, userSlugPrefix: slugPrefix,
+        ...prev,
+        shortCodeLength: codeLen,
+        allowCustomSlugs: allowSlugs,
+        userSlugPrefix: slugPrefix,
+        domain,
       } : prev);
     } catch {
       // handled
@@ -75,17 +80,17 @@ export function Settings() {
     <Stack gap="lg">
       <Title order={2}>{RU.settings.title}</Title>
 
-      {/* Блок: Генерация ссылок */}
       <Card withBorder radius="md" p="lg">
         <Text fw={600} mb="md">{RU.settings.generation}</Text>
         <Stack gap="md">
           <NumberInput
             label={RU.settings.shortCodeLength}
-            description={RU.settings.shortCodeHint}
-            min={4} max={10}
+            description={`${RU.settings.shortCodeHint} (3–32)`}
+            min={3}
+            max={32}
             value={codeLen}
             onChange={v => setCodeLen(Number(v))}
-            style={{ maxWidth: 200 }}
+            style={{ maxWidth: 220 }}
           />
           <Switch
             label={RU.settings.allowCustomSlugs}
@@ -101,16 +106,21 @@ export function Settings() {
         </Stack>
       </Card>
 
-      {/* Блок: Домен */}
       <Card withBorder radius="md" p="lg">
         <Text fw={600} mb="md">{RU.settings.domain}</Text>
-        <Group gap="sm" align="center">
-          <Text size="sm" c="dimmed">{RU.settings.domainHint}:</Text>
-          <Text ff="monospace" fw={500}>{settings.domain || '—'}</Text>
-        </Group>
+        <Stack gap="sm">
+          <TextInput
+            label={RU.settings.domainHint}
+            placeholder="https://s.example.com"
+            value={domain}
+            onChange={e => setDomain(e.currentTarget.value)}
+          />
+          <Text size="xs" c="dimmed">
+            Этот домен используется в начале коротких ссылок вместо внутреннего docker-адреса.
+          </Text>
+        </Stack>
       </Card>
 
-      {/* Блок: API */}
       <Card withBorder radius="md" p="lg">
         <Text fw={600} mb="md">{RU.settings.apiSection}</Text>
         <Stack gap="xs">
@@ -121,10 +131,7 @@ export function Settings() {
           <Divider />
           <Group gap="sm">
             <Text size="sm" c="dimmed" w={180}>{RU.settings.connectionStatus}:</Text>
-            <Badge
-              color={settings.connected ? 'green' : 'red'}
-              variant="dot"
-            >
+            <Badge color={settings.connected ? 'green' : 'red'} variant="dot">
               {settings.connected ? RU.settings.connected : RU.settings.disconnected}
             </Badge>
           </Group>
