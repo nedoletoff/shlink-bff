@@ -257,7 +257,9 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp, http.StatusOK)
 }
 
-// PUT /api/shlink/tags/{tagId}
+// PUT /api/shlink/tags
+// Body: {"oldName": "...", "newName": "..."}
+// Требует CanManageAllTags (глобальное управление тегами).
 func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -266,30 +268,33 @@ func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := h.shlinkSvc.Perms(user)
-	if !p.CanManageTags {
+	if !p.CanManageAllTags {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
 
-	tagID := chi.URLParam(r, "tagId")
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
 		return
 	}
 
-	result, err := h.shlinkSvc.Client().RenameTag(r.Context(), user.ShlinkAPIKey, tagID, bytes.NewReader(bodyBytes))
-	if err != nil {
-		slog.Error("proxy: rename tag failed", "sub", user.Sub, "tag", tagID, "err", err)
+	// shlink PUT /rest/v3/tags: body {"oldName":"...","newName":"..."}, returns error only
+	if err := h.shlinkSvc.Client().RenameTag(r.Context(), user.ShlinkAPIKey, bytes.NewReader(bodyBytes)); err != nil {
+		slog.Error("proxy: rename tag failed", "sub", user.Sub, "err", err)
 		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadGateway)
 		return
 	}
 
-	h.recordAudit(r, user, "rename_tag", "success", map[string]any{"tag": tagID})
-	writeJSON(w, result, http.StatusOK)
+	// Extract oldName for audit log
+	var names struct{ OldName string `json:"oldName"` }
+	_ = json.Unmarshal(bodyBytes, &names)
+	h.recordAudit(r, user, "rename_tag", "success", map[string]any{"oldName": names.OldName})
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// DELETE /api/shlink/tags/{tagId}
+// DELETE /api/shlink/tags/{tagName}
+// Требует CanManageAllTags.
 func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -298,43 +303,60 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := h.shlinkSvc.Perms(user)
-	if !p.CanManageTags {
+	if !p.CanManageAllTags {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
 
-	tagID := chi.URLParam(r, "tagId")
+	tagName := chi.URLParam(r, "tagName")
+	if tagName == "" {
+		writeJSON(w, map[string]string{"error": "tagName required"}, http.StatusBadRequest)
+		return
+	}
 
-	if err := h.shlinkSvc.Client().DeleteTag(r.Context(), user.ShlinkAPIKey, tagID); err != nil {
-		slog.Error("proxy: delete tag failed", "sub", user.Sub, "tag", tagID, "err", err)
+	// shlink DELETE /rest/v3/tags?tags[]=... accepts a slice
+	if err := h.shlinkSvc.Client().DeleteTags(r.Context(), user.ShlinkAPIKey, []string{tagName}); err != nil {
+		slog.Error("proxy: delete tag failed", "sub", user.Sub, "tag", tagName, "err", err)
 		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadGateway)
 		return
 	}
 
-	h.recordAudit(r, user, "delete_tag", "success", map[string]any{"tag": tagID})
+	h.recordAudit(r, user, "delete_tag", "success", map[string]any{"tag": tagName})
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *ShlinkProxyHandler) recordAudit(r *http.Request, user *domain.User, action, status string, extra map[string]any) {
+// recordAudit — тонкая обёртка над AuditRepository.Record.
+// Не блокирует обработчик: ошибка логируется внутри Record.
+func (h *ShlinkProxyHandler) recordAudit(
+	r *http.Request,
+	user *domain.User,
+	action, status string,
+	extra map[string]any,
+) {
 	if h.auditRepo == nil {
 		return
 	}
-	ctx := r.Context()
 	ip := r.RemoteAddr
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ip = xff
 	}
-	details := make(map[string]any)
+	details := make(map[string]any, len(extra)+3)
 	for k, v := range extra {
 		details[k] = v
 	}
-	details["ip"] = ip
 	details["method"] = r.Method
 	details["path"] = r.URL.Path
 
-	detailsJSON, _ := json.Marshal(details)
-
-	if err := h.auditRepo.Log(ctx, string(user.Sub), action, status, string(detailsJSON), time.Now()); err != nil {
-		slog.Error("audit log failed", "err", err)
-	}
+	h.auditRepo.Record(r.Context(), &domain.AuditEntry{
+		UserSub:   user.Sub,
+		Username:  user.Username,
+		Role:      user.Role,
+		Action:    action,
+		Resource:  r.URL.Path,
+		Result:    status,
+		Details:   details,
+		IPAddress: ip,
+		UserAgent: r.Header.Get("User-Agent"),
+		CreatedAt: time.Now(),
+	})
 }

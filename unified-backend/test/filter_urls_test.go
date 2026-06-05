@@ -7,27 +7,48 @@ import (
 	"unified-backend/internal/shlink"
 )
 
+// ── helpers ────────────────────────────────────────────────────────────────
+
+// ownedSet builds the map[string]struct{} that FilterShortURLsByUser expects.
+func ownedSet(codes ...string) map[string]struct{} {
+	m := make(map[string]struct{}, len(codes))
+	for _, c := range codes {
+		m[c] = struct{}{}
+	}
+	return m
+}
+
+// makeAdminPerms returns full RolePermissions for admin-like role.
+func makeAdminPerms() domain.RolePermissions {
+	return domain.DefaultAdminPermissions(domain.RoleAdmin)
+}
+
+// makeUserPerms returns minimal user permissions with view/edit/delete own.
+func makeUserPerms() domain.RolePermissions {
+	return domain.DefaultUserPermissions(domain.RoleUser)
+}
+
 // ── FilterShortURLsByUser ──────────────────────────────────────────────────
 
 func TestFilterShortURLsByUser_AdminSeesAll(t *testing.T) {
-	svc := newShlinkService(true)
-	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
+	svc := newShlinkService(makeAdminPerms())
+	admin := &domain.User{Role: domain.RoleAdmin, Sub: "admin1"}
 
 	urls := []shlink.ShortURL{
-		{ShortCode: "adm-link"},
-		{ShortCode: "u1-abc"},
-		{ShortCode: "random"},
+		{ShortCode: "aaa"},
+		{ShortCode: "bbb"},
+		{ShortCode: "ccc"},
 	}
-
-	got := svc.FilterShortURLsByUser(urls, admin)
+	// Admin has CanViewAllLinks=true → ownedCodes is ignored
+	got := svc.FilterShortURLsByUser(urls, admin, nil)
 	if len(got) != 3 {
-		t.Errorf("admin: want 3 urls, got %d", len(got))
+		t.Errorf("admin: want 3, got %d", len(got))
 	}
 }
 
-func TestFilterShortURLsByUser_UserSeesOnlyOwnPrefix(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
+func TestFilterShortURLsByUser_UserSeesOnlyOwned(t *testing.T) {
+	svc := newShlinkService(makeUserPerms())
+	user := &domain.User{Role: domain.RoleUser, Sub: "u1"}
 
 	urls := []shlink.ShortURL{
 		{ShortCode: "u1-abc"},
@@ -35,119 +56,135 @@ func TestFilterShortURLsByUser_UserSeesOnlyOwnPrefix(t *testing.T) {
 		{ShortCode: "u2-abc"},
 		{ShortCode: "random"},
 	}
-
-	got := svc.FilterShortURLsByUser(urls, user)
+	// Only u1-abc and u1-xyz are in ownership table
+	got := svc.FilterShortURLsByUser(urls, user, ownedSet("u1-abc", "u1-xyz"))
 	if len(got) != 2 {
-		t.Errorf("regular user: want 2 own urls, got %d", len(got))
+		t.Errorf("user: want 2 owned urls, got %d", len(got))
 	}
 	for _, u := range got {
-		if len(u.ShortCode) < 3 || u.ShortCode[:3] != "u1-" {
-			t.Errorf("url %q does not start with prefix u1-", u.ShortCode)
+		if u.ShortCode != "u1-abc" && u.ShortCode != "u1-xyz" {
+			t.Errorf("unexpected shortCode %q in result", u.ShortCode)
 		}
 	}
 }
 
-func TestFilterShortURLsByUser_EmptyList(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
-	got := svc.FilterShortURLsByUser([]shlink.ShortURL{}, user)
+func TestFilterShortURLsByUser_EmptyOwnershipSet(t *testing.T) {
+	svc := newShlinkService(makeUserPerms())
+	user := &domain.User{Role: domain.RoleUser, Sub: "u1"}
+	urls := []shlink.ShortURL{
+		{ShortCode: "u1-abc"},
+		{ShortCode: "u2-abc"},
+	}
+	// User has CanViewOwnLinks but no records in ownership table
+	got := svc.FilterShortURLsByUser(urls, user, ownedSet())
+	if len(got) != 0 {
+		t.Errorf("empty ownership: want 0, got %d", len(got))
+	}
+}
+
+func TestFilterShortURLsByUser_NoViewPermission(t *testing.T) {
+	// Role with neither CanViewOwnLinks nor CanViewAllLinks
+	p := domain.RolePermissions{Role: "restricted", CanCreateLinks: true}
+	svc := newShlinkService(p)
+	user := &domain.User{Role: "restricted", Sub: "u1"}
+
+	urls := []shlink.ShortURL{{ShortCode: "any"}}
+	got := svc.FilterShortURLsByUser(urls, user, ownedSet("any"))
+	if len(got) != 0 {
+		t.Errorf("no view perm: want 0, got %d", len(got))
+	}
+}
+
+func TestFilterShortURLsByUser_EmptyInputList(t *testing.T) {
+	svc := newShlinkService(makeUserPerms())
+	user := &domain.User{Role: domain.RoleUser, Sub: "u1"}
+	got := svc.FilterShortURLsByUser([]shlink.ShortURL{}, user, ownedSet("u1-abc"))
 	if len(got) != 0 {
 		t.Errorf("empty input: want 0, got %d", len(got))
 	}
 }
 
-func TestFilterShortURLsByUser_NoMatchingPrefix(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, Sub: "orphan", SlugPrefix: "orphan-"}
+// ── CanModifyShortCodeByPerms ──────────────────────────────────────────────
 
-	urls := []shlink.ShortURL{
-		{ShortCode: "u1-abc"},
-		{ShortCode: "u2-abc"},
+func TestCanModifyShortCodeByPerms_AdminCanAll(t *testing.T) {
+	svc := newShlinkService(makeAdminPerms())
+	admin := &domain.User{Role: domain.RoleAdmin, Sub: "admin1"}
+
+	canAll, canOwn := svc.CanModifyShortCodeByPerms(admin, false)
+	if !canAll {
+		t.Error("admin: CanEditAllLinks must be true")
+	}
+	if !canOwn {
+		t.Error("admin: CanEditOwnLinks must be true")
 	}
 
-	got := svc.FilterShortURLsByUser(urls, user)
-	if len(got) != 0 {
-		t.Errorf("no matching prefix: want 0, got %d", len(got))
+	canAll, canOwn = svc.CanModifyShortCodeByPerms(admin, true)
+	if !canAll {
+		t.Error("admin: CanDeleteAllLinks must be true")
 	}
-}
-
-func TestFilterShortURLsByUser_FeatureDisabled_UserSeesAll(t *testing.T) {
-	// При slugPrefixEnabled=false фильтрация по prefix не применяется
-	svc := newShlinkService(false)
-	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
-
-	urls := []shlink.ShortURL{
-		{ShortCode: "u1-abc"},
-		{ShortCode: "u2-foreign"},
-		{ShortCode: "random"},
-	}
-
-	got := svc.FilterShortURLsByUser(urls, user)
-	if len(got) != 3 {
-		t.Errorf("feature disabled: user should see all 3, got %d", len(got))
+	if !canOwn {
+		t.Error("admin: CanDeleteOwnLinks must be true")
 	}
 }
 
-// ── CanModifyShortCode ─────────────────────────────────────────────────────
+func TestCanModifyShortCodeByPerms_UserCanOwnOnly(t *testing.T) {
+	svc := newShlinkService(makeUserPerms())
+	user := &domain.User{Role: domain.RoleUser, Sub: "u1"}
 
-func TestCanModifyShortCode_AdminCanModifyAll(t *testing.T) {
-	svc := newShlinkService(true)
-	admin := &domain.User{Role: domain.RoleAdmin, Sub: "admin1", SlugPrefix: "adm-"}
+	canAll, canOwn := svc.CanModifyShortCodeByPerms(user, false)
+	if canAll {
+		t.Error("user: CanEditAllLinks must be false")
+	}
+	if !canOwn {
+		t.Error("user: CanEditOwnLinks must be true")
+	}
 
-	for _, code := range []string{"adm-link", "u1-link", "any-code"} {
-		if !svc.CanModifyShortCode(admin, code, false) {
-			t.Errorf("admin should be able to edit %q", code)
-		}
-		if !svc.CanModifyShortCode(admin, code, true) {
-			t.Errorf("admin should be able to delete %q", code)
-		}
+	canAll, canOwn = svc.CanModifyShortCodeByPerms(user, true)
+	if canAll {
+		t.Error("user: CanDeleteAllLinks must be false")
+	}
+	if !canOwn {
+		t.Error("user: CanDeleteOwnLinks must be true")
 	}
 }
 
-func TestCanModifyShortCode_UserOwnPrefix(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
-
-	if !svc.CanModifyShortCode(user, "u1-mylink", false) {
-		t.Error("user should be able to edit own prefixed link")
+func TestCanModifyShortCodeByPerms_ReadOnlyRole(t *testing.T) {
+	p := domain.RolePermissions{
+		Role:            "viewer",
+		CanViewAllLinks: true,
+		CanViewOwnLinks: true,
 	}
-	if !svc.CanModifyShortCode(user, "u1-mylink", true) {
-		t.Error("user should be able to delete own prefixed link")
-	}
-}
+	svc := newShlinkService(p)
+	user := &domain.User{Role: "viewer", Sub: "v1"}
 
-func TestCanModifyShortCode_UserForeignPrefix(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
-
-	if svc.CanModifyShortCode(user, "u2-otherlink", false) {
-		t.Error("user should NOT be able to edit another user's link")
+	canAll, canOwn := svc.CanModifyShortCodeByPerms(user, false)
+	if canAll || canOwn {
+		t.Error("viewer: must have no edit permissions")
 	}
-	if svc.CanModifyShortCode(user, "u2-otherlink", true) {
-		t.Error("user should NOT be able to delete another user's link")
+
+	canAll, canOwn = svc.CanModifyShortCodeByPerms(user, true)
+	if canAll || canOwn {
+		t.Error("viewer: must have no delete permissions")
 	}
 }
 
-func TestCanModifyShortCode_PrefixDisabled_UserCanModifyAny(t *testing.T) {
-	svc := newShlinkService(false)
-	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: "u1-"}
-
-	if !svc.CanModifyShortCode(user, "totally-foreign-code", false) {
-		t.Error("when prefix disabled, user should be able to edit any code")
+func TestCanModifyShortCodeByPerms_DeleteOnlyRole(t *testing.T) {
+	// Edge case: role has delete but not edit
+	p := domain.RolePermissions{
+		Role:              "pruner",
+		CanViewOwnLinks:   true,
+		CanDeleteOwnLinks: true,
 	}
-	if !svc.CanModifyShortCode(user, "totally-foreign-code", true) {
-		t.Error("when prefix disabled, user should be able to delete any code")
-	}
-}
+	svc := newShlinkService(p)
+	user := &domain.User{Role: "pruner", Sub: "p1"}
 
-func TestCanModifyShortCode_UserNoPrefix_Denied(t *testing.T) {
-	svc := newShlinkService(true)
-	user := &domain.User{Role: domain.RoleUser, Sub: "u1", SlugPrefix: ""}
-
-	if svc.CanModifyShortCode(user, "any-code", false) {
-		t.Error("user with no prefix and feature enabled must be denied (edit)")
+	canAll, canOwn := svc.CanModifyShortCodeByPerms(user, false) // edit
+	if canAll || canOwn {
+		t.Error("pruner: no edit perms expected")
 	}
-	if svc.CanModifyShortCode(user, "any-code", true) {
-		t.Error("user with no prefix and feature enabled must be denied (delete)")
+
+	_, canOwn = svc.CanModifyShortCodeByPerms(user, true) // delete
+	if !canOwn {
+		t.Error("pruner: CanDeleteOwnLinks expected true")
 	}
 }
