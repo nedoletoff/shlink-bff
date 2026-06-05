@@ -27,9 +27,10 @@ const (
 )
 
 type Config struct {
-	HTTPAddr    string
-	DatabaseURL string
-	ShlinkURL   string
+	HTTPAddr            string
+	DatabaseURL         string
+	ShlinkURL           string
+	ShlinkDefaultDomain string
 
 	// RoleGroups — маппинг keycloak-group (lower-case) → role-name.
 	RoleGroups map[string]string
@@ -70,6 +71,7 @@ func Load() *Config {
 		HTTPAddr:                 getEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL:              resolveDatabaseURL(),
 		ShlinkURL:                mustGetEnv("SHLINK_INTERNAL_URL"),
+		ShlinkDefaultDomain:      getEnv("SHLINK_DEFAULT_DOMAIN", ""),
 		RoleGroups:               parseRoleGroups(),
 		AdminRole:                getEnv("ADMIN_ROLE", "admin"),
 		RoleSource:               parseRoleSource(),
@@ -87,6 +89,7 @@ func Load() *Config {
 		"slug_prefix_enabled", cfg.UserSlugPrefixEnabled,
 		"user_custom_slug_enabled", cfg.UserCustomSlugEnabled,
 		"shlink_short_id_length", cfg.ShlinkShortIDLength,
+		"shlink_default_domain", cfg.ShlinkDefaultDomain,
 		"shlink_runner_mode", cfg.ShlinkRunnerMode,
 	)
 	return cfg
