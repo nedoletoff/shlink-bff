@@ -6,8 +6,14 @@ import (
 	"sync"
 
 	"unified-backend/internal/domain"
-	"unified-backend/internal/repository/postgres"
 )
+
+// RolePermissionsReader — интерфейс для загрузки permissions из хранилища.
+// Используется вместо прямой зависимости от *postgres.RolePermissionsRepository,
+// что позволяет подставлять stub в unit-тестах без поднятия БД.
+type RolePermissionsReader interface {
+	GetAll(ctx context.Context) ([]domain.RolePermissions, error)
+}
 
 // PermissionsCache — потокобезопасный in-memory кеш permissions по роли.
 // Загружается при старте, обновляется при изменении через admin API.
@@ -15,11 +21,11 @@ import (
 type PermissionsCache struct {
 	mu    sync.RWMutex
 	cache map[string]domain.RolePermissions
-	repo  *postgres.RolePermissionsRepository
+	repo  RolePermissionsReader
 	admin string // adminRole из cfg — получает DefaultAdminPermissions при отсутствии в БД
 }
 
-func NewPermissionsCache(repo *postgres.RolePermissionsRepository, adminRole string) *PermissionsCache {
+func NewPermissionsCache(repo RolePermissionsReader, adminRole string) *PermissionsCache {
 	return &PermissionsCache{
 		cache: make(map[string]domain.RolePermissions),
 		repo:  repo,

@@ -109,7 +109,7 @@ OAUTH2_COOKIE_SECRET=your-32-byte-base64-secret
    **Users** → выбрать пользователя → **Groups** → **Join group**
 
 > Пользователь **обязан** состоять хотя бы в одной группе, присутствующей в `ROLE_GROUPS`,
-> иначе бэкенд не сможет определить роль и вернёт `403`.
+> иначе бэкенд не сможет определить роль и вернёт `403` на все запросы кроме `/healthz`.
 
 #### 3.3. Добавить mapper для groups в токен
 
@@ -193,8 +193,9 @@ curl -sk https://shlink-create.example.com/api/me  # в браузере (пос
 {"level":"INFO","msg":"migration applied","file":"001_init_schema.sql"}
 {"level":"INFO","msg":"migration applied","file":"002_open_role_constraint.sql"}
 {"level":"INFO","msg":"migration applied","file":"003_role_permissions.sql"}
+{"level":"INFO","msg":"permissions cache loaded","roles":2}
 {"level":"INFO","msg":"shlink_client: version validated"}
-{"level":"INFO","msg":"unified-backend starting","addr":"0.0.0.0:8080"}
+{"level":"INFO","msg":"server starting","port":"8080"}
 ```
 
 При повторном запуске (миграции уже применены) строки `migration applied` отсутствуют — это норма.
@@ -280,7 +281,7 @@ ROLE_GROUPS=shlink-admins=admin,shlink-users=user,contractors=user
 | `canViewOwnLinks` | ✓ | ✓ |
 | `canViewAllLinks` | ✓ | — |
 | `canCreateLinks` | ✓ | ✓ |
-| `canCreateWithCustomSlug` | ✓ | — |
+| `canCreateWithCustomSlug` | ✓ | ✓ |
 | `canCreateWithoutSlug` | ✓ | ✓ |
 | `canEditOwnLinks` | ✓ | ✓ |
 | `canEditAllLinks` | ✓ | — |
@@ -294,21 +295,31 @@ ROLE_GROUPS=shlink-admins=admin,shlink-users=user,contractors=user
 | `canManageUsers` | ✓ | — |
 | `canManageRoles` | ✓ | — |
 
+> `canCreateWithCustomSlug` выдаётся пользователям по умолчанию на уровне permissions.
+> Реальное ограничение переехало на уровень фич-флага `FEATURE_USER_CUSTOM_SLUG`
+> (см. раздел «Фич-флаги»).
+
 #### Управление разрешениями
 
 Администратор может изменить разрешения для любой роли через API:
 
 ```bash
-PUT /api/admin/roles/{role}/permissions
-Content-Type: application/json
-
-{
-  "canViewAllLinks": true,
-  "canManageUsers": false
-}
+curl -X PUT https://shlink-create.example.com/api/admin/roles/editor/permissions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "canViewOwnLinks": true,
+    "canCreateLinks": true,
+    "canEditOwnLinks": true,
+    "canDeleteOwnLinks": true,
+    "canManageUsers": false
+  }'
 ```
 
-Изменения вступают в силу немедленно (кеш инвалидируется). При недоступности БД используются fallback-значения из `DefaultAdminPermissions` / `DefaultUserPermissions`.
+Изменения вступают в силу **немедленно** — `RolesHandler.UpsertRolePermissions` вызывает `cache.Set(p)` после сохранения в БД, без рестарта.
+
+При недоступности БД на старте используются fallback-значения:
+- admin-роль → `DefaultAdminPermissions` (все флаги = true)
+- любая другая роль → `DefaultUserPermissions` (базовый набор)
 
 #### Взаимодействие с `FEATURE_USER_CUSTOM_SLUG`
 
@@ -499,14 +510,19 @@ unified-backend/
 │   ├── config/         # Конфигурация из env
 │   ├── domain/         # Типы, permissions
 │   ├── handler/        # HTTP-обработчики
+│   │   ├── admin.go    # Управление пользователями, аудит, настройки
+│   │   ├── roles.go    # Управление ролями и permissions (с инвалидацией кеша)
+│   │   └── ...         # me, dashboard, proxy, settings, url_detail
 │   ├── middleware/      # Auth, RBAC, logging
 │   ├── migrations/
 │   │   └── sql/        # SQL-миграции (embed в бинарник)
 │   ├── repository/
 │   │   └── postgres/   # Репозитории + мигратор
-│   ├── service/        # Бизнес-логика
+│   ├── service/
+│   │   ├── permissions_cache.go  # In-memory кеш прав с OR-семантикой для мультироли
+│   │   └── shlink_service.go     # Бизнес-логика Shlink
 │   └── shlink/         # Клиент Shlink API
-├── test/               # Unit-тесты (бизнес-логика)
+├── test/               # Unit-тесты (бизнес-логика, без БД)
 ├── Dockerfile
 └── go.mod
 ```
@@ -520,6 +536,13 @@ unified-backend/
 ```bash
 cd unified-backend
 go test -v -race ./...
+```
+
+### Lint
+
+```bash
+cd unified-backend
+golangci-lint run ./...
 ```
 
 ### CI/CD
@@ -536,17 +559,6 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 ## Тестирование
 
-### Структура тестов
-
-```
-unified-backend/
-├── internal/
-│   └── config/
-│       └── config_test.go   # Тесты конфигурации (defaults и overrides)
-└── test/
-    └── service_test.go      # Unit-тесты бизнес-логики ShlinkService
-```
-
 Все тесты запускаются без внешних зависимостей (БД не нужна):
 
 ```bash
@@ -554,16 +566,42 @@ cd unified-backend
 go test -v -race ./...
 ```
 
-### `config_test.go` — конфигурация
+### Структура тестов
 
-Тесты проверяют, что `config.Load()` корректно читает переменные окружения.
+```
+unified-backend/
+├── internal/config/
+│   └── config_test.go             # Конфигурация: defaults и overrides
+└── test/
+    ├── audit_sanitize_test.go     # Sanitize чувствительных полей в аудит-логах
+    ├── handler_me_test.go         # GET /api/me: сборка ответа, permissions
+    ├── permissions_cache_test.go  # PermissionsCache: Set, GetMerged, fallback
+    ├── permissions_test.go        # DefaultAdminPermissions, DefaultUserPermissions
+    ├── rbac_test.go               # ExtractIdentity middleware, ROLE_GROUPS маппинг
+    └── service_test.go            # ShlinkService: slug prefix, фильтрация ссылок
+```
+
+### `permissions_cache_test.go` — кеш разрешений
+
+| Тест | Что проверяет |
+|---|---|
+| `TestPermissionsCache_SetUpdatesCache` | `Set` немедленно инвалидирует кеш — изменения доступны без рестарта |
+| `TestPermissionsCache_SetOverwritesExisting` | Повторный `Set` полностью перезаписывает права роли |
+| `TestPermissionsCache_Get_AdminFallback` | Роль отсутствует в БД + это adminRole → `DefaultAdminPermissions` |
+| `TestPermissionsCache_Get_UnknownRoleFallback` | Роль отсутствует в БД + не adminRole → `DefaultUserPermissions` (deny elevated) |
+| `TestPermissionsCache_GetMerged_OR` | Объединение прав двух ролей: пользователь получает флаги из обоих |
+| `TestPermissionsCache_GetMerged_SingleRole` | `GetMerged([role])` эквивалентен `Get(role)` |
+| `TestPermissionsCache_GetMerged_Empty` | `GetMerged([])` → deny-all (нулевые права) |
+| `TestPermissionsCache_GetAll_Empty` | `GetAll` на пустом кеше возвращает `[]` |
+| `TestPermissionsCache_GetAll_AfterLoad` | `GetAll` возвращает все роли, загруженные через `Load` |
+| `TestPermissionsCache_GetAll_AfterSet` | `GetAll` учитывает роли, добавленные через `Set` |
+
+### `config_test.go` — конфигурация
 
 | Тест | Что проверяет |
 |---|---|
 | `TestLoad_ShlinkRunnerDefaults` | Дефолтные значения: `ShlinkRunnerMode=docker`, `ShlinkContainerName=shlink-api`, `ShlinkBin=shlink` |
 | `TestLoad_ShlinkRunnerOverrides` | Переопределение через env: `SHLINK_RUNNER_MODE=native`, `SHLINK_CONTAINER`, `SHLINK_BIN`, `ROLE_SOURCE=db`, `FEATURE_USER_CUSTOM_SLUG=false`, `SHLINK_SHORT_ID_LENGTH=12` |
-
-Вспомогательная функция `withEnv` изолирует env-переменные на время теста и гарантированно восстанавливает их оригинальные значения через `defer`.
 
 ### `service_test.go` — бизнес-логика ShlinkService
 
@@ -578,3 +616,26 @@ go test -v -race ./...
 | `TestEnforceSlugPrefix_AdminIgnoresFeatureFlag` | `FEATURE_USER_CUSTOM_SLUG=false` → admin не блокируется |
 | `TestFilterShortURLsByUser` | Пользователь видит только ссылки со своим prefix |
 | `TestFilterShortURLsByUser_AdminGetAll` | Admin видит все ссылки |
+
+### `rbac_test.go` — middleware и RBAC
+
+| Тест | Что проверяет |
+|---|---|
+| `TestExtractIdentity_MissingHeader` | Нет `X-Auth-Request-User` → 401 |
+| `TestExtractIdentity_WithHeader` | Валидные заголовки → handler вызван |
+| `TestExtractIdentity_AdminGroup_Default` | `shlink-admins` → роль `admin` |
+| `TestExtractIdentity_CustomRoleGroups_Admin` | Кастомный `ROLE_GROUPS`: проверка 6 сценариев |
+| `TestExtractIdentity_CaseInsensitive` | `SHLINK-ADMINS` (upper) → `admin` |
+| `TestExtractIdentity_FirstMatchWins` | Несколько совпавших групп — первая по порядку |
+| `TestExtractIdentity_FieldsPopulated` | Sub, Email, Username, Role, KeycloakRole, Groups корректно распарсены |
+| `TestClientIP_*` | X-Real-IP, X-Forwarded-For, RemoteAddr fallback |
+
+### `permissions_test.go` — domain defaults
+
+| Тест | Что проверяет |
+|---|---|
+| `TestDefaultAdminPermissions_AllGranted` | Все 16 флагов = true для admin |
+| `TestDefaultUserPermissions_OwnGranted` | Базовые «own» флаги = true для user |
+| `TestDefaultUserPermissions_AllDenied` | Elevated флаги = false для user |
+| `TestPermissions_AdminHasAllUserCan` | Инвариант: всё что может user — умеет и admin |
+| `TestRolePermissions_ZeroValueIsDenyAll` | Нулевое значение = deny-all (нет тихого расширения прав) |
