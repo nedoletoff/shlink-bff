@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Stack, Title, Table, Text, Badge, Button, Modal,
-  Select, TextInput, Group, Center, Loader, Divider,
-  Card,
+  Stack, Title, Table, Text, Badge,
+  Group, Center, Loader, Divider,
+  Card, Alert,
 } from '@mantine/core';
-import { useDisclosure } from '@mantine/hooks';
-import { notifications } from '@mantine/notifications';
-import { IconPlus } from '@tabler/icons-react';
+import { IconInfoCircle } from '@tabler/icons-react';
 import { api } from '../../api/client';
 import { RU } from '../../i18n/ru';
 
@@ -26,19 +24,9 @@ interface RolesResponse {
   mappings: RoleMapping[];
 }
 
-const AVAILABLE_ROLES = [
-  { value: 'admin', label: 'admin' },
-  { value: 'user',  label: 'user'  },
-];
-
 export function Roles() {
   const [data,    setData]    = useState<RolesResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [addOpen, { open: openAdd, close: closeAdd }] = useDisclosure(false);
-
-  const [kcGroup,  setKcGroup]  = useState('');
-  const [appRole,  setAppRole]  = useState<string | null>('user');
-  const [saving,   setSaving]   = useState(false);
 
   const fetchRoles = useCallback(() => {
     setLoading(true);
@@ -50,33 +38,10 @@ export function Roles() {
 
   useEffect(() => { fetchRoles(); }, [fetchRoles]);
 
-  const handleAddMapping = async () => {
-    if (!kcGroup.trim() || !appRole) return;
-    setSaving(true);
-    try {
-      await api.post('/api/admin/roles/mappings', {
-        kcGroup: kcGroup.trim(),
-        appRole,
-      });
-      notifications.show({ message: 'Маппинг добавлен', color: 'green' });
-      closeAdd();
-      setKcGroup('');
-      setAppRole('user');
-      fetchRoles();
-    } catch {
-      // handled
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <Stack gap="lg">
       <Group justify="space-between">
         <Title order={2}>{RU.roles.title}</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={openAdd}>
-          {RU.roles.addMapping}
-        </Button>
       </Group>
 
       {loading ? (
@@ -121,65 +86,46 @@ export function Roles() {
 
           <Divider label="Маппинг групп Keycloak → роль" labelPosition="left" />
 
-          {/* Текущие маппинги */}
-          <Card withBorder radius="md" p={0}>
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>{RU.roles.kcGroup}</Table.Th>
-                  <Table.Th>{RU.roles.appRole}</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {data.mappings.length === 0 ? (
+          {/* Информационный блок: маппинги конфигурируются через env */}
+          <Alert
+            icon={<IconInfoCircle size={16} />}
+            color="blue"
+            variant="light"
+            title="Как настроить маппинги?"
+          >
+            Маппинги групп Keycloak → роль управляются через переменную окружения{' '}
+            <Text component="span" ff="monospace" size="sm" fw={600}>ROLE_GROUPS</Text>{' '}
+            в конфигурации сервера. Пример:{' '}
+            <Text component="span" ff="monospace" size="sm">ROLE_GROUPS=shlink-admins:admin,shlink-users:user</Text>
+          </Alert>
+
+          {/* Текущие маппинги (читаем из ответа API, если есть) */}
+          {data.mappings.length > 0 && (
+            <Card withBorder radius="md" p={0}>
+              <Table striped highlightOnHover>
+                <Table.Thead>
                   <Table.Tr>
-                    <Table.Td colSpan={2}>
-                      <Center p="md"><Text c="dimmed">Маппинги не настроены</Text></Center>
-                    </Table.Td>
+                    <Table.Th>{RU.roles.kcGroup}</Table.Th>
+                    <Table.Th>{RU.roles.appRole}</Table.Th>
                   </Table.Tr>
-                ) : data.mappings.map(m => (
-                  <Table.Tr key={m.kcGroup}>
-                    <Table.Td><Text ff="monospace" size="sm">{m.kcGroup}</Text></Table.Td>
-                    <Table.Td>
-                      <Badge color={m.appRole === 'admin' ? 'red' : 'blue'} variant="light">
-                        {m.appRole}
-                      </Badge>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </Card>
+                </Table.Thead>
+                <Table.Tbody>
+                  {data.mappings.map(m => (
+                    <Table.Tr key={m.kcGroup}>
+                      <Table.Td><Text ff="monospace" size="sm">{m.kcGroup}</Text></Table.Td>
+                      <Table.Td>
+                        <Badge color={m.appRole === 'admin' ? 'red' : 'blue'} variant="light">
+                          {m.appRole}
+                        </Badge>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Card>
+          )}
         </Stack>
       )}
-
-      {/* Модалка добавления маппинга */}
-      <Modal opened={addOpen} onClose={closeAdd} title={RU.roles.addMapping} size="sm">
-        <Stack gap="sm">
-          <TextInput
-            label={RU.roles.kcGroup}
-            placeholder="shlink-admins"
-            value={kcGroup}
-            onChange={e => setKcGroup(e.currentTarget.value)}
-          />
-          <Select
-            label={RU.roles.appRole}
-            data={AVAILABLE_ROLES}
-            value={appRole}
-            onChange={setAppRole}
-          />
-          <Group justify="flex-end" mt="md">
-            <Button variant="default" onClick={closeAdd}>{RU.cancel}</Button>
-            <Button
-              onClick={handleAddMapping}
-              loading={saving}
-              disabled={!kcGroup.trim() || !appRole}
-            >
-              {RU.create}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
     </Stack>
   );
 }
