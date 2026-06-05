@@ -11,109 +11,91 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"unified-backend/internal/config"
-	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
 	"unified-backend/internal/middleware"
-	"unified-backend/internal/migrations"
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
-	"unified-backend/internal/shlinkctl"
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+	cfg := config.MustLoad()
 
-	cfg := config.Load()
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	// PostgreSQL
-	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	// ── Postgres ─────────────────────────────────────────────────────────────
+	db, err := postgres.Connect(cfg.DatabaseURL)
 	if err != nil {
-		slog.Error("failed to connect to postgres", "err", err)
+		slog.Error("postgres connect", "err", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
-
-	// Миграции — запускаем до любого обращения к схеме.
-	if err := postgres.RunMigrations(ctx, pool, migrations.FS); err != nil {
-		slog.Error("database migration failed", "err", err)
+	if err := postgres.Migrate(db); err != nil {
+		slog.Error("postgres migrate", "err", err)
 		os.Exit(1)
 	}
 
-	// Репозитории
-	userRepo := postgres.NewUserRepository(pool)
-	auditRepo := postgres.NewAuditRepository(pool)
-	permsRepo := postgres.NewRolePermissionsRepository(pool)
+	userRepo := postgres.NewUserRepository(db)
+	auditRepo := postgres.NewAuditRepository(db)
 
-	// Кеш permissions — загружаем при старте
-	permsCache := service.NewPermissionsCache(permsRepo, cfg.AdminRole)
-	if err := permsCache.Load(ctx); err != nil {
-		// Не фатально: кеш вернёт дефолты для известных ролей
-		slog.Warn("permissions cache load failed, using defaults", "err", err)
+	// ── Shlink client ────────────────────────────────────────────────────────
+	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
+	if err := shlinkClient.ValidateVersion(context.Background(), 3, 5, 3*time.Second); err != nil {
+		slog.Error("shlink version check", "err", err)
+		os.Exit(1)
 	}
 
-	// Shlink
-	shlinkClient := shlink.NewClient(cfg.ShlinkURL)
+	// ── Services ─────────────────────────────────────────────────────────────
+	permsCache, err := service.NewPermissionsCache(context.Background(), userRepo)
+	if err != nil {
+		slog.Error("permissions cache init", "err", err)
+		os.Exit(1)
+	}
+
 	shlinkSvc := service.NewShlinkService(shlinkClient, cfg, permsCache)
 
-	if err := shlinkClient.ValidateVersion(ctx, 5, 10, 3*time.Second); err != nil {
-		slog.Error("shlink version validation failed", "err", err)
-		os.Exit(1)
-	}
-
-	// CLI provisioner — генерация per-user API-ключей
-	var runner shlinkctl.Runner
-	if cfg.ShlinkRunnerMode == "native" {
-		runner = shlinkctl.NewNativeRunner(cfg.ShlinkBin)
-		slog.Info("shlinkctl: using native runner", "bin", cfg.ShlinkBin)
-	} else {
-		runner = shlinkctl.NewDockerRunner(cfg.ShlinkContainerName)
-		slog.Info("shlinkctl: using docker runner", "container", cfg.ShlinkContainerName)
-	}
-	provisioner := shlinkctl.NewProvisioner(pool, runner)
-
-	// Хендлеры
-	meH := handler.NewMeHandler(cfg, permsCache)
+	// ── Handlers ─────────────────────────────────────────────────────────────
+	meH := handler.NewMeHandler(userRepo, shlinkSvc)
 	dashH := handler.NewDashboardHandler(shlinkSvc, userRepo)
 	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
-	adminH := handler.NewAdminHandler(userRepo, auditRepo)
-	rolesH := handler.NewRolesHandler(permsCache, permsRepo, cfg)
+	adminH := handler.NewAdminHandler(userRepo, auditRepo, shlinkSvc)
+
 	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
 	settingsH := handler.NewSettingsHandler(cfg, shlinkSvc)
 
-	r := chi.NewRouter()
-	r.Use(chimiddleware.Recoverer)
-	r.Use(chimiddleware.Timeout(30 * time.Second))
+	// ── OIDC middleware ───────────────────────────────────────────────────────
+	oidcMW, err := middleware.NewOIDCMiddleware(cfg)
+	if err != nil {
+		slog.Error("oidc middleware init", "err", err)
+		os.Exit(1)
+	}
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok","service":"unified-backend"}`))
+	// ── Router ────────────────────────────────────────────────────────────────
+	r := chi.NewRouter()
+	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.Recoverer)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   cfg.CORSAllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	// Public
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
 
+	// Authenticated routes
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.ExtractIdentity(cfg.RoleGroups))
-		r.Use(middleware.RequestLogger)
-		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, provisioner, cfg))
+		r.Use(oidcMW.Authenticate)
+		r.Use(middleware.EnsureUser(userRepo, cfg))
 
-		r.Get("/api/me", meH.ServeHTTP)
+		r.Get("/api/me", meH.GetMe)
+		r.Get("/api/dashboard", dashH.GetDashboard)
 
-		// Dashboard — 4 отдельных endpoint'а (соответствуют вызовам с фронтенда)
-		r.Get("/api/dashboard/overview", dashH.GetOverview)
-		r.Get("/api/dashboard/users", dashH.GetUsersActivity)
-		r.Get("/api/dashboard/urls", dashH.GetUrlsStats)
-		r.Get("/api/dashboard/devices", dashH.GetDevicesStats)
-
-		// URL detail — детальная статистика отдельной ссылки
-		r.Get("/api/urls/{shortCode}/detail", urlDetailH.GetURLDetail)
-
-		// Shlink proxy — enforcement внутри хендлеров через PermissionsCache
+		// Shlink proxy
 		r.Get("/api/shlink/short-urls", proxyH.ListShortURLs)
 		r.Post("/api/shlink/short-urls", proxyH.CreateShortURL)
 		r.Patch("/api/shlink/short-urls/{shortCode}", proxyH.UpdateShortURL)
@@ -123,9 +105,16 @@ func main() {
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
 		r.Delete("/api/shlink/tags/{tagId}", proxyH.DeleteTag)
 
-		// Admin-only: управление пользователями, аудит, роли, настройки
+		// URL detail
+		r.Get("/api/urls/{shortCode}/detail", urlDetailH.GetURLDetail)
+
+		// Settings
+		r.Get("/api/settings", settingsH.GetSettings)
+		r.Patch("/api/settings", settingsH.UpdateSettings)
+
+		// Admin
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.AdminOnly(cfg.AdminRole, auditRepo))
+			r.Use(middleware.RequireAdmin)
 
 			r.Get("/api/admin/users", adminH.ListUsers)
 			r.Get("/api/admin/users/{sub}", adminH.GetUser)
@@ -135,51 +124,37 @@ func main() {
 			r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
 			r.Get("/api/admin/logs", adminH.ListLogs)
 
-			// Settings — чтение/обновление runtime-настроек
-			r.Get("/api/admin/settings", settingsH.GetSettings)
-			r.Patch("/api/admin/settings", settingsH.PatchSettings)
-
-			// Управление permissions ролей — только роли с can_manage_roles
-			r.With(
-				middleware.RequirePermission(permsCache,
-					func(p domain.RolePermissions) bool { return p.CanManageRoles },
-					auditRepo,
-				),
-			).Get("/api/admin/roles", rolesH.ListRoles)
-			r.With(
-				middleware.RequirePermission(permsCache,
-					func(p domain.RolePermissions) bool { return p.CanManageRoles },
-					auditRepo,
-				),
-			).Get("/api/admin/roles/{role}", rolesH.GetRole)
-			r.With(
-				middleware.RequirePermission(permsCache,
-					func(p domain.RolePermissions) bool { return p.CanManageRoles },
-					auditRepo,
-				),
-			).Put("/api/admin/roles/{role}/permissions", rolesH.UpsertRolePermissions)
+			r.Get("/api/admin/roles", adminH.ListRoles)
+			r.Get("/api/admin/roles/{role}", adminH.GetRole)
+			r.Put("/api/admin/roles/{role}/permissions", adminH.UpdateRolePermissions)
 		})
 	})
 
+	// ── Server ────────────────────────────────────────────────────────────────
 	srv := &http.Server{
-		Addr:         cfg.HTTPAddr,
+		Addr:         ":" + cfg.Port,
 		Handler:      r,
-		ReadTimeout:  10 * time.Second,
+		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
 	go func() {
-		slog.Info("unified-backend starting", "addr", cfg.HTTPAddr)
+		slog.Info("server starting", "port", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "err", err)
 			os.Exit(1)
 		}
 	}()
 
-	<-ctx.Done()
-	slog.Info("shutting down gracefully...")
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer shutCancel()
-	_ = srv.Shutdown(shutCtx)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("server shutdown", "err", err)
+	}
+	slog.Info("server stopped")
 }
