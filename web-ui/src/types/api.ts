@@ -33,13 +33,15 @@ export interface VisitsSummary {
 }
 
 export interface ShortURL {
-  shortCode:     string;
-  shortUrl:      string;
-  longUrl:       string;
-  title:         string;
-  tags:          string[];
-  visitsSummary: VisitsSummary;
-  dateCreated:   string;
+  shortCode:      string;
+  shortUrl:       string;
+  longUrl:        string;
+  title:          string;
+  tags:           string[];
+  visitsSummary:  VisitsSummary;
+  dateCreated:    string;
+  ownerUsername?: string;   // возвращается только admin-у
+  isActive?:      boolean;  // false = деактивирована
 }
 
 export interface Pagination {
@@ -147,11 +149,11 @@ export interface DevicesResponse {
 
 // URL detail page
 export interface VisitRow {
-  date:      string;
-  device:    string;
-  os:        string;
-  country:   string | null;
-  referer:   string | null;
+  date:    string;
+  device:  string;
+  os:      string;
+  referer: string | null;
+  // country намеренно убрана: shlink не возвращает её без GeoIP-подписки
 }
 
 export interface UrlDetailResponse {
@@ -161,6 +163,7 @@ export interface UrlDetailResponse {
   longUrl:        string;
   dateCreated:    string;
   ownerUsername?: string;
+  isActive?:      boolean;
   clicksPerDay:   ClickPoint[];
   devices:        DeviceBreakdown;
   browsers:       NamedCount[];

@@ -14,19 +14,23 @@ import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { formatDate } from '../utils/date';
+import { useIsAdmin } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import type { Pagination as PaginationInfo, ShortURL, ShortURLsListResponse } from '../types/api';
 
 const ITEMS_PER_PAGE = 20;
 
 export function ShortUrls() {
   const { user }  = useAuth();
-  const [urls,          setUrls]          = useState<ShortURL[]>([]);
-  const [pagination,    setPagination]    = useState<PaginationInfo | null>(null);
-  const [loading,       setLoading]       = useState(true);
-  const [search,        setSearch]        = useState('');
-  const [page,          setPage]          = useState(1);
-  const [deleteTarget,  setDeleteTarget]  = useState<ShortURL | null>(null);
-  const [editTarget,    setEditTarget]    = useState<ShortURL | null>(null);
+  const isAdmin   = useIsAdmin();
+  const navigate  = useNavigate();
+  const [urls,         setUrls]         = useState<ShortURL[]>([]);
+  const [pagination,   setPagination]   = useState<PaginationInfo | null>(null);
+  const [loading,      setLoading]      = useState(true);
+  const [search,       setSearch]       = useState('');
+  const [page,         setPage]         = useState(1);
+  const [deleteTarget, setDeleteTarget] = useState<ShortURL | null>(null);
+  const [editTarget,   setEditTarget]   = useState<ShortURL | null>(null);
   const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure(false);
 
   const [debouncedSearch] = useDebouncedValue(search, 350);
@@ -79,66 +83,48 @@ export function ShortUrls() {
         leftSection={<IconSearch size={16} />}
         value={search}
         onChange={e => setSearch(e.currentTarget.value)}
+        style={{ maxWidth: 400 }}
       />
 
       {loading ? (
         <Center h={200}><Loader /></Center>
       ) : (
-        <Table striped highlightOnHover withTableBorder>
+        <Table highlightOnHover verticalSpacing="xs">
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Название</Table.Th>
+              <Table.Th>Код</Table.Th>
               <Table.Th>Куда ведёт</Table.Th>
-              <Table.Th>Короткая ссылка</Table.Th>
-              <Table.Th>Кастомная ссылка</Table.Th>
-              <Table.Th>Теги</Table.Th>
-              <Table.Th>Переходов</Table.Th>
+              <Table.Th>Название</Table.Th>
+              {isAdmin && <Table.Th>Создатель</Table.Th>}
+              <Table.Th>Статус</Table.Th>
+              <Table.Th style={{ width: 80 }}>Переходы</Table.Th>
               <Table.Th>Создана</Table.Th>
-              <Table.Th />
+              <Table.Th style={{ width: 80 }}>Действия</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
             {urls.map(url => (
-              <Table.Tr key={url.shortCode}>
-                {/* 2.1 — Название */}
-                <Table.Td>
-                  <Text size="sm" c={url.title ? undefined : 'dimmed'}>
-                    {url.title || 'Без названия'}
-                  </Text>
-                </Table.Td>
-
-                {/* Куда ведёт */}
-                <Table.Td>
-                  <Text size="sm" truncate="end" maw={240} title={url.longUrl}>
-                    {url.longUrl}
-                  </Text>
-                </Table.Td>
-
-                {/* 2.2 — Полный короткий URL + кнопка копирования */}
+              <Table.Tr
+                key={url.shortCode}
+                style={{ cursor: 'pointer', opacity: url.isActive === false ? 0.55 : 1 }}
+                onClick={e => {
+                  // не открывать детали при клике на кнопку
+                  if ((e.target as HTMLElement).closest('button,a')) return;
+                  navigate(`/urls/${url.shortCode}`);
+                }}
+              >
                 <Table.Td>
                   <Group gap={4} wrap="nowrap">
-                    <Anchor
-                      href={url.shortUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      size="sm"
-                      truncate="end"
-                      maw={180}
-                    >
-                      {url.shortUrl}
-                    </Anchor>
-                    <CopyButton value={url.shortUrl} timeout={2000}>
+                    <Text ff="monospace" size="sm">{url.shortCode}</Text>
+                    <CopyButton value={url.shortUrl}>
                       {({ copied, copy }) => (
-                        <Tooltip label={copied ? 'Скопировано!' : 'Копировать'} withArrow>
+                        <Tooltip label={copied ? 'Скопировано' : 'Копировать'} withArrow>
                           <ActionIcon
-                            size="xs"
-                            variant="subtle"
+                            size="xs" variant="subtle"
                             color={copied ? 'teal' : 'gray'}
-                            onClick={copy}
+                            onClick={e => { e.stopPropagation(); copy(); }}
                           >
-                            {copied
-                              ? <IconCheck size={12} />
-                              : <IconCopy size={12} />}
+                            {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
                           </ActionIcon>
                         </Tooltip>
                       )}
@@ -146,19 +132,38 @@ export function ShortUrls() {
                   </Group>
                 </Table.Td>
 
-                {/* 2.2 — Кастомная ссылка (slug) */}
-                <Table.Td>
-                  <Text size="xs" c="dimmed" ff="monospace">
-                    {url.shortCode || '—'}
-                  </Text>
+                <Table.Td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <Anchor
+                    href={url.longUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    fz="sm"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {url.longUrl}
+                  </Anchor>
                 </Table.Td>
 
                 <Table.Td>
-                  <Group gap={4}>
-                    {url.tags.map(t => (
-                      <Badge key={t} size="sm" variant="light">{t}</Badge>
-                    ))}
-                  </Group>
+                  <Text size="sm" c={url.title ? undefined : 'dimmed'}>
+                    {url.title || '—'}
+                  </Text>
+                </Table.Td>
+
+                {isAdmin && (
+                  <Table.Td>
+                    <Text size="sm" c="dimmed">{url.ownerUsername ?? '—'}</Text>
+                  </Table.Td>
+                )}
+
+                <Table.Td>
+                  <Badge
+                    size="xs"
+                    variant="light"
+                    color={url.isActive === false ? 'red' : 'green'}
+                  >
+                    {url.isActive === false ? 'неактивна' : 'активна'}
+                  </Badge>
                 </Table.Td>
 
                 <Table.Td>{url.visitsSummary.total.toLocaleString('ru')}</Table.Td>
@@ -170,14 +175,17 @@ export function ShortUrls() {
                 <Table.Td>
                   <Group gap={4}>
                     {user?.permissions.canEditOwnLinks && (
-                      <ActionIcon variant="subtle" onClick={() => setEditTarget(url)}>
+                      <ActionIcon
+                        variant="subtle"
+                        onClick={e => { e.stopPropagation(); setEditTarget(url); }}
+                      >
                         <IconEdit size={16} />
                       </ActionIcon>
                     )}
                     {user?.permissions.canDeleteOwnLinks && (
                       <ActionIcon
                         color="red" variant="subtle"
-                        onClick={() => setDeleteTarget(url)}
+                        onClick={e => { e.stopPropagation(); setDeleteTarget(url); }}
                       >
                         <IconTrash size={16} />
                       </ActionIcon>
@@ -188,7 +196,7 @@ export function ShortUrls() {
             ))}
             {urls.length === 0 && (
               <Table.Tr>
-                <Table.Td colSpan={8}>
+                <Table.Td colSpan={isAdmin ? 8 : 7}>
                   <Center p="xl">
                     <Text c="dimmed">Ничего не найдено</Text>
                   </Center>
@@ -312,9 +320,9 @@ function EditShortUrlModal({
 }: {
   url: ShortURL; onClose: () => void; onSaved: () => void;
 }) {
-  const [longUrl,  setLongUrl]  = useState(url.longUrl);
-  const [title,    setTitle]    = useState(url.title ?? '');
-  const [loading,  setLoading]  = useState(false);
+  const [longUrl, setLongUrl] = useState(url.longUrl);
+  const [title,   setTitle]   = useState(url.title ?? '');
+  const [loading, setLoading] = useState(false);
 
   const handleSave = async () => {
     setLoading(true);

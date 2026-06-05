@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Stack, Title, Text, Card, Group, Anchor,
   ActionIcon, Tooltip, SegmentedControl, Table,
-  Skeleton, Center, Grid, CopyButton, Pagination,
+  Skeleton, Center, Grid, CopyButton, Pagination, Badge,
 } from '@mantine/core';
 import {
   IconArrowLeft, IconCopy, IconCheck,
@@ -23,7 +23,7 @@ import type { UrlDetailResponse } from '../types/api';
 const COLORS = ['#4dabf7', '#51cf66', '#ff6b6b', '#ffd43b', '#cc5de8'];
 
 const PERIOD_OPTIONS = [
-  { label: '7 д', value: '7'  },
+  { label: '7 д',  value: '7'  },
   { label: '30 д', value: '30' },
   { label: '90 д', value: '90' },
 ];
@@ -35,17 +35,17 @@ export function UrlDetail() {
   const navigate = useNavigate();
   const isAdmin = useIsAdmin();
 
-  const [data, setData]       = useState<UrlDetailResponse | null>(null);
+  const [data,    setData]    = useState<UrlDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [err, setErr]         = useState<string | null>(null);
-  const [period, setPeriod]   = useState('30');
-  const [page, setPage]       = useState(1);
+  const [err,     setErr]     = useState<string | null>(null);
+  const [period,  setPeriod]  = useState('30');
+  const [page,    setPage]    = useState(1);
 
   useEffect(() => {
     if (!shortCode) return;
     setLoading(true);
     setErr(null);
-    api.get<UrlDetailResponse>(`/api/urls/${shortCode}/detail`, { params: { period } })
+    api.get<UrlDetailResponse>(`/api/shlink/short-urls/${shortCode}`, { params: { period } })
       .then(setData)
       .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
@@ -110,7 +110,12 @@ export function UrlDetail() {
             <IconArrowLeft size={18} />
           </ActionIcon>
           <Stack gap={2}>
-            <Title order={3}>{data.title || 'Без названия'}</Title>
+            <Group gap="xs">
+              <Title order={3}>{data.title || 'Без названия'}</Title>
+              {data.isActive === false && (
+                <Badge color="red" variant="light" size="sm">деактивирована</Badge>
+              )}
+            </Group>
             <Group gap="xs">
               <Anchor href={data.shortUrl} target="_blank" fz="sm" fw={500}>
                 {data.shortUrl}
@@ -166,8 +171,7 @@ export function UrlDetail() {
               <IconEdit size={16} />
             </ActionIcon>
             <ActionIcon variant="light" color="red" onClick={() => {
-              if (confirm('Удалить ссылку?')) {
-                // Используем правильный proxy-endpoint, а не /api/urls/*
+              if (confirm('Удалить ссылку? Все переходы перестанут работать.')) {
                 api.delete(`/api/shlink/short-urls/${shortCode}`).then(() => navigate(-1));
               }
             }}>
@@ -203,7 +207,6 @@ export function UrlDetail() {
                 <Table.Th>Дата / время</Table.Th>
                 <Table.Th>Устройство</Table.Th>
                 <Table.Th>ОС</Table.Th>
-                <Table.Th>Страна</Table.Th>
                 <Table.Th>Реферер</Table.Th>
               </Table.Tr>
             </Table.Thead>
@@ -213,8 +216,7 @@ export function UrlDetail() {
                   <Table.Td>{formatDateTime(v.date)}</Table.Td>
                   <Table.Td>{v.device ?? '—'}</Table.Td>
                   <Table.Td>{v.os ?? '—'}</Table.Td>
-                  <Table.Td>{v.country ?? '—'}</Table.Td>
-                  <Table.Td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <Table.Td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {v.referer ?? '—'}
                   </Table.Td>
                 </Table.Tr>
