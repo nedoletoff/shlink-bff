@@ -1,146 +1,183 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Stack, Title, Card, Text, Switch, NumberInput,
-  Button, Group, Badge, Divider, Skeleton, Center, TextInput,
+  Stack, Title, Text, Card, Group, Button, TextInput,
+  Switch, NumberInput, Loader, Center, Badge, Divider,
+  Alert, Box,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { IconInfoCircle, IconPlugConnected, IconPlugConnectedX } from '@tabler/icons-react';
 import { api } from '../../api/client';
-import { RU } from '../../i18n/ru';
+import type { ShlinkSettings } from '../../types/api';
 
-interface ShlinkSettings {
+interface SettingsForm {
   shortCodeLength:  number;
   allowCustomSlugs: boolean;
   userSlugPrefix:   boolean;
   domain:           string;
-  shlinkVersion:    string;
-  connected:        boolean;
+}
+
+function FieldRow({ label, description, children }: {
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xl">
+      <Box style={{ flex: 1, minWidth: 0 }}>
+        <Text size="sm" fw={500}>{label}</Text>
+        {description && <Text size="xs" c="dimmed" mt={2}>{description}</Text>}
+      </Box>
+      <Box style={{ flexShrink: 0, minWidth: 180 }}>{children}</Box>
+    </Group>
+  );
 }
 
 export function Settings() {
   const [settings, setSettings] = useState<ShlinkSettings | null>(null);
+  const [form,     setForm]     = useState<SettingsForm | null>(null);
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
+  const [dirty,    setDirty]    = useState(false);
 
-  const [codeLen,    setCodeLen]    = useState<number>(6);
-  const [allowSlugs, setAllowSlugs] = useState(true);
-  const [slugPrefix, setSlugPrefix] = useState(false);
-  const [domain,     setDomain]     = useState('');
-
-  useEffect(() => {
+  const fetchSettings = useCallback(() => {
+    setLoading(true);
     api.get<ShlinkSettings>('/api/admin/settings')
       .then(s => {
         setSettings(s);
-        setCodeLen(s.shortCodeLength);
-        setAllowSlugs(s.allowCustomSlugs);
-        setSlugPrefix(s.userSlugPrefix);
-        setDomain(s.domain ?? '');
+        setForm({
+          shortCodeLength:  s.shortCodeLength,
+          allowCustomSlugs: s.allowCustomSlugs,
+          userSlugPrefix:   s.userSlugPrefix,
+          domain:           s.domain,
+        });
+        setDirty(false);
       })
       .catch(() => setSettings(null))
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => { fetchSettings(); }, [fetchSettings]);
+
+  const patch = <K extends keyof SettingsForm>(key: K, val: SettingsForm[K]) => {
+    setForm(f => f ? { ...f, [key]: val } : f);
+    setDirty(true);
+  };
+
   const handleSave = async () => {
+    if (!form) return;
     setSaving(true);
     try {
-      await api.patch('/api/admin/settings', {
-        shortCodeLength:  codeLen,
-        allowCustomSlugs: allowSlugs,
-        userSlugPrefix:   slugPrefix,
-        domain:           domain.trim() || undefined,
-      });
-      notifications.show({ message: RU.settings.saved, color: 'green' });
-      setSettings(prev => prev ? {
-        ...prev,
-        shortCodeLength: codeLen,
-        allowCustomSlugs: allowSlugs,
-        userSlugPrefix: slugPrefix,
-        domain,
-      } : prev);
+      await api.patch('/api/admin/settings', form);
+      notifications.show({ message: 'Настройки сохранены', color: 'green' });
+      fetchSettings();
     } catch {
-      // handled
+      /* shown */
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) {
-    return (
-      <Stack gap="lg">
-        <Skeleton height={32} width={200} />
-        {[1, 2, 3].map(i => <Skeleton key={i} height={120} radius="md" />)}
-      </Stack>
-    );
-  }
-
-  if (!settings) {
-    return <Center h={200}><Text c="dimmed">Не удалось загрузить настройки</Text></Center>;
-  }
-
   return (
-    <Stack gap="lg">
-      <Title order={2}>{RU.settings.title}</Title>
-
-      <Card withBorder radius="md" p="lg">
-        <Text fw={600} mb="md">{RU.settings.generation}</Text>
-        <Stack gap="md">
-          <NumberInput
-            label={RU.settings.shortCodeLength}
-            description={`${RU.settings.shortCodeHint} (3–32)`}
-            min={3}
-            max={32}
-            value={codeLen}
-            onChange={v => setCodeLen(Number(v))}
-            style={{ maxWidth: 220 }}
-          />
-          <Switch
-            label={RU.settings.allowCustomSlugs}
-            checked={allowSlugs}
-            onChange={e => setAllowSlugs(e.currentTarget.checked)}
-          />
-          <Switch
-            label={RU.settings.userSlugPrefix}
-            description="FEATURE_USER_SLUG_PREFIX"
-            checked={slugPrefix}
-            onChange={e => setSlugPrefix(e.currentTarget.checked)}
-          />
-        </Stack>
-      </Card>
-
-      <Card withBorder radius="md" p="lg">
-        <Text fw={600} mb="md">{RU.settings.domain}</Text>
-        <Stack gap="sm">
-          <TextInput
-            label={RU.settings.domainHint}
-            placeholder="https://s.example.com"
-            value={domain}
-            onChange={e => setDomain(e.currentTarget.value)}
-          />
-          <Text size="xs" c="dimmed">
-            Этот домен используется в начале коротких ссылок вместо внутреннего docker-адреса.
-          </Text>
-        </Stack>
-      </Card>
-
-      <Card withBorder radius="md" p="lg">
-        <Text fw={600} mb="md">{RU.settings.apiSection}</Text>
-        <Stack gap="xs">
-          <Group gap="sm">
-            <Text size="sm" c="dimmed" w={180}>{RU.settings.shlinkVersion}:</Text>
-            <Text ff="monospace" size="sm">{settings.shlinkVersion || '—'}</Text>
-          </Group>
-          <Divider />
-          <Group gap="sm">
-            <Text size="sm" c="dimmed" w={180}>{RU.settings.connectionStatus}:</Text>
-            <Badge color={settings.connected ? 'green' : 'red'} variant="dot">
-              {settings.connected ? RU.settings.connected : RU.settings.disconnected}
-            </Badge>
-          </Group>
-        </Stack>
-      </Card>
-
-      <Group>
-        <Button onClick={handleSave} loading={saving}>{RU.save}</Button>
+    <Stack gap="xl">
+      <Group justify="space-between" wrap="nowrap">
+        <div>
+          <Title order={2} fw={700}>Настройки</Title>
+          <Text size="sm" c="dimmed">Конфигурация сервиса</Text>
+        </div>
+        {settings && (
+          <Badge
+            size="sm"
+            variant="light"
+            color={settings.connected ? 'green' : 'red'}
+            leftSection={settings.connected
+              ? <IconPlugConnected size={12} />
+              : <IconPlugConnectedX size={12} />
+            }
+          >
+            Shlink {settings.shlinkVersion} — {settings.connected ? 'подключён' : 'недоступен'}
+          </Badge>
+        )}
       </Group>
+
+      {loading ? (
+        <Center h={200}><Loader /></Center>
+      ) : !form ? (
+        <Alert icon={<IconInfoCircle size={16} />} color="red">
+          Не удалось загрузить настройки. Проверьте подключение к Shlink.
+        </Alert>
+      ) : (
+        <Stack gap="md">
+          {/* Shlink info */}
+          <Card withBorder radius="md" p="lg">
+            <Text fw={600} mb="md" size="sm" tt="uppercase" c="dimmed" style={{ letterSpacing: '0.05em' }}>
+              Подключение
+            </Text>
+            <Stack gap="md">
+              <FieldRow label="Домен" description="Базовый домен, используемый для коротких ссылок">
+                <TextInput
+                  size="sm"
+                  value={form.domain}
+                  onChange={e => patch('domain', e.currentTarget.value)}
+                  placeholder="https://s.example.com"
+                />
+              </FieldRow>
+            </Stack>
+          </Card>
+
+          {/* Short URL settings */}
+          <Card withBorder radius="md" p="lg">
+            <Text fw={600} mb="md" size="sm" tt="uppercase" c="dimmed" style={{ letterSpacing: '0.05em' }}>
+              Короткие ссылки
+            </Text>
+            <Stack gap="lg">
+              <FieldRow
+                label="Длина кода"
+                description="Количество символов в автоматически сгенерированном коде (4–10)"
+              >
+                <NumberInput
+                  size="sm"
+                  value={form.shortCodeLength}
+                  onChange={v => patch('shortCodeLength', Number(v) || 5)}
+                  min={4} max={10}
+                />
+              </FieldRow>
+
+              <Divider />
+
+              <FieldRow
+                label="Кастомные слаги"
+                description="Разрешить пользователям задавать собственный код ссылки"
+              >
+                <Switch
+                  checked={form.allowCustomSlugs}
+                  onChange={e => patch('allowCustomSlugs', e.currentTarget.checked)}
+                  label={form.allowCustomSlugs ? 'Включено' : 'Выключено'}
+                />
+              </FieldRow>
+
+              <Divider />
+
+              <FieldRow
+                label="Префикс пользователя"
+                description="Добавлять slug-префикс пользователя к генерируемым кодам"
+              >
+                <Switch
+                  checked={form.userSlugPrefix}
+                  onChange={e => patch('userSlugPrefix', e.currentTarget.checked)}
+                  label={form.userSlugPrefix ? 'Включено' : 'Выключено'}
+                />
+              </FieldRow>
+            </Stack>
+          </Card>
+
+          {dirty && (
+            <Group justify="flex-end">
+              <Button variant="default" onClick={fetchSettings}>Сбросить</Button>
+              <Button onClick={handleSave} loading={saving}>Сохранить изменения</Button>
+            </Group>
+          )}
+        </Stack>
+      )}
     </Stack>
   );
 }

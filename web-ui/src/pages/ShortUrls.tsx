@@ -2,13 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Stack, Title, Button, TextInput, Table, ActionIcon, Group,
   Badge, Text, Loader, Center, Modal, Tooltip, Pagination,
-  Anchor, CopyButton,
+  Anchor, CopyButton, Box, Card,
 } from '@mantine/core';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
   IconPlus, IconTrash, IconSearch, IconEdit,
-  IconCopy, IconCheck,
+  IconCopy, IconCheck, IconBan, IconExternalLink,
 } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,10 +20,105 @@ import type { Pagination as PaginationInfo, ShortURL, ShortURLsListResponse } fr
 
 const ITEMS_PER_PAGE = 20;
 
+// ─── Create / Edit modal ─────────────────────────────────────────────────────
+function CreateEditModal({
+  opened, onClose, onSaved, editTarget,
+}: {
+  opened: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+  editTarget: ShortURL | null;
+}) {
+  const [longUrl,   setLongUrl]   = useState('');
+  const [title,     setTitle]     = useState('');
+  const [customSlug, setSlug]     = useState('');
+  const [saving,    setSaving]    = useState(false);
+
+  useEffect(() => {
+    if (editTarget) {
+      setLongUrl(editTarget.longUrl);
+      setTitle(editTarget.title ?? '');
+      setSlug('');
+    } else {
+      setLongUrl(''); setTitle(''); setSlug('');
+    }
+  }, [editTarget, opened]);
+
+  const handleSubmit = async () => {
+    if (!longUrl.trim()) return;
+    setSaving(true);
+    try {
+      if (editTarget) {
+        await api.patch(`/api/shlink/short-urls/${editTarget.shortCode}`, {
+          longUrl: longUrl.trim(),
+          title:   title.trim() || undefined,
+        });
+        notifications.show({ message: 'Ссылка обновлена', color: 'green' });
+      } else {
+        await api.post('/api/shlink/short-urls', {
+          longUrl:    longUrl.trim(),
+          title:      title.trim() || undefined,
+          customSlug: customSlug.trim() || undefined,
+        });
+        notifications.show({ message: 'Ссылка создана', color: 'green' });
+      }
+      onSaved();
+      onClose();
+    } catch {
+      /* APIError уже показан через notifications */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={editTarget ? 'Редактировать ссылку' : 'Создать ссылку'}
+      size="md"
+    >
+      <Stack gap="sm">
+        <TextInput
+          label="Длинная ссылка"
+          placeholder="https://example.com/very/long/path"
+          value={longUrl}
+          onChange={e => setLongUrl(e.currentTarget.value)}
+          required
+          data-autofocus
+        />
+        <TextInput
+          label="Название (опционально)"
+          placeholder="Как вы будете её узнавать"
+          value={title}
+          onChange={e => setTitle(e.currentTarget.value)}
+        />
+        {!editTarget && (
+          <TextInput
+            label="Кастомный слаг (опционально)"
+            placeholder="my-link"
+            value={customSlug}
+            onChange={e => setSlug(e.currentTarget.value)}
+            description="Оставьте пустым — сгенерируется автоматически"
+          />
+        )}
+        <Group justify="flex-end" mt="sm">
+          <Button variant="default" onClick={onClose}>Отмена</Button>
+          <Button onClick={handleSubmit} loading={saving}>
+            {editTarget ? 'Сохранить' : 'Создать'}
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 export function ShortUrls() {
   const { user }  = useAuth();
   const isAdmin   = useIsAdmin();
   const navigate  = useNavigate();
+
   const [urls,         setUrls]         = useState<ShortURL[]>([]);
   const [pagination,   setPagination]   = useState<PaginationInfo | null>(null);
   const [loading,      setLoading]      = useState(true);
@@ -59,311 +154,201 @@ export function ShortUrls() {
     if (!deleteTarget) return;
     try {
       await api.delete(`/api/shlink/short-urls/${deleteTarget.shortCode}`);
-      notifications.show({ message: 'Ссылка удалена', color: 'green' });
+      notifications.show({ message: 'Ссылка деактивирована', color: 'green' });
       setDeleteTarget(null);
       fetchUrls();
     } catch {
-      /* APIError уже показан через notifications */
+      /* already shown */
     }
   };
 
+  const totalPages = pagination ? pagination.pagesCount : 1;
+
   return (
     <Stack gap="lg">
-      <Group justify="space-between">
-        <Title order={2}>Мои ссылки</Title>
+      <Group justify="space-between" wrap="nowrap">
+        <div>
+          <Title order={2} fw={700}>Мои ссылки</Title>
+          {pagination && (
+            <Text size="sm" c="dimmed">{pagination.totalItems} ссылок</Text>
+          )}
+        </div>
         {user?.permissions.canCreateShortUrl && (
-          <Button leftSection={<IconPlus size={16} />} onClick={openCreate}>
-            Создать ссылку
+          <Button size="sm" leftSection={<IconPlus size={14} />} onClick={openCreate}>
+            Создать
           </Button>
         )}
       </Group>
 
+      {/* Search */}
       <TextInput
-        placeholder="Поиск по коду, URL, названию..."
-        leftSection={<IconSearch size={16} />}
+        placeholder="Поиск по ссылке или коду…"
+        leftSection={<IconSearch size={14} />}
         value={search}
         onChange={e => setSearch(e.currentTarget.value)}
-        style={{ maxWidth: 400 }}
+        size="sm"
       />
 
-      {loading ? (
-        <Center h={200}><Loader /></Center>
-      ) : (
-        <Table highlightOnHover verticalSpacing="xs">
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Код</Table.Th>
-              <Table.Th>Куда ведёт</Table.Th>
-              <Table.Th>Название</Table.Th>
-              {isAdmin && <Table.Th>Создатель</Table.Th>}
-              <Table.Th>Статус</Table.Th>
-              <Table.Th style={{ width: 80 }}>Переходы</Table.Th>
-              <Table.Th>Создана</Table.Th>
-              <Table.Th style={{ width: 80 }}>Действия</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {urls.map(url => (
-              <Table.Tr
-                key={url.shortCode}
-                style={{ cursor: 'pointer', opacity: url.isActive === false ? 0.55 : 1 }}
-                onClick={e => {
-                  // не открывать детали при клике на кнопку
-                  if ((e.target as HTMLElement).closest('button,a')) return;
-                  navigate(`/urls/${url.shortCode}`);
-                }}
-              >
-                <Table.Td>
-                  <Group gap={4} wrap="nowrap">
-                    <Text ff="monospace" size="sm">{url.shortCode}</Text>
-                    <CopyButton value={url.shortUrl}>
-                      {({ copied, copy }) => (
-                        <Tooltip label={copied ? 'Скопировано' : 'Копировать'} withArrow>
-                          <ActionIcon
-                            size="xs" variant="subtle"
-                            color={copied ? 'teal' : 'gray'}
-                            onClick={e => { e.stopPropagation(); copy(); }}
+      {/* Table */}
+      <Card withBorder p={0} radius="md" style={{ overflow: 'hidden' }}>
+        {loading ? (
+          <Center h={200}><Loader size="sm" /></Center>
+        ) : urls.length === 0 ? (
+          <Center h={120}>
+            <Text c="dimmed" size="sm">Ничего не найдено</Text>
+          </Center>
+        ) : (
+          <Box style={{ overflowX: 'auto' }}>
+            <Table highlightOnHover withRowBorders stickyHeader>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th style={{ width: 120 }}>Код</Table.Th>
+                  <Table.Th>Назначение</Table.Th>
+                  <Table.Th style={{ width: 100 }}>Создана</Table.Th>
+                  <Table.Th style={{ width: 80 }} ta="right">Клики</Table.Th>
+                  {isAdmin && <Table.Th style={{ width: 110 }}>Владелец</Table.Th>}
+                  <Table.Th style={{ width: 90 }}>Статус</Table.Th>
+                  <Table.Th style={{ width: 90 }} />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {urls.map(url => {
+                  const deleted = url.isActive === false;
+                  return (
+                    <Table.Tr
+                      key={url.shortCode}
+                      style={{ opacity: deleted ? 0.5 : 1 }}
+                    >
+                      {/* Code + copy */}
+                      <Table.Td>
+                        <Group gap={4} wrap="nowrap">
+                          <CopyButton value={url.shortUrl}>
+                            {({ copy, copied }) => (
+                              <Tooltip label={copied ? 'Скопировано!' : 'Копировать'}>
+                                <ActionIcon
+                                  variant="subtle" size="xs" color={copied ? 'teal' : 'gray'}
+                                  onClick={e => { e.stopPropagation(); copy(); }}
+                                >
+                                  {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </CopyButton>
+                          <Anchor
+                            size="sm" ff="monospace"
+                            onClick={e => { e.stopPropagation(); navigate(`/links/${url.shortCode}`); }}
                           >
-                            {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-                          </ActionIcon>
-                        </Tooltip>
+                            {url.shortCode}
+                          </Anchor>
+                        </Group>
+                      </Table.Td>
+
+                      {/* Destination */}
+                      <Table.Td>
+                        <Group gap={4} wrap="nowrap">
+                          <Text size="sm" truncate maw={280} title={url.longUrl}>
+                            {url.title || url.longUrl}
+                          </Text>
+                          <Tooltip label={url.longUrl}>
+                            <ActionIcon
+                              component="a" href={url.longUrl} target="_blank"
+                              variant="subtle" size="xs" color="gray"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <IconExternalLink size={12} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
+                      </Table.Td>
+
+                      {/* Created */}
+                      <Table.Td>
+                        <Text size="xs" c="dimmed">
+                          {url.dateCreated ? formatDate(url.dateCreated) : '—'}
+                        </Text>
+                      </Table.Td>
+
+                      {/* Clicks */}
+                      <Table.Td ta="right">
+                        <Text size="sm" fw={600} ff="monospace">
+                          {url.visitsSummary?.total ?? 0}
+                        </Text>
+                      </Table.Td>
+
+                      {/* Owner (admin) */}
+                      {isAdmin && (
+                        <Table.Td>
+                          <Text size="xs" c="dimmed">{url.ownerUsername ?? '—'}</Text>
+                        </Table.Td>
                       )}
-                    </CopyButton>
-                  </Group>
-                </Table.Td>
 
-                <Table.Td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <Anchor
-                    href={url.longUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    fz="sm"
-                    onClick={e => e.stopPropagation()}
-                  >
-                    {url.longUrl}
-                  </Anchor>
-                </Table.Td>
+                      {/* Status */}
+                      <Table.Td>
+                        {deleted ? (
+                          <Badge size="xs" variant="light" color="red" leftSection={<IconBan size={10} />}>
+                            Удалена
+                          </Badge>
+                        ) : (
+                          <Badge size="xs" variant="light" color="green">Активна</Badge>
+                        )}
+                      </Table.Td>
 
-                <Table.Td>
-                  <Text size="sm" c={url.title ? undefined : 'dimmed'}>
-                    {url.title || '—'}
-                  </Text>
-                </Table.Td>
+                      {/* Actions */}
+                      <Table.Td>
+                        <Group gap={4} justify="flex-end" wrap="nowrap">
+                          {user?.permissions.canEditOwnLinks && !deleted && (
+                            <Tooltip label="Редактировать">
+                              <ActionIcon
+                                variant="subtle" size="sm" color="blue"
+                                onClick={e => { e.stopPropagation(); setEditTarget(url); }}
+                              >
+                                <IconEdit size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                          {user?.permissions.canDeleteOwnLinks && !deleted && (
+                            <Tooltip label="Деактивировать">
+                              <ActionIcon
+                                variant="subtle" size="sm" color="red"
+                                onClick={e => { e.stopPropagation(); setDeleteTarget(url); }}
+                              >
+                                <IconTrash size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </Box>
+        )}
+      </Card>
 
-                {isAdmin && (
-                  <Table.Td>
-                    <Text size="sm" c="dimmed">{url.ownerUsername ?? '—'}</Text>
-                  </Table.Td>
-                )}
-
-                <Table.Td>
-                  <Badge
-                    size="xs"
-                    variant="light"
-                    color={url.isActive === false ? 'red' : 'green'}
-                  >
-                    {url.isActive === false ? 'неактивна' : 'активна'}
-                  </Badge>
-                </Table.Td>
-
-                <Table.Td>{url.visitsSummary.total.toLocaleString('ru')}</Table.Td>
-
-                <Table.Td>
-                  <Text size="sm">{formatDate(url.dateCreated)}</Text>
-                </Table.Td>
-
-                <Table.Td>
-                  <Group gap={4}>
-                    {user?.permissions.canEditOwnLinks && (
-                      <ActionIcon
-                        variant="subtle"
-                        onClick={e => { e.stopPropagation(); setEditTarget(url); }}
-                      >
-                        <IconEdit size={16} />
-                      </ActionIcon>
-                    )}
-                    {user?.permissions.canDeleteOwnLinks && (
-                      <ActionIcon
-                        color="red" variant="subtle"
-                        onClick={e => { e.stopPropagation(); setDeleteTarget(url); }}
-                      >
-                        <IconTrash size={16} />
-                      </ActionIcon>
-                    )}
-                  </Group>
-                </Table.Td>
-              </Table.Tr>
-            ))}
-            {urls.length === 0 && (
-              <Table.Tr>
-                <Table.Td colSpan={isAdmin ? 8 : 7}>
-                  <Center p="xl">
-                    <Text c="dimmed">Ничего не найдено</Text>
-                  </Center>
-                </Table.Td>
-              </Table.Tr>
-            )}
-          </Table.Tbody>
-        </Table>
-      )}
-
-      {pagination && pagination.pagesCount > 1 && (
-        <Group justify="space-between" align="center">
-          <Text size="sm" c="dimmed">
-            Всего: {pagination.totalItems}
-          </Text>
-          <Pagination
-            total={pagination.pagesCount}
-            value={page}
-            onChange={setPage}
-            siblings={1}
-          />
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <Group justify="center">
+          <Pagination value={page} onChange={setPage} total={totalPages} size="sm" />
         </Group>
       )}
 
-      <CreateShortUrlModal
-        opened={createOpen}
-        onClose={closeCreate}
-        onCreated={() => { closeCreate(); fetchUrls(); }}
-        slugPrefix={user?.features.userSlugPrefixEnabled ? user.slugPrefix : undefined}
+      {/* Modals */}
+      <CreateEditModal
+        opened={createOpen || editTarget !== null}
+        onClose={() => { closeCreate(); setEditTarget(null); }}
+        onSaved={fetchUrls}
+        editTarget={editTarget}
       />
 
-      {editTarget && (
-        <EditShortUrlModal
-          url={editTarget}
-          onClose={() => setEditTarget(null)}
-          onSaved={() => { setEditTarget(null); fetchUrls(); }}
-        />
-      )}
-
       <ConfirmDialog
-        opened={!!deleteTarget}
-        title="Удалить ссылку?"
-        message={`Ссылка "${deleteTarget?.shortCode}" будет удалена безвозвратно. Все переходы перестанут работать.`}
-        confirmLabel="Удалить"
-        confirmColor="red"
+        opened={deleteTarget !== null}
+        title="Деактивировать ссылку?"
+        message={`Ссылка «${deleteTarget?.shortCode}» перестанет работать. История переходов сохранится.`}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
     </Stack>
-  );
-}
-
-// ── Форма создания ────────────────────────────────────────────────────────────
-function CreateShortUrlModal({
-  opened, onClose, onCreated, slugPrefix,
-}: {
-  opened: boolean; onClose: () => void; onCreated: () => void; slugPrefix?: string;
-}) {
-  const [longUrl,    setLongUrl]    = useState('');
-  const [customSlug, setCustomSlug] = useState(slugPrefix ?? '');
-  const [title,      setTitle]      = useState('');
-  const [loading,    setLoading]    = useState(false);
-
-  const handleSubmit = async () => {
-    if (!longUrl.trim()) return;
-    setLoading(true);
-    try {
-      await api.post('/api/shlink/short-urls', {
-        longUrl:    longUrl.trim(),
-        customSlug: customSlug.trim() || undefined,
-        title:      title.trim() || undefined,
-      });
-      notifications.show({ message: 'Ссылка создана', color: 'green' });
-      onCreated();
-    } catch {
-      // ошибка уже отображена через api.post → notifications
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal opened={opened} onClose={onClose} title="Создать ссылку" size="md">
-      <Stack gap="sm">
-        <TextInput
-          label="Длинная ссылка"
-          description="Адрес страницы, на которую будет вести короткая ссылка"
-          required
-          placeholder="https://example.com/long-path"
-          value={longUrl}
-          onChange={e => setLongUrl(e.currentTarget.value)}
-        />
-        <TextInput
-          label="Название"
-          description="Как вы будете её узнавать в списке"
-          placeholder="Например: Презентация Q3"
-          value={title}
-          onChange={e => setTitle(e.currentTarget.value)}
-        />
-        <TextInput
-          label={slugPrefix ? `Кастомная ссылка (префикс: ${slugPrefix})` : 'Кастомная ссылка'}
-          description="Придумайте короткое слово, например: konferencia"
-          placeholder={slugPrefix ? `${slugPrefix}-...` : 'авто-генерация'}
-          value={customSlug}
-          onChange={e => setCustomSlug(e.currentTarget.value)}
-        />
-        <Group justify="flex-end" mt="md">
-          <Button variant="default" onClick={onClose}>Отмена</Button>
-          <Button onClick={handleSubmit} loading={loading} disabled={!longUrl.trim()}>
-            Создать ссылку
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
-  );
-}
-
-// ── Форма редактирования ──────────────────────────────────────────────────────
-function EditShortUrlModal({
-  url, onClose, onSaved,
-}: {
-  url: ShortURL; onClose: () => void; onSaved: () => void;
-}) {
-  const [longUrl, setLongUrl] = useState(url.longUrl);
-  const [title,   setTitle]   = useState(url.title ?? '');
-  const [loading, setLoading] = useState(false);
-
-  const handleSave = async () => {
-    setLoading(true);
-    try {
-      await api.patch(`/api/shlink/short-urls/${url.shortCode}`, {
-        longUrl: longUrl.trim(),
-        title:   title.trim() || null,
-      });
-      notifications.show({ message: 'Ссылка обновлена', color: 'green' });
-      onSaved();
-    } catch {
-      // handled by api client
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal
-      opened={true}
-      onClose={onClose}
-      title={`Редактировать: ${url.shortCode}`}
-      size="md"
-    >
-      <Stack gap="sm">
-        <TextInput
-          label="Длинная ссылка"
-          required
-          value={longUrl}
-          onChange={e => setLongUrl(e.currentTarget.value)}
-        />
-        <TextInput
-          label="Название"
-          value={title}
-          onChange={e => setTitle(e.currentTarget.value)}
-        />
-        <Group justify="flex-end" mt="md">
-          <Button variant="default" onClick={onClose}>Отмена</Button>
-          <Button onClick={handleSave} loading={loading}>Сохранить</Button>
-        </Group>
-      </Stack>
-    </Modal>
   );
 }
