@@ -84,7 +84,7 @@ func main() {
 	dashH := handler.NewDashboardHandler(shlinkSvc, userRepo)
 	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo)
 	adminH := handler.NewAdminHandler(userRepo, auditRepo)
-	rolesH := handler.NewRolesHandler(permsCache, permsRepo)
+	rolesH := handler.NewRolesHandler(permsCache, permsRepo, cfg)
 	urlDetailH := handler.NewURLDetailHandler(shlinkSvc)
 	settingsH := handler.NewSettingsHandler(cfg, shlinkSvc)
 

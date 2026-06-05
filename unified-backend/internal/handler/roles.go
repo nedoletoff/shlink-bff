@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
@@ -18,15 +19,50 @@ import (
 type RolesHandler struct {
 	cache     *service.PermissionsCache
 	permsRepo *postgres.RolePermissionsRepository
+	cfg       *config.Config
 }
 
-func NewRolesHandler(cache *service.PermissionsCache, repo *postgres.RolePermissionsRepository) *RolesHandler {
-	return &RolesHandler{cache: cache, permsRepo: repo}
+func NewRolesHandler(cache *service.PermissionsCache, repo *postgres.RolePermissionsRepository, cfg *config.Config) *RolesHandler {
+	return &RolesHandler{cache: cache, permsRepo: repo, cfg: cfg}
 }
 
-// GET /api/admin/roles — список всех ролей с их permissions
+type roleEntry struct {
+	Role        string   `json:"role"`
+	Permissions []string `json:"permissions"`
+	UsersCount  int      `json:"usersCount"`
+}
+
+type roleMapping struct {
+	KcGroup string `json:"kcGroup"`
+	AppRole string `json:"appRole"`
+}
+
+type rolesListResponse struct {
+	Roles    []roleEntry   `json:"roles"`
+	Mappings []roleMapping `json:"mappings"`
+}
+
+// GET /api/admin/roles — список всех ролей с их permissions + маппинги из конфига
 func (h *RolesHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, h.cache.GetAll(), http.StatusOK)
+	perms := h.cache.GetAll()
+
+	roles := make([]roleEntry, 0, len(perms))
+	for _, p := range perms {
+		flags := permToStringSlice(p)
+		roles = append(roles, roleEntry{
+			Role:        p.Role,
+			Permissions: flags,
+			UsersCount:  0, // не считаем здесь — дорого; при необходимости добавить userRepo
+		})
+	}
+
+	// Маппинги из ROLE_GROUPS: keycloak-group → app-role
+	mappings := make([]roleMapping, 0, len(h.cfg.RoleGroups))
+	for group, role := range h.cfg.RoleGroups {
+		mappings = append(mappings, roleMapping{KcGroup: group, AppRole: role})
+	}
+
+	writeJSON(w, rolesListResponse{Roles: roles, Mappings: mappings}, http.StatusOK)
 }
 
 // GET /api/admin/roles/{role} — permissions конкретной роли
@@ -70,4 +106,26 @@ func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Requ
 	h.cache.Set(p)
 	slog.Info("roles: permissions updated", "role", role)
 	writeJSON(w, p, http.StatusOK)
+}
+
+// permToStringSlice переводит флаги RolePermissions в список строк (только true-флаги).
+func permToStringSlice(p domain.RolePermissions) []string {
+	var out []string
+	if p.CanViewOwnLinks          { out = append(out, "canViewOwnLinks") }
+	if p.CanViewAllLinks          { out = append(out, "canViewAllLinks") }
+	if p.CanCreateLinks           { out = append(out, "canCreateLinks") }
+	if p.CanCreateWithCustomSlug  { out = append(out, "canCreateWithCustomSlug") }
+	if p.CanCreateWithoutSlug     { out = append(out, "canCreateWithoutSlug") }
+	if p.CanEditOwnLinks          { out = append(out, "canEditOwnLinks") }
+	if p.CanEditAllLinks          { out = append(out, "canEditAllLinks") }
+	if p.CanDeleteOwnLinks        { out = append(out, "canDeleteOwnLinks") }
+	if p.CanDeleteAllLinks        { out = append(out, "canDeleteAllLinks") }
+	if p.CanManageOwnTags         { out = append(out, "canManageOwnTags") }
+	if p.CanManageAllTags         { out = append(out, "canManageAllTags") }
+	if p.CanViewOwnStats          { out = append(out, "canViewOwnStats") }
+	if p.CanViewAllStats          { out = append(out, "canViewAllStats") }
+	if p.CanViewAuditLogs         { out = append(out, "canViewAuditLogs") }
+	if p.CanManageUsers           { out = append(out, "canManageUsers") }
+	if p.CanManageRoles           { out = append(out, "canManageRoles") }
+	return out
 }

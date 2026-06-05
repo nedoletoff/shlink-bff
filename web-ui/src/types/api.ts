@@ -105,24 +105,23 @@ export interface UserActivityRow {
 }
 
 export interface UserActivityResponse {
-  users:       UserActivityRow[];
-  newLinksPerDay: Array<{ date: string; [username: string]: number | string }>;
+  users:          UserActivityRow[];
+  newLinksPerDay: ClickPoint[];
 }
 
-export interface UrlStatsRow {
-  shortCode:      string;
-  title:          string;
-  shortUrl:       string;
-  visitsToday:    number;
-  visits7d:       number;
-  visitsTotal:    number;
-  status:         'active' | 'inactive';
-  tags:           string[];
-  ownerUsername?: string;
+export interface UrlStatRow {
+  shortCode:   string;
+  title:       string;
+  shortUrl:    string;
+  visitsToday: number;
+  visits7d:    number;
+  visitsTotal: number;
+  status:      string;
+  tags:        string[];
 }
 
 export interface UrlStatsResponse {
-  urls: UrlStatsRow[];
+  urls: UrlStatRow[];
 }
 
 export interface DeviceBreakdown {
@@ -209,4 +208,31 @@ export interface AdminUser {
   slugPrefix: string | null;
   status:     UserStatus;
   hasApiKey:  boolean;
+}
+
+// Admin Roles
+export interface RoleEntry {
+  role:        string;
+  permissions: string[];
+  usersCount:  number;
+}
+
+export interface RoleMapping {
+  kcGroup: string;
+  appRole: string;
+}
+
+export interface RolesResponse {
+  roles:    RoleEntry[];
+  mappings: RoleMapping[];
+}
+
+// Admin Settings
+export interface ShlinkSettings {
+  shortCodeLength:  number;
+  allowCustomSlugs: boolean;
+  userSlugPrefix:   boolean;
+  domain:           string;
+  shlinkVersion:    string;
+  connected:        boolean;
 }

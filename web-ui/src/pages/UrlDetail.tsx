@@ -167,7 +167,8 @@ export function UrlDetail() {
             </ActionIcon>
             <ActionIcon variant="light" color="red" onClick={() => {
               if (confirm('Удалить ссылку?')) {
-                api.delete(`/api/urls/${shortCode}`).then(() => navigate(-1));
+                // Используем правильный proxy-endpoint, а не /api/urls/*
+                api.delete(`/api/shlink/short-urls/${shortCode}`).then(() => navigate(-1));
               }
             }}>
               <IconTrash size={16} />
