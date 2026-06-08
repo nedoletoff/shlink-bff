@@ -1,61 +1,49 @@
-/* eslint-disable react-refresh/only-export-components */
-import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
-import { api } from '../api/client';
-import type { MeResponse } from '../types/api';
+import { createContext, useContext, type ReactNode } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { getMe } from '@/api/endpoints/auth'
+import type { MeResponse } from '@/types/api'
 
-interface AuthState {
-  user:    MeResponse | null;
-  loading: boolean;
-  error:   string | null;
-  refetch: () => void;
+interface AuthContextValue {
+  me: MeResponse | null
+  isLoading: boolean
+  can: (permission: string) => boolean
+  isAdmin: () => boolean
 }
 
-const AuthContext = createContext<AuthState>({
-  user: null, loading: true, error: null, refetch: () => {},
-});
+const AuthContext = createContext<AuthContextValue | null>(null)
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user,    setUser]    = useState<MeResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const { data: me, isLoading } = useQuery({
+    queryKey: ['me'],
+    queryFn: getMe,
+    staleTime: 60_000,
+    retry: false,
+  })
 
-  const fetchMe = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const me = await api.get<MeResponse>('/api/me');
-      setUser(me);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Auth error';
-      setError(msg);
-      setUser(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const can = (permission: string): boolean => {
+    if (!me) return false
+    return me.permissions[permission] === true
+  }
 
-  useEffect(() => { fetchMe(); }, [fetchMe]);
+  const isAdmin = (): boolean => {
+    if (!me) return false
+    return me.role === 'admin'
+  }
 
-  const value = useMemo(
-    () => ({ user, loading, error, refetch: fetchMe }),
-    [user, loading, error, fetchMe],
-  );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ me: me ?? null, isLoading, can, isAdmin }}>
+      {children}
+    </AuthContext.Provider>
+  )
 }
 
-export function useAuth(): AuthState {
-  return useContext(AuthContext);
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth must be used inside AuthProvider')
+  return ctx
 }
 
-export function useIsAdmin(): boolean {
-  const { user } = useAuth();
-  return user?.role === 'admin';
+export function usePermission(permission: string): boolean {
+  const { can } = useAuth()
+  return can(permission)
 }

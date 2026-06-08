@@ -1,74 +1,100 @@
-import { Stack, NavLink, Divider, Text, Box, Badge } from '@mantine/core';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { NavLink, Stack, Text, Divider, Anchor } from '@mantine/core'
 import {
-  IconLayoutDashboard, IconLink, IconTags,
-  IconUsers, IconFileText, IconShield, IconSettings,
-} from '@tabler/icons-react';
-import { useAuth } from '../../contexts/AuthContext';
-import { RU } from '../../i18n/ru';
+  IconHome,
+  IconLink,
+  IconTag,
+  IconUsers,
+  IconShield,
+  IconClipboardList,
+  IconSettings,
+  IconExternalLink,
+} from '@tabler/icons-react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { useAuth } from '@/contexts/AuthContext'
 
-const userNav = [
-  { label: RU.nav.dashboard, href: '/dashboard', icon: <IconLayoutDashboard size={16} /> },
-  { label: RU.nav.links,     href: '/links',     icon: <IconLink size={16} /> },
-  { label: RU.nav.tags,      href: '/tags',      icon: <IconTags size={16} /> },
-];
+interface Props {
+  onNavigate?: () => void
+}
 
-const adminNav = [
-  { label: RU.nav.users,    href: '/admin/users',    icon: <IconUsers size={16} /> },
-  { label: RU.nav.roles,    href: '/admin/roles',    icon: <IconShield size={16} /> },
-  { label: RU.nav.audit,    href: '/admin/logs',     icon: <IconFileText size={16} /> },
-  { label: RU.nav.settings, href: '/admin/settings', icon: <IconSettings size={16} /> },
-];
+export function Sidebar({ onNavigate }: Props) {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { can, isAdmin } = useAuth()
 
-export function Sidebar() {
-  const { user }  = useAuth();
-  const navigate  = useNavigate();
-  const location  = useLocation();
-  const isAdmin   = user?.role === 'admin';
+  const nav = (path: string) => {
+    navigate(path)
+    onNavigate?.()
+  }
+
+  const isActive = (path: string) =>
+    path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)
 
   return (
-    <Stack gap={2} style={{ height: '100%' }}>
-      {userNav.map(item => (
+    <Stack gap="xs" h="100%">
+      <NavLink
+        label="Главная"
+        leftSection={<IconHome size={16} />}
+        active={isActive('/')}
+        onClick={() => nav('/')}
+      />
+      <NavLink
+        label="Мои ссылки"
+        leftSection={<IconLink size={16} />}
+        active={isActive('/links')}
+        onClick={() => nav('/links')}
+      />
+      {can('canManageOwnTags') && (
         <NavLink
-          key={item.href}
-          label={item.label}
-          leftSection={item.icon}
-          active={location.pathname === item.href || location.pathname.startsWith(item.href + '/')}
-          onClick={() => navigate(item.href)}
-          styles={{ root: { borderRadius: 6 } }}
+          label="Теги"
+          leftSection={<IconTag size={16} />}
+          active={isActive('/tags')}
+          onClick={() => nav('/tags')}
         />
-      ))}
+      )}
 
-      {isAdmin && (
+      {isAdmin() && (
         <>
-          <Divider my="xs" />
-          <Text size="xs" c="dimmed" px="sm" pb={2} tt="uppercase" fw={600} style={{ letterSpacing: '0.05em' }}>
-            Администрирование
-          </Text>
-          {adminNav.map(item => (
-            <NavLink
-              key={item.href}
-              label={item.label}
-              leftSection={item.icon}
-              active={location.pathname.startsWith(item.href)}
-              onClick={() => navigate(item.href)}
-              styles={{ root: { borderRadius: 6 } }}
-              rightSection={
-                item.href === '/admin/users'
-                  ? <Badge size="xs" variant="light" color="red">admin</Badge>
-                  : undefined
-              }
-            />
-          ))}
+          <Divider label="Администрирование" labelPosition="center" my="xs" />
+          <NavLink
+            label="Пользователи"
+            leftSection={<IconUsers size={16} />}
+            active={isActive('/admin/users')}
+            onClick={() => nav('/admin/users')}
+          />
+          <NavLink
+            label="Роли"
+            leftSection={<IconShield size={16} />}
+            active={isActive('/admin/roles')}
+            onClick={() => nav('/admin/roles')}
+          />
+          <NavLink
+            label="Аудит"
+            leftSection={<IconClipboardList size={16} />}
+            active={isActive('/admin/audit')}
+            onClick={() => nav('/admin/audit')}
+          />
+          <NavLink
+            label="Настройки"
+            leftSection={<IconSettings size={16} />}
+            active={isActive('/admin/settings')}
+            onClick={() => nav('/admin/settings')}
+          />
         </>
       )}
 
-      <Box style={{ flexGrow: 1 }} />
-      <Box px="xs" pb="xs">
-        <Text size="xs" c="dimmed">v{__APP_VERSION__ ?? '—'}</Text>
-      </Box>
-    </Stack>
-  );
-}
+      <Divider my="xs" />
+      <Anchor href="https://shlink.io/documentation" target="_blank" size="sm" c="dimmed">
+        <NavLink label="Shlink Docs" leftSection={<IconExternalLink size={14} />} />
+      </Anchor>
+      <Anchor href="https://api-spec.shlink.io" target="_blank" size="sm" c="dimmed">
+        <NavLink label="REST API" leftSection={<IconExternalLink size={14} />} />
+      </Anchor>
 
-declare const __APP_VERSION__: string | undefined;
+      <Stack mt="auto" gap={2}>
+        <Text size="xs" c="dimmed">
+          Shlink BFF UI — управление ссылками с ролевым доступом
+        </Text>
+      </Stack>
+    </Stack>
+  )
+}
