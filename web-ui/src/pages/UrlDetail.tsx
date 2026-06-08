@@ -1,20 +1,30 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Stack, Group, Title, Text, Badge, Button,
   Paper, SimpleGrid, Skeleton, SegmentedControl,
-  Table,
+  Table, ActionIcon, Tooltip, Modal, TextInput,
+  TagsInput, NumberInput,
 } from '@mantine/core'
+import { DateTimePicker } from '@mantine/dates'
+import { useForm } from '@mantine/form'
 import {
   ResponsiveContainer, BarChart, Bar,
   XAxis, YAxis, Tooltip as RTooltip, CartesianGrid,
 } from 'recharts'
-import { IconArrowLeft, IconExternalLink } from '@tabler/icons-react'
+import {
+  IconArrowLeft, IconExternalLink, IconPencil,
+  IconTrash, IconBan, IconCircleCheck,
+} from '@tabler/icons-react'
+import { notifications } from '@mantine/notifications'
 import { getLinkDetail } from '@/api/endpoints/linkDetail'
+import { editLink, deleteLink, deactivateLink, activateLink } from '@/api/endpoints/links'
 import { StatCard } from '@/components/ui/StatCard'
 import { CopyButton } from '@/components/ui/CopyButton'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { formatDate, formatDateTime } from '@/utils/date'
+import type { EditShortURLPayload } from '@/types/api'
 
 const PERIODS = [
   { label: '7 дней', value: '7' },
@@ -25,12 +35,67 @@ const PERIODS = [
 export function UrlDetail() {
   const { shortCode } = useParams<{ shortCode: string }>()
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [period, setPeriod] = useState('30')
+  const [editOpened, setEditOpened] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['link-detail', shortCode, period],
     queryFn: () => getLinkDetail(shortCode!, Number(period)),
     enabled: Boolean(shortCode),
+  })
+
+  const form = useForm<EditShortURLPayload>({
+    initialValues: {
+      longUrl: data?.longUrl ?? '',
+      title: data?.title ?? '',
+      tags: [],
+      maxVisits: undefined,
+      validSince: undefined,
+      validUntil: undefined,
+    },
+  })
+
+  const openEdit = () => {
+    form.setValues({
+      longUrl: data?.longUrl ?? '',
+      title: data?.title ?? '',
+      tags: [],
+      maxVisits: undefined,
+      validSince: undefined,
+      validUntil: undefined,
+    })
+    setEditOpened(true)
+  }
+
+  const editMutation = useMutation({
+    mutationFn: (values: EditShortURLPayload) => editLink(shortCode!, '', values),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['link-detail', shortCode] })
+      notifications.show({ color: 'teal', message: 'Ссылка обновлена' })
+      setEditOpened(false)
+    },
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: () =>
+      data?.isActive ? deactivateLink(shortCode!) : activateLink(shortCode!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['link-detail', shortCode] })
+      notifications.show({
+        color: data?.isActive ? 'orange' : 'teal',
+        message: data?.isActive ? 'Ссылка деактивирована' : 'Ссылка активирована',
+      })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteLink(shortCode!, ''),
+    onSuccess: () => {
+      notifications.show({ color: 'teal', message: 'Ссылка удалена' })
+      navigate('/links')
+    },
   })
 
   const clicksData = (data?.clicksPerDay ?? []).map((p) => ({
@@ -49,11 +114,11 @@ export function UrlDetail() {
       {isLoading ? (
         <Skeleton height={60} />
       ) : (
-        <Group justify="space-between" align="flex-start">
+        <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
           <Stack gap={4}>
             <Group gap="xs">
               <Title order={2}>{data?.shortCode}</Title>
-              <Badge color={data?.isActive ? 'teal' : 'gray'} variant="light">
+              <Badge color={data?.isActive ? 'teal' : 'gray'} variant="dot">
                 {data?.isActive ? 'Активна' : 'Неактивна'}
               </Badge>
             </Group>
@@ -73,7 +138,34 @@ export function UrlDetail() {
             </Group>
           </Stack>
 
-          <SegmentedControl size="xs" data={PERIODS} value={period} onChange={setPeriod} />
+          <Group gap="xs">
+            <SegmentedControl size="xs" data={PERIODS} value={period} onChange={setPeriod} />
+            <Tooltip label="Редактировать">
+              <ActionIcon variant="default" size="md" onClick={openEdit} aria-label="Редактировать">
+                <IconPencil size={15} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label={data?.isActive ? 'Деактивировать' : 'Активировать'}>
+              <ActionIcon
+                variant="default" size="md"
+                color={data?.isActive ? 'orange' : 'teal'}
+                onClick={() => toggleMutation.mutate()}
+                loading={toggleMutation.isPending}
+                aria-label={data?.isActive ? 'Деактивировать' : 'Активировать'}
+              >
+                {data?.isActive ? <IconBan size={15} /> : <IconCircleCheck size={15} />}
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label="Удалить">
+              <ActionIcon
+                variant="default" size="md" color="red"
+                onClick={() => setConfirmDelete(true)}
+                aria-label="Удалить"
+              >
+                <IconTrash size={15} />
+              </ActionIcon>
+            </Tooltip>
+          </Group>
         </Group>
       )}
 
@@ -141,6 +233,51 @@ export function UrlDetail() {
           </Table.ScrollContainer>
         )}
       </Paper>
+
+      {/* Edit modal */}
+      <Modal opened={editOpened} onClose={() => setEditOpened(false)} title="Редактировать ссылку" size="md">
+        <form onSubmit={form.onSubmit((v) => editMutation.mutate(v))}>
+          <Stack gap="sm">
+            <TextInput label="Длинный URL" required {...form.getInputProps('longUrl')} />
+            <TextInput label="Заголовок" {...form.getInputProps('title')} />
+            <TagsInput
+              label="Теги"
+              placeholder="Добавить тег → Enter"
+              {...form.getInputProps('tags')}
+            />
+            <NumberInput label="Макс. переходов" min={1} {...form.getInputProps('maxVisits')} />
+            <Group grow>
+              <DateTimePicker
+                label="Действителен с"
+                placeholder="Не ограничен"
+                clearable
+                value={form.values.validSince ? new Date(form.values.validSince) : null}
+                onChange={(d) => form.setFieldValue('validSince', d ? d.toISOString() : undefined)}
+              />
+              <DateTimePicker
+                label="Действителен до"
+                placeholder="Не ограничен"
+                clearable
+                value={form.values.validUntil ? new Date(form.values.validUntil) : null}
+                onChange={(d) => form.setFieldValue('validUntil', d ? d.toISOString() : undefined)}
+              />
+            </Group>
+            <Group justify="flex-end" mt="xs">
+              <Button variant="default" onClick={() => setEditOpened(false)}>Отмена</Button>
+              <Button type="submit" loading={editMutation.isPending}>Сохранить</Button>
+            </Group>
+          </Stack>
+        </form>
+      </Modal>
+
+      {/* Delete confirm */}
+      <ConfirmDialog
+        opened={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => deleteMutation.mutate()}
+        message={`Удалить ссылку «${shortCode}»? Действие необратимо.`}
+        loading={deleteMutation.isPending}
+      />
     </Stack>
   )
 }
