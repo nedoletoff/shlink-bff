@@ -21,14 +21,14 @@ import (
 	"unified-backend/internal/shlink"
 )
 
-// ── Stubs ─────────────────────────────────────────────────────────────────────
+// ── Stubs ─────────────────────────────────────────────────────────────────────────────────
 
 type stubOwnerRepo struct {
 	isOwner    bool
 	ownerError error
 }
 
-func (s *stubOwnerRepo) Save(_ context.Context, _, _, _ string) error { return nil }
+func (s *stubOwnerRepo) Save(_ context.Context, _, _, _, _ string) error { return nil }
 func (s *stubOwnerRepo) IsOwner(_ context.Context, _, _, _ string) (bool, error) {
 	return s.isOwner, s.ownerError
 }
@@ -94,7 +94,7 @@ func (s *stubShlinkClient) ValidateVersion(_ context.Context, _ int, _ int, _ ti
 	return nil
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────────────
 
 func newTestShlinkSvc(client service.ShlinkClientIface) *service.ShlinkService {
 	cfg := &config.Config{
@@ -134,7 +134,7 @@ func userCtx(r *http.Request, role string) *http.Request {
 	return r.WithContext(middleware.WithUser(r.Context(), u))
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────────────────
 
 func TestCreateShortURL_success(t *testing.T) {
 	client := &stubShlinkClient{
