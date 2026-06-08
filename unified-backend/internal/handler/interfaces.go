@@ -10,7 +10,7 @@ import (
 // OwnershipRepo — единый интерфейс для всех хендлеров.
 // Реализуется postgres.URLOwnershipRepository.
 type OwnershipRepo interface {
-	Save(ctx context.Context, shortCode, ownerSub, domain string) error
+	Save(ctx context.Context, shortCode, ownerSub, ownerUsername, domain string) error
 	IsOwner(ctx context.Context, shortCode, domain, sub string) (bool, error)
 	HardDelete(ctx context.Context, shortCode, domain string) error
 	SetActive(ctx context.Context, shortCode, domain string, active bool) error
