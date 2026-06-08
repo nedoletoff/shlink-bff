@@ -1,69 +1,72 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { MantineProvider } from '@mantine/core';
-import { Notifications } from '@mantine/notifications';
-import '@mantine/core/styles.css';
-import '@mantine/notifications/styles.css';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Center, Loader, Title, Text, Button, Stack } from '@mantine/core'
+import { AppShellWrapper } from '@/components/layout/AppShellWrapper'
+import { useAuth } from '@/contexts/AuthContext'
+import { Dashboard } from '@/pages/Dashboard'
+import { ShortUrls } from '@/pages/ShortUrls'
+import { UrlDetail } from '@/pages/UrlDetail'
+import { Tags } from '@/pages/Tags'
+import { AdminUsers } from '@/pages/admin/Users'
+import { AdminUserDetail } from '@/pages/admin/UserDetail'
+import { AdminRoles } from '@/pages/admin/Roles'
+import { AdminAuditLogs } from '@/pages/admin/AuditLogs'
+import { AdminSettings } from '@/pages/admin/Settings'
 
-import { AuthProvider }  from './contexts/AuthContext';
-import { ProtectedRoute } from './components/ProtectedRoute';
-import { AppLayout }     from './components/layout/AppLayout';
-import { Dashboard }     from './pages/Dashboard';
-import { ShortUrls }     from './pages/ShortUrls';
-import { UrlDetail }     from './pages/UrlDetail';
-import { Tags }          from './pages/Tags';
-import { AdminUsers }    from './pages/admin/Users';
-import { UserDetail }    from './pages/admin/UserDetail';
-import { AuditLogs }     from './pages/admin/AuditLogs';
-import { Roles }         from './pages/admin/Roles';
-import { Settings }      from './pages/admin/Settings';
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { me, isLoading } = useAuth()
+  const location = useLocation()
+
+  if (isLoading) {
+    return (
+      <Center h="100vh">
+        <Loader size="lg" />
+      </Center>
+    )
+  }
+
+  if (!me) {
+    window.location.href = `/auth/login?rd=${encodeURIComponent(location.pathname)}`
+    return null
+  }
+
+  return <>{children}</>
+}
+
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { isAdmin } = useAuth()
+
+  if (!isAdmin()) {
+    return (
+      <Center h="60vh">
+        <Stack align="center">
+          <Title order={2}>403</Title>
+          <Text c="dimmed">Недостаточно прав доступа</Text>
+          <Button variant="default" onClick={() => (window.location.href = '/')}>На главную</Button>
+        </Stack>
+      </Center>
+    )
+  }
+
+  return <>{children}</>
+}
 
 export default function App() {
   return (
-    <MantineProvider defaultColorScheme="dark">
-      <Notifications position="top-right" />
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route
-              path="/"
-              element={
-                <ProtectedRoute>
-                  <AppLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Navigate to="/dashboard" replace />} />
-              <Route path="dashboard"          element={<Dashboard />} />
-              <Route path="links"              element={<ShortUrls />} />
-              <Route path="links/:shortCode"   element={<UrlDetail />} />
-              <Route path="tags"               element={<Tags />} />
-
-              {/* Admin-only маршруты */}
-              <Route path="admin/users" element={
-                <ProtectedRoute requiredRole="admin"><AdminUsers /></ProtectedRoute>
-              } />
-              <Route path="admin/users/:id" element={
-                <ProtectedRoute requiredRole="admin"><UserDetail /></ProtectedRoute>
-              } />
-              <Route path="admin/logs" element={
-                <ProtectedRoute requiredRole="admin"><AuditLogs /></ProtectedRoute>
-              } />
-              <Route path="admin/roles" element={
-                <ProtectedRoute requiredRole="admin"><Roles /></ProtectedRoute>
-              } />
-              <Route path="admin/settings" element={
-                <ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>
-              } />
-              {/* 5.1 — детальная страница ссылки из админ-зоны */}
-              <Route path="admin/urls/:shortCode" element={
-                <ProtectedRoute requiredRole="admin"><UrlDetail /></ProtectedRoute>
-              } />
-            </Route>
-
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
-    </MantineProvider>
-  );
+    <RequireAuth>
+      <AppShellWrapper>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/links" element={<ShortUrls />} />
+          <Route path="/links/:shortCode" element={<UrlDetail />} />
+          <Route path="/tags" element={<Tags />} />
+          <Route path="/admin/users" element={<RequireAdmin><AdminUsers /></RequireAdmin>} />
+          <Route path="/admin/users/:sub" element={<RequireAdmin><AdminUserDetail /></RequireAdmin>} />
+          <Route path="/admin/roles" element={<RequireAdmin><AdminRoles /></RequireAdmin>} />
+          <Route path="/admin/audit" element={<RequireAdmin><AdminAuditLogs /></RequireAdmin>} />
+          <Route path="/admin/settings" element={<RequireAdmin><AdminSettings /></RequireAdmin>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AppShellWrapper>
+    </RequireAuth>
+  )
 }

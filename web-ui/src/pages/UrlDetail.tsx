@@ -1,310 +1,253 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState } from 'react'
 import {
-  Stack, Title, Text, Card, Group, Anchor,
-  ActionIcon, Tooltip, SegmentedControl, Table,
-  Skeleton, Center, Grid, CopyButton, Pagination,
-  Badge, Alert,
-} from '@mantine/core';
-import {
-  IconArrowLeft, IconCopy, IconCheck,
-  IconEdit, IconTrash, IconBan, IconPlayerPlay,
-  IconAlertTriangle,
-} from '@tabler/icons-react';
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip as RTooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
-} from 'recharts';
-import { api } from '../api/client';
-import { useAuth } from '../contexts/AuthContext';
-import { ErrorBoundary } from '../components/ui/ErrorBoundary';
-import { formatDate, formatDateTime } from '../utils/date';
-import type { UrlDetailResponse } from '../types/api';
+  Title, Stack, Group, Button, Text, Paper, Badge, Alert,
+  SegmentedControl, Table, Anchor, Skeleton, ActionIcon, Tooltip, Pagination,
+} from '@mantine/core'
+import { DonutChart, LineChart } from '@mantine/charts'
+import { IconArrowLeft, IconAlertTriangle, IconEdit, IconPlayerPause, IconPlayerPlay, IconTrash, IconExternalLink } from '@tabler/icons-react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { notifications } from '@mantine/notifications'
+import { getLinkDetail } from '@/api/endpoints/linkDetail'
+import { deactivateLink, activateLink, deleteLink } from '@/api/endpoints/links'
+import { CopyButton } from '@/components/ui/CopyButton'
+import { StatusBadge } from '@/components/ui/StatusBadge'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { useAuth } from '@/contexts/AuthContext'
+import { formatDate, formatDateTime, formatDateLong } from '@/utils/date'
 
-const COLORS = ['#4dabf7', '#51cf66', '#ff6b6b', '#ffd43b', '#cc5de8'];
-
-const PERIOD_OPTIONS = [
-  { label: '7 д',  value: '7'  },
-  { label: '30 д', value: '30' },
-  { label: '90 д', value: '90' },
-];
-
-const PAGE_SIZE = 20;
+const PERIODS = [{ label: '7 д', value: '7' }, { label: '30 д', value: '30' }, { label: '90 д', value: '90' }]
+const DEVICE_ICON: Record<string, string> = { desktop: '💻', mobile: '📱', tablet: '📙' }
 
 export function UrlDetail() {
-  const { shortCode } = useParams<{ shortCode: string }>();
-  const navigate = useNavigate();
-  const { user } = useAuth();
+  const { shortCode } = useParams<{ shortCode: string }>()
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const { can } = useAuth()
+  const [period, setPeriod] = useState('30')
+  const [visitsPage, setVisitsPage] = useState(1)
+  const [visitsSortAsc, setVisitsSortAsc] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false)
 
-  const [data,    setData]    = useState<UrlDetailResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err,     setErr]     = useState<string | null>(null);
-  const [period,  setPeriod]  = useState('30');
-  const [page,    setPage]    = useState(1);
+  const { data, isLoading } = useQuery({
+    queryKey: ['urlDetail', shortCode, period],
+    queryFn: () => getLinkDetail(shortCode!, Number(period)),
+    enabled: !!shortCode,
+  })
 
-  const perms = user?.permissions;
-  const canDeactivate = perms?.canDeactivateOwnLinks || perms?.canDeactivateAllLinks;
-  const canReactivate = perms?.canReactivateOwnLinks || perms?.canReactivateAllLinks;
-  const canPermDelete = perms?.canDeleteOwnLinksPermanently || perms?.canDeleteAllLinksPermanently;
+  const deactivateMutation = useMutation({
+    mutationFn: () => deactivateLink(shortCode!),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['urlDetail', shortCode] }); setConfirmDeactivate(false) },
+  })
 
-  const loadData = useCallback(() => {
-    if (!shortCode) return;
-    setLoading(true);
-    setErr(null);
-    api.get<UrlDetailResponse>(`/api/urls/${shortCode}/detail`, { params: { period } })
-      .then(setData)
-      .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
-      .finally(() => setLoading(false));
-  }, [shortCode, period]);
+  const activateMutation = useMutation({
+    mutationFn: () => activateLink(shortCode!),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['urlDetail', shortCode] }),
+  })
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadData(); }, [shortCode, period]);
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteLink(shortCode!),
+    onSuccess: () => { notifications.show({ color: 'teal', message: 'Ссылка удалена' }); navigate('/links') },
+  })
 
-  const handleDeactivate = async () => {
-    if (!shortCode) return;
-    if (!confirm('Деактивировать ссылку? Она перестанет работать.')) return;
-    try {
-      await api.post(`/api/shlink/short-urls/${shortCode}/deactivate`, {});
-      loadData();
-    } catch { /* shown */ }
-  };
-
-  const handleActivate = async () => {
-    if (!shortCode) return;
-    if (!confirm('Активировать ссылку? Она снова начнёт работать.')) return;
-    try {
-      await api.post(`/api/shlink/short-urls/${shortCode}/activate`, {});
-      loadData();
-    } catch { /* shown */ }
-  };
-
-  const handlePermanentDelete = async () => {
-    if (!shortCode) return;
-    if (!confirm('Удалить ссылку БЕЗВОЗВРАТНО? Все переходы будут уничтожены.')) return;
-    try {
-      await api.delete(`/api/shlink/short-urls/${shortCode}/permanent`);
-      navigate(-1);
-    } catch { /* shown */ }
-  };
-
-  if (loading) return (
-    <Stack gap="lg">
-      <Skeleton height={32} width={300} />
-      <Skeleton height={240} radius="md" />
-      <Grid>
-        {[1, 2, 3].map(i => (
-          <Grid.Col key={i} span={{ base: 12, sm: 4 }}>
-            <Skeleton height={200} radius="md" />
-          </Grid.Col>
-        ))}
-      </Grid>
-    </Stack>
-  );
-
-  if (err) return (
-    <Center py="xl"><Text c="red">{err}</Text></Center>
-  );
-
-  if (!data) return null;
-
-  const isInactive = data.isActive === false;
-
-  const totalPages = Math.ceil((data.visits?.length ?? 0) / PAGE_SIZE);
-  const visitsPage = (data.visits ?? []).slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  const devicesArr = data.devices
+  const deviceData = data
     ? [
-        { name: 'Desktop', value: data.devices.desktop },
-        { name: 'Mobile',  value: data.devices.mobile  },
-        { name: 'Tablet',  value: data.devices.tablet  },
+        { name: 'Десктоп', value: data.devices.desktop, color: 'blue' },
+        { name: 'Мобильный', value: data.devices.mobile, color: 'teal' },
+        { name: 'Планшет', value: data.devices.tablet, color: 'orange' },
       ]
-    : [];
+    : []
 
-  const toValueArr = (arr: { name: string; count: number }[]) =>
-    arr.map(x => ({ name: x.name, value: x.count }));
-
-  const renderDonut = (items: { name: string; value: number }[], title: string) => (
-    <Card withBorder radius="md" p="md">
-      <Title order={5} mb="sm">{title}</Title>
-      <ResponsiveContainer width="100%" height={180}>
-        <PieChart>
-          <Pie data={items} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
-            {items.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-          </Pie>
-          <RTooltip formatter={(v: number) => v.toLocaleString('ru-RU')} />
-          <Legend />
-        </PieChart>
-      </ResponsiveContainer>
-    </Card>
-  );
+  const sortedVisits = [...(data?.visits ?? [])].sort((a, b) =>
+    visitsSortAsc ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
+  )
+  const perPage = 20
+  const totalVisitPages = Math.ceil(sortedVisits.length / perPage)
+  const pagedVisits = sortedVisits.slice((visitsPage - 1) * perPage, visitsPage * perPage)
 
   return (
-    <ErrorBoundary>
-      <Stack gap="lg">
-        {/* Header */}
-        <Group gap="sm">
-          <ActionIcon variant="subtle" onClick={() => navigate(-1)}>
-            <IconArrowLeft size={18} />
-          </ActionIcon>
-          <Stack gap={2} style={{ flex: 1 }}>
-            <Group gap="sm">
-              <Title order={3}>{data.title || 'Без названия'}</Title>
-              {isInactive && (
-                <Badge color="orange" variant="light" leftSection={<IconBan size={12} />}>
-                  Деактивирована
-                </Badge>
-              )}
-            </Group>
-            <Group gap="xs">
-              <Anchor href={data.shortUrl} target="_blank" fz="sm" fw={500}>
-                {data.shortUrl}
-              </Anchor>
-              <CopyButton value={data.shortUrl}>
-                {({ copied, copy }) => (
-                  <Tooltip label={copied ? 'Скопировано' : 'Копировать'} withArrow>
-                    <ActionIcon size="xs" variant="subtle" onClick={copy} color={copied ? 'teal' : 'gray'}>
-                      {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-                    </ActionIcon>
-                  </Tooltip>
-                )}
-              </CopyButton>
-            </Group>
-          </Stack>
-        </Group>
-
-        {/* Deactivated banner */}
-        {isInactive && (
-          <Alert
-            icon={<IconAlertTriangle size={16} />}
-            color="orange"
-            title="Ссылка деактивирована"
-          >
-            {data.deactivatedAt && (
-              <Text size="sm">
-                Деактивирована {formatDateTime(data.deactivatedAt)}
-                {data.deactivatedBy ? ` пользователем ${data.deactivatedBy}` : ''}.
-              </Text>
-            )}
-            <Text size="sm">Переходы по ней не работают.</Text>
-          </Alert>
-        )}
-
-        {/* Info card */}
-        <Card withBorder radius="md" p="md">
-          <Grid>
-            <Grid.Col span={{ base: 12, sm: 6 }}>
-              <Text fz="sm" c="dimmed">Куда ведёт</Text>
-              <Anchor href={data.longUrl} target="_blank" fz="sm" lineClamp={2}>
-                {data.longUrl}
-              </Anchor>
-            </Grid.Col>
-            <Grid.Col span={{ base: 6, sm: 3 }}>
-              <Text fz="sm" c="dimmed">Создана</Text>
-              <Text fz="sm">{formatDate(data.dateCreated)}</Text>
-            </Grid.Col>
-            <Grid.Col span={{ base: 6, sm: 3 }}>
-              <Text fz="sm" c="dimmed">Переходов всего</Text>
-              <Text fz="sm" fw={600}>{(data.visitsTotal ?? 0).toLocaleString('ru-RU')}</Text>
-            </Grid.Col>
-          </Grid>
-        </Card>
-
-        {/* Analytics toolbar */}
-        <Group justify="space-between">
-          <Title order={5}>Аналитика</Title>
-          <Group gap="sm">
-            <SegmentedControl
-              value={period}
-              onChange={v => { setPeriod(v); setPage(1); }}
-              data={PERIOD_OPTIONS}
-              size="xs"
-            />
-            {!isInactive && user?.permissions.canEditOwnLinks && (
-              <ActionIcon
-                variant="light" color="blue"
-                onClick={() => navigate(`/admin/urls/${shortCode}/edit`)}
-              >
-                <IconEdit size={16} />
-              </ActionIcon>
-            )}
-            {canDeactivate && !isInactive && (
-              <Tooltip label="Деактивировать ссылку">
-                <ActionIcon variant="light" color="orange" onClick={handleDeactivate}>
-                  <IconBan size={16} />
-                </ActionIcon>
-              </Tooltip>
-            )}
-            {canReactivate && isInactive && (
-              <Tooltip label="Активировать ссылку">
-                <ActionIcon variant="light" color="green" onClick={handleActivate}>
-                  <IconPlayerPlay size={16} />
-                </ActionIcon>
-              </Tooltip>
-            )}
-            {canPermDelete && (
-              <Tooltip label="Удалить безвозвратно">
-                <ActionIcon variant="light" color="red" onClick={handlePermanentDelete}>
-                  <IconTrash size={16} />
-                </ActionIcon>
-              </Tooltip>
-            )}
-          </Group>
-        </Group>
-
-        {/* Line chart */}
-        <Card withBorder radius="md" p="md">
-          <Title order={5} mb="sm">Переходы по дням</Title>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={data.clicksPerDay ?? []}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <RTooltip labelFormatter={v => formatDate(String(v))} />
-              <Line type="monotone" dataKey="clicks" stroke="#4dabf7" dot={false} strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-
-        {/* Donuts */}
-        <Grid>
-          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(devicesArr, 'Устройства')}</Grid.Col>
-          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.browsers ?? []), 'Браузеры')}</Grid.Col>
-          <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.os ?? []), 'ОС')}</Grid.Col>
-        </Grid>
-
-        {/* Visits table */}
-        <Card withBorder radius="md" p="md">
-          <Title order={5} mb="sm">Журнал переходов</Title>
-          <Table fz="sm" verticalSpacing="xs" style={{ tableLayout: 'fixed' }}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Дата / время</Table.Th>
-                <Table.Th>Устройство</Table.Th>
-                <Table.Th>ОС</Table.Th>
-                <Table.Th>Реферер</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {visitsPage.map((v, i) => (
-                <Table.Tr key={i}>
-                  <Table.Td>{formatDateTime(v.date)}</Table.Td>
-                  <Table.Td>{v.device ?? '—'}</Table.Td>
-                  <Table.Td>{v.os ?? '—'}</Table.Td>
-                  <Table.Td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {v.referer ?? '—'}
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-          {totalPages > 1 && (
-            <Group justify="center" mt="sm">
-              <Pagination value={page} onChange={setPage} total={totalPages} size="sm" />
-            </Group>
+    <Stack gap="md">
+      <Group>
+        <Button variant="subtle" leftSection={<IconArrowLeft size={16} />} onClick={() => navigate('/links')}>
+          Назад
+        </Button>
+        <Group gap="xs">
+          {isLoading ? <Skeleton h={24} w={100} /> : (
+            <>
+              <Title order={3}>{data?.shortCode}</Title>
+              <StatusBadge active={data?.isActive} />
+            </>
           )}
-        </Card>
-      </Stack>
-    </ErrorBoundary>
-  );
+        </Group>
+      </Group>
+
+      {!isLoading && data && (
+        <Group gap="xs">
+          <Text size="sm" c="dimmed">{data.shortUrl}</Text>
+          <CopyButton value={data.shortUrl} />
+        </Group>
+      )}
+
+      {/* Деактивирована */}
+      {!isLoading && data && !data.isActive && (
+        <Alert color="orange" icon={<IconAlertTriangle />} title="Ссылка деактивирована">
+          <Text size="sm">Деактивирована: {formatDateTime(data.deactivatedAt)}</Text>
+          {data.deactivatedBy && <Text size="sm">Кем: {data.deactivatedBy}</Text>}
+        </Alert>
+      )}
+
+      {/* Акции */}
+      <Group>
+        {(can('canEditOwnLinks') || can('canEditAllLinks')) && (
+          <Button size="xs" leftSection={<IconEdit size={14} />} variant="default">Редактировать</Button>
+        )}
+        {data?.isActive && (can('canDeactivateOwnLinks') || can('canDeactivateAllLinks')) && (
+          <Button size="xs" color="orange" leftSection={<IconPlayerPause size={14} />} onClick={() => setConfirmDeactivate(true)}>
+            Деактивировать
+          </Button>
+        )}
+        {data && !data.isActive && (can('canReactivateOwnLinks') || can('canReactivateAllLinks')) && (
+          <Button size="xs" color="teal" leftSection={<IconPlayerPlay size={14} />} loading={activateMutation.isPending} onClick={() => activateMutation.mutate()}>
+            Активировать
+          </Button>
+        )}
+        {(can('canDeleteOwnLinksPermanently') || can('canDeleteAllLinksPermanently')) && (
+          <Button size="xs" color="red" leftSection={<IconTrash size={14} />} onClick={() => setConfirmDelete(true)}>
+            Удалить
+          </Button>
+        )}
+      </Group>
+
+      {/* Информация */}
+      {isLoading ? <Skeleton h={150} radius="md" /> : data && (
+        <Paper withBorder p="md">
+          <Stack gap="xs">
+            <Group><Text size="sm" fw={500} w={160}>Назначение:</Text>
+              <Anchor href={data.longUrl} target="_blank" size="sm">{data.longUrl} <IconExternalLink size={12} /></Anchor>
+            </Group>
+            <Group><Text size="sm" fw={500} w={160}>Создана:</Text><Text size="sm">{formatDateLong(data.dateCreated)}</Text></Group>
+            <Group><Text size="sm" fw={500} w={160}>Всего переходов:</Text><Text size="sm">{data.visitsTotal}</Text></Group>
+          </Stack>
+        </Paper>
+      )}
+
+      <Group justify="space-between">
+        <Text fw={600}>Статистика за период</Text>
+        <SegmentedControl data={PERIODS} value={period} onChange={setPeriod} size="xs" />
+      </Group>
+
+      {/* График */}
+      <Paper withBorder p="md">
+        <Text fw={600} mb="sm">Переходы по дням</Text>
+        {isLoading ? <Skeleton h={200} /> : (
+          <LineChart
+            h={200}
+            data={data?.clicksPerDay ?? []}
+            dataKey="date"
+            series={[{ name: 'clicks', color: 'blue', label: 'Переходы' }]}
+            withTooltip
+          />
+        )}
+      </Paper>
+
+      {/* Donut чарты */}
+      <Group grow>
+        <Paper withBorder p="md">
+          <Text fw={600} mb="sm">Устройства</Text>
+          {isLoading ? <Skeleton h={160} /> : <DonutChart data={deviceData} withLabelsLine withLabels />}
+        </Paper>
+        <Paper withBorder p="md">
+          <Text fw={600} mb="sm">Браузеры</Text>
+          {isLoading ? <Skeleton h={160} /> : (
+            <DonutChart
+              data={(data?.browsers ?? []).map((b, i) => ({ name: b.name, value: b.count, color: ['blue', 'teal', 'violet', 'orange', 'pink'][i % 5] }))}
+              withLabelsLine withLabels
+            />
+          )}
+        </Paper>
+        <Paper withBorder p="md">
+          <Text fw={600} mb="sm">Операционные системы</Text>
+          {isLoading ? <Skeleton h={160} /> : (
+            <DonutChart
+              data={(data?.os ?? []).map((o, i) => ({ name: o.name, value: o.count, color: ['green', 'cyan', 'lime', 'yellow', 'red'][i % 5] }))}
+              withLabelsLine withLabels
+            />
+          )}
+        </Paper>
+      </Group>
+
+      {/* Таблица переходов */}
+      <Paper withBorder p="md">
+        <Text fw={600} mb="sm">Переходы</Text>
+        {isLoading ? <Skeleton h={300} /> : pagedVisits.length === 0 ? (
+          <EmptyState title="Переходов за этот период нет" />
+        ) : (
+          <>
+            <Table striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => { setVisitsSortAsc(!visitsSortAsc); setVisitsPage(1) }}
+                  >
+                    Дата {visitsSortAsc ? '↑' : '↓'}
+                  </Table.Th>
+                  <Table.Th>Браузер</Table.Th>
+                  <Table.Th>ОС</Table.Th>
+                  <Table.Th>Устройство</Table.Th>
+                  <Table.Th>Страна</Table.Th>
+                  <Table.Th>Реферер</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {pagedVisits.map((v, i) => (
+                  <Table.Tr key={i}>
+                    <Table.Td><Text size="sm">{formatDateTime(v.date)}</Text></Table.Td>
+                    <Table.Td>{v.browser}</Table.Td>
+                    <Table.Td>{v.os}</Table.Td>
+                    <Table.Td>{DEVICE_ICON[v.device] ?? ''} {v.device}</Table.Td>
+                    <Table.Td>{v.country ?? '—'}</Table.Td>
+                    <Table.Td>
+                      {v.referer ? (
+                        <Tooltip label={v.referer} multiline maw={300}>
+                          <Text size="sm" truncate maw={160}>{v.referer}</Text>
+                        </Tooltip>
+                      ) : '—'}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+            {totalVisitPages > 1 && (
+              <Group justify="center" mt="sm">
+                <Pagination total={totalVisitPages} value={visitsPage} onChange={setVisitsPage} size="sm" />
+              </Group>
+            )}
+          </>
+        )}
+      </Paper>
+
+      <ConfirmDialog
+        opened={confirmDeactivate}
+        onClose={() => setConfirmDeactivate(false)}
+        onConfirm={() => deactivateMutation.mutate()}
+        title="Деактивировать ссылку?"
+        message={`Ссылка ${shortCode} будет деактивирована.`}
+        confirmLabel="Деактивировать"
+        loading={deactivateMutation.isPending}
+      />
+      <ConfirmDialog
+        opened={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => deleteMutation.mutate()}
+        title="Удалить ссылку?"
+        message={`Ссылка ${shortCode} будет удалена безвозвратно.`}
+        confirmLabel="Удалить"
+        loading={deleteMutation.isPending}
+        danger
+      />
+    </Stack>
+  )
 }

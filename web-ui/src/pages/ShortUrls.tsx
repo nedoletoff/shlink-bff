@@ -1,437 +1,395 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState, useCallback } from 'react'
 import {
-  Stack, Title, Button, TextInput, Table, ActionIcon, Group,
-  Badge, Text, Loader, Center, Modal, Tooltip, Pagination,
-  Anchor, CopyButton, Box, Card, SegmentedControl,
-} from '@mantine/core';
-import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
-import { notifications } from '@mantine/notifications';
+  Title, Stack, Group, TextInput, SegmentedControl, Button,
+  Table, Badge, Text, ActionIcon, Skeleton, Pagination, Tooltip, Modal, NumberInput,
+  MultiSelect,
+} from '@mantine/core'
+import { DateTimePicker } from '@mantine/dates'
+import { useDisclosure } from '@mantine/hooks'
 import {
-  IconPlus, IconTrash, IconSearch, IconEdit,
-  IconCopy, IconCheck, IconBan, IconExternalLink,
-  IconPlayerPlay,
-} from '@tabler/icons-react';
-import { api } from '../api/client';
-import { useAuth } from '../contexts/AuthContext';
-import { ConfirmDialog } from '../components/ui/ConfirmDialog';
-import { formatDate } from '../utils/date';
-import { useIsAdmin } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import type { Pagination as PaginationInfo, ShortURL, ShortURLsListResponse } from '../types/api';
+  IconSearch, IconPlus, IconEdit, IconPlayerPause, IconPlayerPlay,
+  IconTrash, IconCopy,
+} from '@tabler/icons-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { notifications } from '@mantine/notifications'
+import { useNavigate } from 'react-router-dom'
+import {
+  listLinks, createLink, updateLink, deleteLink,
+  deactivateLink, activateLink,
+} from '@/api/endpoints/links'
+import { getTags } from '@/api/endpoints/tags'
+import { CopyButton } from '@/components/ui/CopyButton'
+import { StatusBadge } from '@/components/ui/StatusBadge'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { useAuth } from '@/contexts/AuthContext'
+import { formatDate } from '@/utils/date'
+import type { ShortURL, CreateShortURLPayload } from '@/types/api'
+import dayjs from 'dayjs'
 
-const ITEMS_PER_PAGE = 20;
-
-type StatusFilter = 'active' | 'inactive' | 'all';
-
-// ─── Create / Edit modal ─────────────────────────────────────────────────────
-function CreateEditModal({
-  opened, onClose, onSaved, editTarget,
-}: {
-  opened:     boolean;
-  onClose:    () => void;
-  onSaved:    () => void;
-  editTarget: ShortURL | null;
-}) {
-  const { user } = useAuth();
-  const canCustomSlug = user?.permissions.canCreateWithCustomSlug ?? false;
-
-  const [longUrl,    setLongUrl]  = useState('');
-  const [title,      setTitle]    = useState('');
-  const [customSlug, setSlug]     = useState('');
-  const [saving,     setSaving]   = useState(false);
-
-  useEffect(() => {
-    if (editTarget) {
-      setLongUrl(editTarget.longUrl);
-      setTitle(editTarget.title ?? '');
-      setSlug('');
-    } else {
-      setLongUrl(''); setTitle(''); setSlug('');
-    }
-  }, [editTarget, opened]);
-
-  const handleSubmit = async () => {
-    if (!longUrl.trim()) return;
-    setSaving(true);
-    try {
-      if (editTarget) {
-        await api.patch(`/api/shlink/short-urls/${editTarget.shortCode}`, {
-          longUrl: longUrl.trim(),
-          title:   title.trim() || undefined,
-        });
-        notifications.show({ message: 'Ссылка обновлена', color: 'green' });
-      } else {
-        await api.post('/api/shlink/short-urls', {
-          longUrl:    longUrl.trim(),
-          title:      title.trim() || undefined,
-          ...(canCustomSlug && customSlug.trim() ? { customSlug: customSlug.trim() } : {}),
-        });
-        notifications.show({ message: 'Ссылка создана', color: 'green' });
-      }
-      onSaved();
-      onClose();
-    } catch {
-      /* APIError уже показан через notifications */
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal
-      opened={opened}
-      onClose={onClose}
-      title={editTarget ? 'Редактировать ссылку' : 'Создать ссылку'}
-      size="md"
-    >
-      <Stack gap="sm">
-        <TextInput
-          label="Длинная ссылка"
-          placeholder="https://example.com/very/long/path"
-          value={longUrl}
-          onChange={e => setLongUrl(e.currentTarget.value)}
-          required
-          data-autofocus
-        />
-        <TextInput
-          label="Название (опционально)"
-          placeholder="Как вы будете её узнавать"
-          value={title}
-          onChange={e => setTitle(e.currentTarget.value)}
-        />
-        {!editTarget && canCustomSlug && (
-          <TextInput
-            label="Кастомный слаг (опционально)"
-            placeholder="my-link"
-            value={customSlug}
-            onChange={e => setSlug(e.currentTarget.value)}
-            description="Оставьте пустым — сгенерируется автоматически"
-          />
-        )}
-        <Group justify="flex-end" mt="sm">
-          <Button variant="default" onClick={onClose}>Отмена</Button>
-          <Button onClick={handleSubmit} loading={saving}>
-            {editTarget ? 'Сохранить' : 'Создать'}
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
-  );
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+  useCallback(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debouncedValue
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
+interface LinkFormData {
+  longUrl: string
+  title: string
+  customSlug: string
+  tags: string[]
+  maxVisits: number | ''
+  validSince: Date | null
+  validUntil: Date | null
+}
+
+const DEFAULT_FORM: LinkFormData = {
+  longUrl: '',
+  title: '',
+  customSlug: '',
+  tags: [],
+  maxVisits: '',
+  validSince: null,
+  validUntil: null,
+}
+
 export function ShortUrls() {
-  const { user } = useAuth();
-  const isAdmin  = useIsAdmin();
-  const navigate = useNavigate();
+  const { can } = useAuth()
+  const qc = useQueryClient()
+  const navigate = useNavigate()
+  const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState('all')
+  const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure()
+  const [editLink, setEditLink] = useState<ShortURL | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<ShortURL | null>(null)
+  const [confirmDeactivate, setConfirmDeactivate] = useState<ShortURL | null>(null)
+  const [form, setForm] = useState<LinkFormData>(DEFAULT_FORM)
+  const [formError, setFormError] = useState('')
 
-  const [urls,           setUrls]           = useState<ShortURL[]>([]);
-  const [pagination,     setPagination]     = useState<PaginationInfo | null>(null);
-  const [loading,        setLoading]        = useState(true);
-  const [search,         setSearch]         = useState('');
-  const [page,           setPage]           = useState(1);
-  const [statusFilter,   setStatusFilter]   = useState<StatusFilter>('active');
-  const [deactivateTarget, setDeactivateTarget] = useState<ShortURL | null>(null);
-  const [activateTarget,   setActivateTarget]   = useState<ShortURL | null>(null);
-  const [deleteTarget,     setDeleteTarget]     = useState<ShortURL | null>(null);
-  const [editTarget,       setEditTarget]       = useState<ShortURL | null>(null);
-  const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure(false);
+  const debouncedSearch = search
 
-  const [debouncedSearch] = useDebouncedValue(search, 350);
+  const { data, isLoading } = useQuery({
+    queryKey: ['links', page, debouncedSearch, status],
+    queryFn: () => listLinks({ page, itemsPerPage: 20, searchTerm: debouncedSearch || undefined, status: status !== 'all' ? status : undefined }),
+  })
 
-  const perms = user?.permissions;
-  const canDeactivate  = perms?.canDeactivateOwnLinks  || perms?.canDeactivateAllLinks;
-  const canReactivate  = perms?.canReactivateOwnLinks  || perms?.canReactivateAllLinks;
-  const canPermDelete  = perms?.canDeleteOwnLinksPermanently || perms?.canDeleteAllLinksPermanently;
+  const { data: tagsData } = useQuery({ queryKey: ['tags'], queryFn: getTags })
+  const tagOptions = tagsData?.map((t) => ({ value: t.tag, label: t.tag })) ?? []
 
-  const fetchUrls = useCallback(() => {
-    setLoading(true);
-    api.get<ShortURLsListResponse>('/api/shlink/short-urls', {
-      params: {
-        searchTerm:   debouncedSearch || undefined,
-        page,
-        itemsPerPage: ITEMS_PER_PAGE,
-        status:       statusFilter,
-      },
+  const createMutation = useMutation({
+    mutationFn: createLink,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['links'] })
+      closeCreate()
+      setForm(DEFAULT_FORM)
+      notifications.show({ color: 'teal', message: 'Ссылка создана' })
+    },
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ shortCode, payload }: { shortCode: string; payload: CreateShortURLPayload }) =>
+      updateLink(shortCode, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['links'] })
+      setEditLink(null)
+      notifications.show({ color: 'teal', message: 'Ссылка обновлена' })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteLink,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['links'] })
+      setConfirmDelete(null)
+      notifications.show({ color: 'teal', message: 'Ссылка удалена' })
+    },
+  })
+
+  const deactivateMutation = useMutation({
+    mutationFn: deactivateLink,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['links'] })
+      setConfirmDeactivate(null)
+    },
+  })
+
+  const activateMutation = useMutation({
+    mutationFn: activateLink,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['links'] }),
+  })
+
+  const validateAndSubmit = () => {
+    if (!form.longUrl.match(/^https?:\/\//)) {
+      setFormError('Введите корректный URL (http:// или https://)')
+      return
+    }
+    if (form.validSince && form.validUntil && form.validUntil <= form.validSince) {
+      setFormError('validUntil должен быть позже validSince')
+      return
+    }
+    setFormError('')
+    const payload: CreateShortURLPayload = {
+      longUrl: form.longUrl,
+      ...(form.title && { title: form.title }),
+      ...(form.customSlug && { customSlug: form.customSlug }),
+      ...(form.tags.length && { tags: form.tags }),
+      ...(form.maxVisits !== '' && { maxVisits: Number(form.maxVisits) }),
+      ...(form.validSince && { validSince: form.validSince.toISOString() }),
+      ...(form.validUntil && { validUntil: form.validUntil.toISOString() }),
+    }
+    if (editLink) {
+      updateMutation.mutate({ shortCode: editLink.shortCode, payload })
+    } else {
+      createMutation.mutate(payload)
+    }
+  }
+
+  const openEdit = (link: ShortURL) => {
+    setEditLink(link)
+    setForm({
+      longUrl: link.longUrl,
+      title: link.title ?? '',
+      customSlug: '',
+      tags: link.tags ?? [],
+      maxVisits: link.maxVisits ?? '',
+      validSince: link.validSince ? new Date(link.validSince) : null,
+      validUntil: link.validUntil ? new Date(link.validUntil) : null,
     })
-      .then(r => {
-        setUrls(r.shortUrls.data);
-        setPagination(r.shortUrls.pagination);
-      })
-      .catch(() => { setUrls([]); setPagination(null); })
-      .finally(() => setLoading(false));
-  }, [debouncedSearch, page, statusFilter]);
+    setFormError('')
+  }
 
-  useEffect(() => { fetchUrls(); }, [fetchUrls]);
-  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter]);
-
-  const handleDeactivate = async () => {
-    if (!deactivateTarget) return;
-    try {
-      await api.post(`/api/shlink/short-urls/${deactivateTarget.shortCode}/deactivate`, {});
-      notifications.show({ message: 'Ссылка деактивирована', color: 'orange' });
-      setDeactivateTarget(null);
-      fetchUrls();
-    } catch { /* already shown */ }
-  };
-
-  const handleActivate = async () => {
-    if (!activateTarget) return;
-    try {
-      await api.post(`/api/shlink/short-urls/${activateTarget.shortCode}/activate`, {});
-      notifications.show({ message: 'Ссылка активирована', color: 'green' });
-      setActivateTarget(null);
-      fetchUrls();
-    } catch { /* already shown */ }
-  };
-
-  const handlePermanentDelete = async () => {
-    if (!deleteTarget) return;
-    try {
-      await api.delete(`/api/shlink/short-urls/${deleteTarget.shortCode}/permanent`);
-      notifications.show({ message: 'Ссылка удалена безвозвратно', color: 'red' });
-      setDeleteTarget(null);
-      fetchUrls();
-    } catch { /* already shown */ }
-  };
-
-  const totalPages = pagination ? pagination.pagesCount : 1;
+  const pagination = data?.shortUrls.pagination
+  const links = data?.shortUrls.data ?? []
 
   return (
-    <Stack gap="lg">
-      <Group justify="space-between" wrap="nowrap">
-        <div>
-          <Title order={2} fw={700}>Мои ссылки</Title>
-          {pagination && (
-            <Text size="sm" c="dimmed">{pagination.totalItems} ссылок</Text>
-          )}
-        </div>
-        {user?.permissions.canCreateShortUrl && (
-          <Button size="sm" leftSection={<IconPlus size={14} />} onClick={openCreate}>
-            Создать
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Title order={2}>Мои ссылки</Title>
+        {can('canCreateLinks') && (
+          <Button leftSection={<IconPlus size={16} />} onClick={openCreate}>
+            Создать ссылку
           </Button>
         )}
       </Group>
 
-      {/* Filters */}
-      <Group gap="sm" wrap="nowrap">
+      <Group>
         <TextInput
-          placeholder="Поиск по ссылке или коду…"
-          leftSection={<IconSearch size={14} />}
+          placeholder="Поиск..."
+          leftSection={<IconSearch size={16} />}
           value={search}
-          onChange={e => setSearch(e.currentTarget.value)}
-          size="sm"
+          onChange={(e) => { setSearch(e.currentTarget.value); setPage(1) }}
           style={{ flex: 1 }}
         />
         <SegmentedControl
-          size="sm"
-          value={statusFilter}
-          onChange={v => setStatusFilter(v as StatusFilter)}
           data={[
-            { label: 'Активные',       value: 'active'   },
-            { label: 'Деактивиров.',   value: 'inactive' },
-            { label: 'Все',            value: 'all'      },
+            { label: 'Все', value: 'all' },
+            { label: 'Активные', value: 'active' },
+            { label: 'Неактивные', value: 'inactive' },
           ]}
+          value={status}
+          onChange={(v) => { setStatus(v); setPage(1) }}
+          size="sm"
         />
       </Group>
 
-      {/* Table */}
-      <Card withBorder p={0} radius="md" style={{ overflow: 'hidden' }}>
-        {loading ? (
-          <Center h={200}><Loader size="sm" /></Center>
-        ) : urls.length === 0 ? (
-          <Center h={120}>
-            <Text c="dimmed" size="sm">Ничего не найдено</Text>
-          </Center>
-        ) : (
-          <Box style={{ overflowX: 'auto' }}>
-            <Table highlightOnHover withRowBorders stickyHeader>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th style={{ width: 120 }}>Код</Table.Th>
-                  <Table.Th>Назначение</Table.Th>
-                  <Table.Th style={{ width: 100 }}>Создана</Table.Th>
-                  <Table.Th style={{ width: 80 }} ta="right">Клики</Table.Th>
-                  {isAdmin && <Table.Th style={{ width: 110 }}>Владелец</Table.Th>}
-                  <Table.Th style={{ width: 90 }}>Статус</Table.Th>
-                  <Table.Th style={{ width: 100 }} />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {urls.map(url => {
-                  const inactive = url.isActive === false;
-                  return (
-                    <Table.Tr
-                      key={url.shortCode}
-                      style={{ opacity: inactive ? 0.6 : 1 }}
-                    >
-                      {/* Code + copy */}
-                      <Table.Td>
-                        <Group gap={4} wrap="nowrap">
-                          <CopyButton value={url.shortUrl}>
-                            {({ copy, copied }) => (
-                              <Tooltip label={copied ? 'Скопировано!' : 'Копировать'}>
-                                <ActionIcon
-                                  variant="subtle" size="xs" color={copied ? 'teal' : 'gray'}
-                                  onClick={e => { e.stopPropagation(); copy(); }}
-                                >
-                                  {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-                                </ActionIcon>
-                              </Tooltip>
-                            )}
-                          </CopyButton>
-                          <Anchor
-                            size="sm" ff="monospace"
-                            onClick={e => { e.stopPropagation(); navigate(`/links/${url.shortCode}`); }}
-                          >
-                            {url.shortCode}
-                          </Anchor>
-                        </Group>
-                      </Table.Td>
-
-                      {/* Destination */}
-                      <Table.Td>
-                        <Group gap={4} wrap="nowrap">
-                          <Text size="sm" truncate maw={280} title={url.longUrl}>
-                            {url.title || url.longUrl}
-                          </Text>
-                          <Tooltip label={url.longUrl}>
-                            <ActionIcon
-                              component="a" href={url.longUrl} target="_blank"
-                              variant="subtle" size="xs" color="gray"
-                              onClick={e => e.stopPropagation()}
-                            >
-                              <IconExternalLink size={12} />
-                            </ActionIcon>
-                          </Tooltip>
-                        </Group>
-                      </Table.Td>
-
-                      {/* Created */}
-                      <Table.Td>
-                        <Text size="xs" c="dimmed">
-                          {url.dateCreated ? formatDate(url.dateCreated) : '—'}
-                        </Text>
-                      </Table.Td>
-
-                      {/* Clicks */}
-                      <Table.Td ta="right">
-                        <Text size="sm" fw={600} ff="monospace">
-                          {url.visitsSummary?.total ?? 0}
-                        </Text>
-                      </Table.Td>
-
-                      {/* Owner (admin) */}
-                      {isAdmin && (
-                        <Table.Td>
-                          <Text size="xs" c="dimmed">{url.ownerUsername ?? '—'}</Text>
-                        </Table.Td>
+      {isLoading ? (
+        <Skeleton h={400} radius="md" />
+      ) : links.length === 0 ? (
+        <EmptyState
+          title="Ссылок не найдено"
+          action={
+            can('canCreateLinks') ? (
+              <Button size="sm" onClick={openCreate}>Создать ссылку</Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <>
+          <Table striped highlightOnHover withTableBorder withColumnBorders>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Ссылка</Table.Th>
+                <Table.Th>Назначение</Table.Th>
+                <Table.Th>Теги</Table.Th>
+                <Table.Th>Создана</Table.Th>
+                <Table.Th>Лимит</Table.Th>
+                <Table.Th>Переходов</Table.Th>
+                <Table.Th>Статус</Table.Th>
+                <Table.Th>Действия</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {links.map((link) => (
+                <Table.Tr key={link.shortCode}>
+                  <Table.Td>
+                    <Group gap={4}>
+                      <Text
+                        size="sm"
+                        fw={500}
+                        c="blue"
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => navigate(`/links/${link.shortCode}`)}
+                      >
+                        {link.shortCode}
+                      </Text>
+                      <CopyButton value={link.shortUrl} />
+                    </Group>
+                    <Text size="xs" c="dimmed">{link.shortUrl}</Text>
+                  </Table.Td>
+                  <Table.Td maw={240}>
+                    <Tooltip label={link.longUrl} multiline maw={300}>
+                      <Text size="sm" truncate>{link.title || link.longUrl.slice(0, 60)}</Text>
+                    </Tooltip>
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap={4}>
+                      {link.tags.slice(0, 3).map((t) => <Badge key={t} size="xs" variant="outline">{t}</Badge>)}
+                      {link.tags.length > 3 && <Badge size="xs" color="gray">+{link.tags.length - 3}</Badge>}
+                    </Group>
+                  </Table.Td>
+                  <Table.Td><Text size="sm">{formatDate(link.dateCreated)}</Text></Table.Td>
+                  <Table.Td><Text size="sm">{link.maxVisits ?? '∞'}</Text></Table.Td>
+                  <Table.Td>{link.visitsSummary.total}</Table.Td>
+                  <Table.Td><StatusBadge active={link.isActive !== false} /></Table.Td>
+                  <Table.Td>
+                    <Group gap={4}>
+                      {(can('canEditOwnLinks') || can('canEditAllLinks')) && (
+                        <Tooltip label="Редактировать">
+                          <ActionIcon variant="subtle" size="sm" onClick={() => openEdit(link)}>
+                            <IconEdit size={14} />
+                          </ActionIcon>
+                        </Tooltip>
                       )}
-
-                      {/* Status */}
-                      <Table.Td>
-                        {inactive ? (
-                          <Badge size="xs" variant="light" color="orange" leftSection={<IconBan size={10} />}>
-                            Деактив.
-                          </Badge>
-                        ) : (
-                          <Badge size="xs" variant="light" color="green">Активна</Badge>
-                        )}
-                      </Table.Td>
-
-                      {/* Actions */}
-                      <Table.Td>
-                        <Group gap={4} justify="flex-end" wrap="nowrap">
-                          {user?.permissions.canEditOwnLinks && !inactive && (
-                            <Tooltip label="Редактировать">
-                              <ActionIcon
-                                variant="subtle" size="sm" color="blue"
-                                onClick={e => { e.stopPropagation(); setEditTarget(url); }}
-                              >
-                                <IconEdit size={14} />
-                              </ActionIcon>
-                            </Tooltip>
-                          )}
-                          {canDeactivate && !inactive && (
-                            <Tooltip label="Деактивировать">
-                              <ActionIcon
-                                variant="subtle" size="sm" color="orange"
-                                onClick={e => { e.stopPropagation(); setDeactivateTarget(url); }}
-                              >
-                                <IconBan size={14} />
-                              </ActionIcon>
-                            </Tooltip>
-                          )}
-                          {canReactivate && inactive && (
-                            <Tooltip label="Активировать">
-                              <ActionIcon
-                                variant="subtle" size="sm" color="green"
-                                onClick={e => { e.stopPropagation(); setActivateTarget(url); }}
-                              >
-                                <IconPlayerPlay size={14} />
-                              </ActionIcon>
-                            </Tooltip>
-                          )}
-                          {canPermDelete && (
-                            <Tooltip label="Удалить безвозвратно">
-                              <ActionIcon
-                                variant="subtle" size="sm" color="red"
-                                onClick={e => { e.stopPropagation(); setDeleteTarget(url); }}
-                              >
-                                <IconTrash size={14} />
-                              </ActionIcon>
-                            </Tooltip>
-                          )}
-                        </Group>
-                      </Table.Td>
-                    </Table.Tr>
-                  );
-                })}
-              </Table.Tbody>
-            </Table>
-          </Box>
-        )}
-      </Card>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <Group justify="center">
-          <Pagination value={page} onChange={setPage} total={totalPages} size="sm" />
-        </Group>
+                      {link.isActive !== false && (can('canDeactivateOwnLinks') || can('canDeactivateAllLinks')) && (
+                        <Tooltip label="Деактивировать">
+                          <ActionIcon variant="subtle" size="sm" color="orange" onClick={() => setConfirmDeactivate(link)}>
+                            <IconPlayerPause size={14} />
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                      {link.isActive === false && (can('canReactivateOwnLinks') || can('canReactivateAllLinks')) && (
+                        <Tooltip label="Активировать">
+                          <ActionIcon variant="subtle" size="sm" color="teal" onClick={() => activateMutation.mutate(link.shortCode)}>
+                            <IconPlayerPlay size={14} />
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                      {(can('canDeleteOwnLinksPermanently') || can('canDeleteAllLinksPermanently')) && (
+                        <Tooltip label="Удалить">
+                          <ActionIcon variant="subtle" size="sm" color="red" onClick={() => setConfirmDelete(link)}>
+                            <IconTrash size={14} />
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+          {pagination && pagination.pagesCount > 1 && (
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">
+                Записи {(page - 1) * 20 + 1}–{Math.min(page * 20, pagination.totalItems)} из {pagination.totalItems}
+              </Text>
+              <Pagination total={pagination.pagesCount} value={page} onChange={setPage} size="sm" />
+            </Group>
+          )}
+        </>
       )}
 
-      {/* Modals */}
-      <CreateEditModal
-        opened={createOpen || editTarget !== null}
-        onClose={() => { closeCreate(); setEditTarget(null); }}
-        onSaved={fetchUrls}
-        editTarget={editTarget}
+      {/* Модалка создания / редактирования */}
+      <Modal
+        opened={createOpen || editLink !== null}
+        onClose={() => { closeCreate(); setEditLink(null); setForm(DEFAULT_FORM); setFormError('') }}
+        title={editLink ? 'Редактировать ссылку' : 'Создать ссылку'}
+        size="lg"
+      >
+        <Stack>
+          <TextInput
+            label="Long URL"
+            placeholder="https://example.com/..."
+            required
+            value={form.longUrl}
+            onChange={(e) => setForm((f) => ({ ...f, longUrl: e.currentTarget.value }))}
+          />
+          <TextInput
+            label="Заголовок"
+            value={form.title}
+            onChange={(e) => setForm((f) => ({ ...f, title: e.currentTarget.value }))}
+          />
+          {!editLink && can('canCreateWithCustomSlug') && (
+            <TextInput
+              label="Кастомный слаг"
+              value={form.customSlug}
+              onChange={(e) => setForm((f) => ({ ...f, customSlug: e.currentTarget.value }))}
+            />
+          )}
+          <MultiSelect
+            label="Теги"
+            data={tagOptions}
+            value={form.tags}
+            onChange={(v) => setForm((f) => ({ ...f, tags: v }))}
+            searchable
+            creatable
+          />
+          <NumberInput
+            label="Макс. переходов"
+            min={1}
+            value={form.maxVisits}
+            onChange={(v) => setForm((f) => ({ ...f, maxVisits: v === '' ? '' : Number(v) }))}
+            placeholder="Без ограничения"
+          />
+          <DateTimePicker
+            label="Действительна с"
+            value={form.validSince}
+            onChange={(v) => setForm((f) => ({ ...f, validSince: v }))}
+            clearable
+          />
+          <DateTimePicker
+            label="Действительна по"
+            value={form.validUntil}
+            onChange={(v) => setForm((f) => ({ ...f, validUntil: v }))}
+            minDate={form.validSince ?? undefined}
+            clearable
+          />
+          {formError && <Text c="red" size="sm">{formError}</Text>}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => { closeCreate(); setEditLink(null) }}>Отмена</Button>
+            <Button
+              loading={createMutation.isPending || updateMutation.isPending}
+              onClick={validateAndSubmit}
+            >
+              Сохранить
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <ConfirmDialog
+        opened={confirmDelete !== null}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => confirmDelete && deleteMutation.mutate(confirmDelete.shortCode)}
+        title="Удалить ссылку?"
+        message={`Ссылка ${confirmDelete?.shortCode} будет удалена безвозвратно.`}
+        confirmLabel="Удалить"
+        loading={deleteMutation.isPending}
+        danger
       />
 
       <ConfirmDialog
-        opened={deactivateTarget !== null}
+        opened={confirmDeactivate !== null}
+        onClose={() => setConfirmDeactivate(null)}
+        onConfirm={() => confirmDeactivate && deactivateMutation.mutate(confirmDeactivate.shortCode)}
         title="Деактивировать ссылку?"
-        message={`Ссылка «${deactivateTarget?.shortCode}» перестанет работать. Историю переходов можно восстановить активацией.`}
-        onConfirm={handleDeactivate}
-        onCancel={() => setDeactivateTarget(null)}
-      />
-
-      <ConfirmDialog
-        opened={activateTarget !== null}
-        title="Активировать ссылку?"
-        message={`Ссылка «${activateTarget?.shortCode}» снова начнёт работать.`}
-        onConfirm={handleActivate}
-        onCancel={() => setActivateTarget(null)}
-      />
-
-      <ConfirmDialog
-        opened={deleteTarget !== null}
-        title="Удалить ссылку безвозвратно?"
-        message={`Ссылка «${deleteTarget?.shortCode}» и все её переходы будут удалены навсегда. Это действие нельзя отменить.`}
-        confirmColor="red"
-        onConfirm={handlePermanentDelete}
-        onCancel={() => setDeleteTarget(null)}
+        message={`Ссылка ${confirmDeactivate?.shortCode} будет деактивирована. Пользователи получат ошибку при переходе.`}
+        confirmLabel="Деактивировать"
+        loading={deactivateMutation.isPending}
       />
     </Stack>
-  );
+  )
 }
