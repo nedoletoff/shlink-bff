@@ -3,28 +3,34 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Stack, Group, Title, TextInput, Select, Button,
   Table, Text, ActionIcon, Tooltip, Modal,
-  NumberInput, Skeleton, Pagination,
+  TagsInput, NumberInput, Skeleton, Pagination, Badge,
 } from '@mantine/core'
+import { DateTimePicker } from '@mantine/dates'
 import { useForm } from '@mantine/form'
 import { useDisclosure } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
-import { IconPlus, IconPencil, IconTrash, IconLink, IconExternalLink } from '@tabler/icons-react'
+import {
+  IconPlus, IconPencil, IconTrash, IconLink,
+  IconExternalLink, IconBan, IconCircleCheck,
+} from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
-import { getLinks, createLink, editLink, deleteLink } from '@/api/endpoints/links'
+import { getLinks, createLink, editLink, deleteLink, deactivateLink, activateLink } from '@/api/endpoints/links'
 import type { CreateShortURLPayload, ShortURL } from '@/types/api'
 import { CopyButton } from '@/components/ui/CopyButton'
-import { StatusBadge } from '@/components/ui/StatusBadge'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate } from '@/utils/date'
 
-function LinkModal({
-  opened, onClose, initial,
-}: {
-  opened: boolean
-  onClose: () => void
-  initial?: ShortURL | null
-}) {
+// ─── helpers ─────────────────────────────────────────────────────────────────────
+const TAG_COLORS = ['teal', 'blue', 'grape', 'orange', 'cyan', 'pink', 'lime', 'indigo']
+function tagColor(tag: string) {
+  let h = 0
+  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) & 0xffffffff
+  return TAG_COLORS[Math.abs(h) % TAG_COLORS.length]
+}
+
+// ─── LinkModal ────────────────────────────────────────────────────────────────────
+function LinkModal({ opened, onClose, initial }: { opened: boolean; onClose: () => void; initial?: ShortURL | null }) {
   const qc = useQueryClient()
   const isEdit = Boolean(initial)
 
@@ -35,13 +41,22 @@ function LinkModal({
       customSlug: initial?.shortCode ?? '',
       tags: initial?.tags ?? [],
       maxVisits: initial?.maxVisits ?? undefined,
+      validSince: initial?.validSince ?? undefined,
+      validUntil: initial?.validUntil ?? undefined,
     },
   })
 
   const mutation = useMutation({
     mutationFn: (values: CreateShortURLPayload) =>
       isEdit
-        ? editLink(initial!.shortCode, '', { longUrl: values.longUrl, title: values.title, tags: values.tags, maxVisits: values.maxVisits })
+        ? editLink(initial!.shortCode, '', {
+            longUrl: values.longUrl,
+            title: values.title,
+            tags: values.tags,
+            maxVisits: values.maxVisits,
+            validSince: values.validSince,
+            validUntil: values.validUntil,
+          })
         : createLink(values),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
@@ -51,14 +66,35 @@ function LinkModal({
   })
 
   return (
-    <Modal opened={opened} onClose={onClose} title={isEdit ? 'Редактировать ссылку' : 'Создать ссылку'}>
+    <Modal opened={opened} onClose={onClose} title={isEdit ? 'Редактировать ссылку' : 'Создать ссылку'} size="md">
       <form onSubmit={form.onSubmit((v: CreateShortURLPayload) => mutation.mutate(v))}>
         <Stack gap="sm">
           <TextInput label="Длинный URL" required {...form.getInputProps('longUrl')} />
           <TextInput label="Заголовок" {...form.getInputProps('title')} />
           {!isEdit && <TextInput label="Кастомный слаг" {...form.getInputProps('customSlug')} />}
-          <NumberInput label="Макс. переходов" {...form.getInputProps('maxVisits')} />
-          <Group justify="flex-end">
+          <TagsInput
+            label="Теги"
+            placeholder="Добавить тег → Enter"
+            {...form.getInputProps('tags')}
+          />
+          <NumberInput label="Макс. переходов" min={1} {...form.getInputProps('maxVisits')} />
+          <Group grow>
+            <DateTimePicker
+              label="Действителен с"
+              placeholder="Не ограничен"
+              clearable
+              value={form.values.validSince ? new Date(form.values.validSince) : null}
+              onChange={(d) => form.setFieldValue('validSince', d ? d.toISOString() : undefined)}
+            />
+            <DateTimePicker
+              label="Действителен до"
+              placeholder="Не ограничен"
+              clearable
+              value={form.values.validUntil ? new Date(form.values.validUntil) : null}
+              onChange={(d) => form.setFieldValue('validUntil', d ? d.toISOString() : undefined)}
+            />
+          </Group>
+          <Group justify="flex-end" mt="xs">
             <Button variant="default" onClick={onClose}>Отмена</Button>
             <Button type="submit" loading={mutation.isPending}>{isEdit ? 'Сохранить' : 'Создать'}</Button>
           </Group>
@@ -68,6 +104,7 @@ function LinkModal({
   )
 }
 
+// ─── ShortUrls page ─────────────────────────────────────────────────────────────────
 export function ShortUrls() {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -89,6 +126,18 @@ export function ShortUrls() {
       qc.invalidateQueries({ queryKey: ['links'] })
       notifications.show({ color: 'teal', message: 'Ссылка удалена' })
       setDeleting(null)
+    },
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: (link: ShortURL) =>
+      link.isActive ? deactivateLink(link.shortCode) : activateLink(link.shortCode),
+    onSuccess: (_data, link) => {
+      qc.invalidateQueries({ queryKey: ['links'] })
+      notifications.show({
+        color: link.isActive ? 'orange' : 'teal',
+        message: link.isActive ? 'Ссылка деактивирована' : 'Ссылка активирована',
+      })
     },
   })
 
@@ -117,21 +166,29 @@ export function ShortUrls() {
           ]}
           value={status}
           onChange={(v: string | null) => { setStatus(v); setPage(1) }}
-          w={140}
+          w={150}
         />
       </Group>
 
       {isLoading ? (
-        <Skeleton height={400} />
+        <Stack gap="xs">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={44} radius="sm" />)}
+        </Stack>
       ) : links.length === 0 ? (
-        <EmptyState icon={<IconLink size={24} />} title="Ссылок нет" description="Создайте первую короткую ссылку" action={<Button onClick={openCreate}>Создать</Button>} />
+        <EmptyState
+          icon={<IconLink size={24} />}
+          title="Ссылок нет"
+          description="Создайте первую короткую ссылку"
+          action={<Button onClick={openCreate}>Создать</Button>}
+        />
       ) : (
-        <Table.ScrollContainer minWidth={600}>
+        <Table.ScrollContainer minWidth={640}>
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Ссылка</Table.Th>
                 <Table.Th>Назначение</Table.Th>
+                <Table.Th>Теги</Table.Th>
                 <Table.Th>Переходы</Table.Th>
                 <Table.Th>Создана</Table.Th>
                 <Table.Th>Статус</Table.Th>
@@ -139,55 +196,80 @@ export function ShortUrls() {
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {links.map((link) => {
-                const isActive = !link.visitsSummary
-                return (
-                  <Table.Tr key={link.shortCode} style={{ cursor: 'pointer' }}>
-                    <Table.Td>
-                      <Group gap={4} wrap="nowrap">
-                        <Text
-                          size="sm"
-                          fw={500}
-                          style={{ cursor: 'pointer', color: 'var(--mantine-color-teal-6)' }}
-                          onClick={() => navigate(`/links/${link.shortCode}`)}
-                        >
-                          {link.shortCode}
-                        </Text>
-                        <CopyButton value={link.shortUrl} />
-                        <ActionIcon variant="subtle" size="xs" component="a" href={link.shortUrl} target="_blank" aria-label="Открыть">
-                          <IconExternalLink size={12} />
+              {links.map((link) => (
+                <Table.Tr
+                  key={link.shortCode}
+                  style={{ opacity: link.isActive === false ? 0.55 : 1 }}
+                >
+                  <Table.Td>
+                    <Group gap={4} wrap="nowrap">
+                      <Text
+                        size="sm" fw={500}
+                        style={{ cursor: 'pointer', color: 'var(--mantine-color-teal-6)' }}
+                        onClick={() => navigate(`/links/${link.shortCode}`)}
+                      >
+                        {link.shortCode}
+                      </Text>
+                      <CopyButton value={link.shortUrl} />
+                      <ActionIcon variant="subtle" size="xs" component="a" href={link.shortUrl} target="_blank" aria-label="Открыть">
+                        <IconExternalLink size={12} />
+                      </ActionIcon>
+                    </Group>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" lineClamp={1} title={link.longUrl}>{link.title || link.longUrl}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap={4} wrap="wrap">
+                      {link.tags?.map((t) => (
+                        <Badge key={t} size="xs" variant="light" color={tagColor(t)}>{t}</Badge>
+                      ))}
+                    </Group>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {link.visitsSummary.total.toLocaleString('ru')}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" c="dimmed">{formatDate(link.dateCreated)}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge
+                      size="sm"
+                      variant="dot"
+                      color={link.isActive !== false ? 'teal' : 'gray'}
+                    >
+                      {link.isActive !== false ? 'Активна' : 'Неактивна'}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap={4} wrap="nowrap" justify="flex-end">
+                      <Tooltip label="Редактировать">
+                        <ActionIcon variant="subtle" size="sm" onClick={() => setEditing(link)} aria-label="Редактировать">
+                          <IconPencil size={14} />
                         </ActionIcon>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" lineClamp={1} title={link.longUrl}>{link.title || link.longUrl}</Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" style={{ fontVariantNumeric: 'tabular-nums' }}>{link.visitsSummary.total.toLocaleString('ru')}</Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">{formatDate(link.dateCreated)}</Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <StatusBadge status={isActive ? 'active' : 'inactive'} />
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap={4} wrap="nowrap" justify="flex-end">
-                        <Tooltip label="Редактировать">
-                          <ActionIcon variant="subtle" size="sm" onClick={() => setEditing(link)} aria-label="Редактировать">
-                            <IconPencil size={14} />
-                          </ActionIcon>
-                        </Tooltip>
-                        <Tooltip label="Удалить">
-                          <ActionIcon variant="subtle" size="sm" color="red" onClick={() => setDeleting(link)} aria-label="Удалить">
-                            <IconTrash size={14} />
-                          </ActionIcon>
-                        </Tooltip>
-                      </Group>
-                    </Table.Td>
-                  </Table.Tr>
-                )
-              })}
+                      </Tooltip>
+                      <Tooltip label={link.isActive !== false ? 'Деактивировать' : 'Активировать'}>
+                        <ActionIcon
+                          variant="subtle" size="sm"
+                          color={link.isActive !== false ? 'orange' : 'teal'}
+                          onClick={() => toggleMutation.mutate(link)}
+                          loading={toggleMutation.isPending}
+                          aria-label={link.isActive !== false ? 'Деактивировать' : 'Активировать'}
+                        >
+                          {link.isActive !== false ? <IconBan size={14} /> : <IconCircleCheck size={14} />}
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Удалить">
+                        <ActionIcon variant="subtle" size="sm" color="red" onClick={() => setDeleting(link)} aria-label="Удалить">
+                          <IconTrash size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
