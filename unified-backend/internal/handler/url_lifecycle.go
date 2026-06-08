@@ -13,38 +13,20 @@ import (
 
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
-	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 )
-
-// URLLifecycleOwnershipRepo — расширенный интерфейс для lifecycle операций.
-type URLLifecycleOwnershipRepo interface {
-	URLOwnershipRepo
-	Deactivate(ctx context.Context, shortCode, domain, actorSub string) error
-	Activate(ctx context.Context, shortCode, domain string) error
-	SoftDelete(ctx context.Context, shortCode, domain, actorSub string) error
-	GetOwnership(ctx context.Context, shortCode, domain string) (*postgres.URLOwnershipRecord, error)
-}
-
-// Compile-time check.
-var _ URLLifecycleOwnershipRepo = (*postgres.URLOwnershipRepository)(nil)
 
 // URLLifecycleHandler обрабатывает деактивацию, активацию и permanent delete.
 type URLLifecycleHandler struct {
 	shlinkSvc *service.ShlinkService
-	ownerRepo URLLifecycleOwnershipRepo
-	auditRepo auditRecorder
-}
-
-// auditRecorder — минимальный интерфейс для записи аудита.
-type auditRecorder interface {
-	Record(ctx context.Context, entry *domain.AuditEntry)
+	ownerRepo OwnershipRepo
+	auditRepo AuditRepo
 }
 
 func NewURLLifecycleHandler(
 	svc *service.ShlinkService,
-	ownerRepo URLLifecycleOwnershipRepo,
-	auditRepo auditRecorder,
+	ownerRepo OwnershipRepo,
+	auditRepo AuditRepo,
 ) *URLLifecycleHandler {
 	return &URLLifecycleHandler{
 		shlinkSvc: svc,
@@ -75,7 +57,6 @@ func (h *URLLifecycleHandler) DeactivateURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Деактивировать в Shlink (enabled=false)
 	patchBody, _ := json.Marshal(map[string]any{"enabled": false})
 	if _, err := h.shlinkSvc.Client().UpdateShortURL(
 		r.Context(), user.ShlinkAPIKey, shortCode, bytes.NewReader(patchBody),
@@ -118,7 +99,6 @@ func (h *URLLifecycleHandler) ActivateURL(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Активировать в Shlink (enabled=true)
 	patchBody, _ := json.Marshal(map[string]any{"enabled": true})
 	if _, err := h.shlinkSvc.Client().UpdateShortURL(
 		r.Context(), user.ShlinkAPIKey, shortCode, bytes.NewReader(patchBody),
@@ -140,7 +120,6 @@ func (h *URLLifecycleHandler) ActivateURL(w http.ResponseWriter, r *http.Request
 }
 
 // DELETE /api/shlink/short-urls/{shortCode}/permanent
-// Permanent delete — только для canDeleteOwnLinksPermanently / canDeleteAllLinksPermanently.
 func (h *URLLifecycleHandler) DeleteURLPermanently(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -162,7 +141,6 @@ func (h *URLLifecycleHandler) DeleteURLPermanently(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Удалить в Shlink
 	if err := h.shlinkSvc.Client().DeleteShortURL(r.Context(), user.ShlinkAPIKey, shortCode); err != nil {
 		slog.Error("lifecycle: shlink permanent delete failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
 		h.recordAudit(r, user, domain.ActionShortURLDeletedPermanently, "error",
@@ -171,7 +149,6 @@ func (h *URLLifecycleHandler) DeleteURLPermanently(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Soft-delete ownership (запись остаётся для аудита)
 	if err := h.ownerRepo.SoftDelete(r.Context(), shortCode, "", user.Sub); err != nil {
 		slog.Error("lifecycle: soft delete ownership failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
 	}
@@ -181,12 +158,7 @@ func (h *URLLifecycleHandler) DeleteURLPermanently(w http.ResponseWriter, r *htt
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// checkDeactivatePermission проверяет право на деактивацию.
-func (h *URLLifecycleHandler) checkDeactivatePermission(
-	ctx context.Context,
-	user *domain.User,
-	shortCode string,
-) error {
+func (h *URLLifecycleHandler) checkDeactivatePermission(ctx context.Context, user *domain.User, shortCode string) error {
 	p := h.shlinkSvc.Perms(user)
 	if p.CanDeactivateAllLinks {
 		return nil
@@ -197,12 +169,7 @@ func (h *URLLifecycleHandler) checkDeactivatePermission(
 	return h.checkOwnership(ctx, user.Sub, shortCode)
 }
 
-// checkReactivatePermission проверяет право на реактивацию.
-func (h *URLLifecycleHandler) checkReactivatePermission(
-	ctx context.Context,
-	user *domain.User,
-	shortCode string,
-) error {
+func (h *URLLifecycleHandler) checkReactivatePermission(ctx context.Context, user *domain.User, shortCode string) error {
 	p := h.shlinkSvc.Perms(user)
 	if p.CanReactivateAllLinks {
 		return nil
@@ -213,12 +180,7 @@ func (h *URLLifecycleHandler) checkReactivatePermission(
 	return h.checkOwnership(ctx, user.Sub, shortCode)
 }
 
-// checkPermanentDeletePermission проверяет право на permanent delete.
-func (h *URLLifecycleHandler) checkPermanentDeletePermission(
-	ctx context.Context,
-	user *domain.User,
-	shortCode string,
-) error {
+func (h *URLLifecycleHandler) checkPermanentDeletePermission(ctx context.Context, user *domain.User, shortCode string) error {
 	p := h.shlinkSvc.Perms(user)
 	if p.CanDeleteAllLinksPermanently {
 		return nil

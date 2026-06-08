@@ -16,35 +16,20 @@ import (
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
-	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 )
 
-// URLOwnershipRepo — интерфейс для ownership репозитория.
-type URLOwnershipRepo interface {
-	Save(ctx context.Context, shortCode, ownerSub, domain string) error
-	IsOwner(ctx context.Context, shortCode, domain, sub string) (bool, error)
-	HardDelete(ctx context.Context, shortCode, domain string) error
-	SetActive(ctx context.Context, shortCode, domain string, active bool) error
-	GetShortCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error)
-	GetActiveCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error)
-	GetStatusCodeSet(ctx context.Context, ownerSub string) (map[string]bool, error)
-}
-
-// Compile-time check: postgres.URLOwnershipRepository реализует URLOwnershipRepo.
-var _ URLOwnershipRepo = (*postgres.URLOwnershipRepository)(nil)
-
 type ShlinkProxyHandler struct {
 	shlinkSvc *service.ShlinkService
-	auditRepo *postgres.AuditRepository
-	ownerRepo URLOwnershipRepo
+	auditRepo AuditRepo
+	ownerRepo OwnershipRepo
 	cfg       *config.Config
 }
 
 func NewShlinkProxyHandler(
 	svc *service.ShlinkService,
-	auditRepo *postgres.AuditRepository,
-	ownerRepo URLOwnershipRepo,
+	auditRepo AuditRepo,
+	ownerRepo OwnershipRepo,
 	cfg *config.Config,
 ) *ShlinkProxyHandler {
 	return &ShlinkProxyHandler{
@@ -88,7 +73,6 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		resp.ShortURLs.Data = h.shlinkSvc.FilterShortURLsByUser(resp.ShortURLs.Data, user, ownedCodes)
 	}
 
-	// Применяем фильтр по статусу из url_ownership.
 	if statusFilter != "all" {
 		statusMap, _ := h.ownerRepo.GetStatusCodeSet(r.Context(), user.Sub)
 		wantActive := statusFilter == "active"
@@ -96,7 +80,7 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		for _, u := range resp.ShortURLs.Data {
 			active, known := statusMap[u.ShortCode]
 			if !known {
-				active = true // неизвестные ссылки считаем активными
+				active = true
 			}
 			if active == wantActive {
 				filtered = append(filtered, u)
@@ -215,9 +199,6 @@ func (h *ShlinkProxyHandler) UpdateShortURL(w http.ResponseWriter, r *http.Reque
 }
 
 // DELETE /api/shlink/short-urls/{shortCode}
-// Теперь — legacy endpoint, перенаправляет на permanent delete.
-// Используется только если фронт ещё не перешёл на /permanent.
-// Требует can_delete_*_links_permanently.
 func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -232,10 +213,8 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 	}
 
 	p := h.shlinkSvc.Perms(user)
-	ownedAll := p.CanDeleteAllLinksPermanently
-	ownedOwn := p.CanDeleteOwnLinksPermanently
-	if !ownedAll {
-		if !ownedOwn {
+	if !p.CanDeleteAllLinksPermanently {
+		if !p.CanDeleteOwnLinksPermanently {
 			h.recordAudit(r, user, "delete_short_url", "denied",
 				map[string]any{"shortCode": shortCode, "reason": "no permanent delete permission"})
 			writeJSON(w, map[string]string{"error": "forbidden: use /deactivate for soft delete"}, http.StatusForbidden)
@@ -371,7 +350,6 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// friendlyShlinkError переводит сырую ошибку Shlink API в читаемое сообщение.
 func friendlyShlinkError(err error) string {
 	if err == nil {
 		return ""
@@ -404,7 +382,6 @@ func friendlyShlinkError(err error) string {
 	}
 }
 
-// recordAudit — не блокирует обработчик.
 func (h *ShlinkProxyHandler) recordAudit(
 	r *http.Request,
 	user *domain.User,

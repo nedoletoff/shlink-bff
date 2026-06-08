@@ -16,6 +16,7 @@ import (
 	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
 	"unified-backend/internal/middleware"
+	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
 )
@@ -41,6 +42,12 @@ func (s *stubOwnerRepo) GetActiveCodeSet(_ context.Context, _ string) (map[strin
 }
 func (s *stubOwnerRepo) GetStatusCodeSet(_ context.Context, _ string) (map[string]bool, error) {
 	return map[string]bool{}, nil
+}
+func (s *stubOwnerRepo) Deactivate(_ context.Context, _, _, _ string) error { return nil }
+func (s *stubOwnerRepo) Activate(_ context.Context, _, _ string) error      { return nil }
+func (s *stubOwnerRepo) SoftDelete(_ context.Context, _, _, _ string) error { return nil }
+func (s *stubOwnerRepo) GetOwnership(_ context.Context, _, _ string) (*postgres.URLOwnershipRecord, error) {
+	return nil, nil
 }
 
 type stubShlinkClient struct {
