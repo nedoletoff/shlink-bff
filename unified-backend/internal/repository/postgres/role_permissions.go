@@ -136,3 +136,12 @@ ON CONFLICT (role) DO UPDATE SET
 	}
 	return nil
 }
+
+// Delete удаляет роль из role_permissions. Нет строки — не ошибка.
+func (r *RolePermissionsRepository) Delete(ctx context.Context, role string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM role_permissions WHERE role = $1`, role)
+	if err != nil {
+		return fmt.Errorf("role_permissions Delete: %w", err)
+	}
+	return nil
+}
