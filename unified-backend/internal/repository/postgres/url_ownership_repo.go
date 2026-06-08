@@ -12,6 +12,7 @@ type URLOwnershipRecord struct {
 	ShortCode string
 	Domain    string
 	OwnerSub  string
+	IsActive  bool
 	CreatedAt time.Time
 	DeletedAt *time.Time
 	DeletedBy *string
@@ -27,13 +28,17 @@ func NewURLOwnershipRepository(pool *pgxpool.Pool) *URLOwnershipRepository {
 	return &URLOwnershipRepository{pool: pool}
 }
 
-// Save сохраняет новую запись ownership.
-// При конфликте (повторное создание с тем же short_code+domain) — игнорируется (DO NOTHING).
+// Save сохраняет новую запись ownership (is_active=true).
+// При конфликте — обновляет is_active=true и сбрасывает deleted_at (повторное создание).
 func (r *URLOwnershipRepository) Save(ctx context.Context, shortCode, ownerSub, domain string) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO url_ownership (short_code, domain, owner_sub)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (short_code, domain) DO NOTHING`,
+		`INSERT INTO url_ownership (short_code, domain, owner_sub, is_active)
+		 VALUES ($1, $2, $3, TRUE)
+		 ON CONFLICT (short_code, domain)
+		 DO UPDATE SET owner_sub = EXCLUDED.owner_sub,
+		               is_active = TRUE,
+		               deleted_at = NULL,
+		               deleted_by = NULL`,
 		shortCode, domain, ownerSub,
 	)
 	return err
@@ -69,14 +74,24 @@ func (r *URLOwnershipRepository) IsOwner(ctx context.Context, shortCode, domain,
 	return count > 0, nil
 }
 
-// SoftDelete помечает ссылку как удалённую (заполняет deleted_at и deleted_by).
-func (r *URLOwnershipRepository) SoftDelete(ctx context.Context, shortCode, domain, deletedBy string) error {
+// HardDelete удаляет запись из url_ownership полностью (физическое удаление).
+// Вызывается вместе с DELETE в Shlink — освобождает slug для повторного использования.
+func (r *URLOwnershipRepository) HardDelete(ctx context.Context, shortCode, domain string) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM url_ownership WHERE short_code = $1 AND domain = $2`,
+		shortCode, domain,
+	)
+	return err
+}
+
+// SetActive устанавливает is_active для ссылки (деактивация/активация).
+func (r *URLOwnershipRepository) SetActive(ctx context.Context, shortCode, domain string, active bool) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE url_ownership
-		    SET deleted_at = now(), deleted_by = $3
+		    SET is_active = $3
 		  WHERE short_code = $1 AND domain = $2
 		    AND deleted_at IS NULL`,
-		shortCode, domain, deletedBy,
+		shortCode, domain, active,
 	)
 	return err
 }
@@ -84,7 +99,7 @@ func (r *URLOwnershipRepository) SoftDelete(ctx context.Context, shortCode, doma
 // GetByOwner возвращает все активные (не удалённые) ссылки пользователя.
 func (r *URLOwnershipRepository) GetByOwner(ctx context.Context, ownerSub string) ([]URLOwnershipRecord, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT short_code, domain, owner_sub, created_at, deleted_at, deleted_by
+		`SELECT short_code, domain, owner_sub, is_active, created_at, deleted_at, deleted_by
 		   FROM url_ownership
 		  WHERE owner_sub = $1 AND deleted_at IS NULL
 		  ORDER BY created_at DESC`,
@@ -102,6 +117,7 @@ func (r *URLOwnershipRepository) GetByOwner(ctx context.Context, ownerSub string
 			&rec.ShortCode,
 			&rec.Domain,
 			&rec.OwnerSub,
+			&rec.IsActive,
 			&rec.CreatedAt,
 			&rec.DeletedAt,
 			&rec.DeletedBy,
@@ -113,11 +129,36 @@ func (r *URLOwnershipRepository) GetByOwner(ctx context.Context, ownerSub string
 	return records, rows.Err()
 }
 
-// GetShortCodeSet возвращает set активных short_code владельца.
+// GetShortCodeSet возвращает set всех (активных и деактивированных) short_code владельца,
+// которые не удалены. Используется для фильтрации списка ссылок.
 func (r *URLOwnershipRepository) GetShortCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT short_code FROM url_ownership
 		  WHERE owner_sub = $1 AND deleted_at IS NULL`,
+		ownerSub,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	set := make(map[string]struct{})
+	for rows.Next() {
+		var sc string
+		if err := rows.Scan(&sc); err != nil {
+			return nil, err
+		}
+		set[sc] = struct{}{}
+	}
+	return set, rows.Err()
+}
+
+// GetActiveCodeSet возвращает set только активных (is_active=true, не удалённых) short_code владельца.
+// Используется для подсчёта «живых» ссылок на дашборде.
+func (r *URLOwnershipRepository) GetActiveCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT short_code FROM url_ownership
+		  WHERE owner_sub = $1 AND deleted_at IS NULL AND is_active = TRUE`,
 		ownerSub,
 	)
 	if err != nil {

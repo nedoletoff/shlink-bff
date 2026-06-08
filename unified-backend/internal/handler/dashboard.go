@@ -17,10 +17,15 @@ import (
 type DashboardHandler struct {
 	shlinkSvc *service.ShlinkService
 	userRepo  *postgres.UserRepository
+	ownerRepo URLOwnershipRepo
 }
 
-func NewDashboardHandler(shlinkSvc *service.ShlinkService, userRepo *postgres.UserRepository) *DashboardHandler {
-	return &DashboardHandler{shlinkSvc: shlinkSvc, userRepo: userRepo}
+func NewDashboardHandler(
+	shlinkSvc *service.ShlinkService,
+	userRepo *postgres.UserRepository,
+	ownerRepo URLOwnershipRepo,
+) *DashboardHandler {
+	return &DashboardHandler{shlinkSvc: shlinkSvc, userRepo: userRepo, ownerRepo: ownerRepo}
 }
 
 // GET /api/dashboard
@@ -63,34 +68,65 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		slog.Warn("dashboard: get short urls failed", "sub", user.Sub, "err", err)
 	} else if urlsResp != nil {
-		// Ownership-based filtering: admins see all, users see only owned.
-		// For dashboard we use permission-based shortcut: CanViewAllLinks skips ownership lookup.
 		if p.CanViewAllLinks {
 			urls = urlsResp.ShortURLs.Data
-		} else if p.CanViewOwnLinks {
-			// Dashboard doesn't have ownerRepo injected — return empty slice;
-			// full ownership filtering happens in shlink_proxy ListShortURLs.
-			urls = []shlink.ShortURL{}
+		} else if p.CanViewOwnLinks && h.ownerRepo != nil {
+			// Фильтруем по ownedCodes из BFF БД (включая деактивированные — они тоже принадлежат пользователю).
+			ownedCodes, oErr := h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
+			if oErr != nil {
+				slog.Warn("dashboard: get owned codes failed", "sub", user.Sub, "err", oErr)
+			} else {
+				for _, u := range urlsResp.ShortURLs.Data {
+					if _, owned := ownedCodes[u.ShortCode]; owned {
+						urls = append(urls, u)
+					}
+				}
+			}
 		}
 	}
 	overview := buildOverview(urls)
 
-	// ── Visits (clicksPerDay) ─────────────────────────────────────────────────
+	// ── Visits ────────────────────────────────────────────────────────────────
 	endDate := time.Now().Format(time.RFC3339)
 	startDate := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
 	var visitsResp *shlink.VisitsResponse
 	if p.CanViewAllStats || p.CanViewOwnStats {
-		v, verr := h.shlinkSvc.Client().GetNonOrphanVisits(r.Context(), user.ShlinkAPIKey, startDate, endDate, 1000)
-		if verr != nil {
-			slog.Warn("dashboard: get visits failed", "sub", user.Sub, "err", verr)
-		} else {
-			visitsResp = v
+		if p.CanViewAllStats {
+			// Админ видит все визиты.
+			v, verr := h.shlinkSvc.Client().GetNonOrphanVisits(r.Context(), user.ShlinkAPIKey, startDate, endDate, 1000)
+			if verr != nil {
+				slog.Warn("dashboard: get visits failed", "sub", user.Sub, "err", verr)
+			} else {
+				visitsResp = v
+			}
+		} else if h.ownerRepo != nil {
+			// Обычный пользователь: собираем визиты только по своим ссылкам.
+			ownedCodes, oErr := h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
+			if oErr == nil && len(ownedCodes) > 0 {
+				var allVisits []shlink.Visit
+				for sc := range ownedCodes {
+					v, verr := h.shlinkSvc.Client().GetShortURLVisits(
+						r.Context(), user.ShlinkAPIKey, sc, startDate, endDate, 1000,
+					)
+					if verr != nil {
+						slog.Warn("dashboard: get url visits failed", "sub", user.Sub, "shortCode", sc, "err", verr)
+						continue
+					}
+					if v != nil {
+						allVisits = append(allVisits, v.Visits.Data...)
+					}
+				}
+				if len(allVisits) > 0 {
+					visitsResp = &shlink.VisitsResponse{}
+					visitsResp.Visits.Data = allVisits
+				}
+			}
 		}
 	}
 	visitsBlock := buildVisits(visitsResp, days)
 	devicesBlock := buildDevices(visitsResp)
 
-	// ── Admin: users list ────────────────────────────────────────────────────
+	// ── Admin: users list ─────────────────────────────────────────────────────
 	var usersBlock any
 	if p.CanManageUsers {
 		users, uerr := h.userRepo.ListAll(r.Context())
@@ -118,7 +154,7 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// ── Admin: tag stats ─────────────────────────────────────────────────────
+	// ── Admin: tag stats ──────────────────────────────────────────────────────
 	var tagsBlock any
 	if p.CanManageAllTags {
 		tagsResp, terr := h.shlinkSvc.Client().GetTags(r.Context(), user.ShlinkAPIKey)
@@ -155,9 +191,6 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 	}, http.StatusOK)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared local types (ClickPoint, namedCount, topCountSlice are defined in
-// url_detail.go — same package, no redeclaration needed).
 // ─────────────────────────────────────────────────────────────────────────────
 
 type topLinkItem struct {
@@ -233,7 +266,6 @@ func buildVisits(visits *shlink.VisitsResponse, days int) map[string]any {
 			}
 		}
 	}
-	// ClickPoint is declared in url_detail.go (same package)
 	points := make([]ClickPoint, 0, days)
 	for _, d := range ordered {
 		points = append(points, ClickPoint{Date: d, Clicks: buckets[d]})
@@ -261,7 +293,6 @@ func buildDevices(visits *shlink.VisitsResponse) map[string]any {
 			default:
 				desktop++
 			}
-			// urlDetailBrowser / urlDetailOS are defined in url_detail.go (same package)
 			browsersMap[urlDetailBrowser(ua)]++
 			osMap[urlDetailOS(ua)]++
 
@@ -289,7 +320,6 @@ func buildDevices(visits *shlink.VisitsResponse) map[string]any {
 		}
 	}
 
-	// topCountSlice is declared in url_detail.go (same package)
 	return map[string]any{
 		"devices": map[string]int{
 			"desktop": desktop,

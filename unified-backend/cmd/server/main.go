@@ -45,7 +45,7 @@ func main() {
 	ownerRepo    := postgres.NewURLOwnershipRepository(db)
 	settingsRepo := postgres.NewServerSettingsRepository(db)
 
-	// ── DB config overrides (если config_source=db) ──────────────────────────
+	// ── DB config overrides ──────────────────────────────────────────────────
 	if src, _ := settingsRepo.Get(ctx, "config_source"); src == "db" {
 		dbSettings, err := settingsRepo.GetAll(ctx)
 		if err != nil {
@@ -83,7 +83,7 @@ func main() {
 
 	// ── Handlers ─────────────────────────────────────────────────────────────
 	meH        := handler.NewMeHandler(cfg, permsCache)
-	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo)
+	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo, ownerRepo)
 	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
 	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
 	rolesH     := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
@@ -122,6 +122,7 @@ func main() {
 		r.Post("/api/shlink/short-urls", proxyH.CreateShortURL)
 		r.Patch("/api/shlink/short-urls/{shortCode}", proxyH.UpdateShortURL)
 		r.Delete("/api/shlink/short-urls/{shortCode}", proxyH.DeleteShortURL)
+		r.Post("/api/shlink/short-urls/{shortCode}/toggle", proxyH.ToggleShortURL)
 
 		r.Get("/api/shlink/tags", proxyH.ListTags)
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
@@ -130,7 +131,7 @@ func main() {
 		// URL detail
 		r.Get("/api/urls/{shortCode}/detail", urlDetailH.GetURLDetail)
 
-		// Settings (authenticated, any role)
+		// Settings
 		r.Get("/api/settings", settingsH.GetSettings)
 		r.Patch("/api/settings", settingsH.PatchSettings)
 
