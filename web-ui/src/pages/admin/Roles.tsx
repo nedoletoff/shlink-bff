@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Stack, Title, Table, Text, Badge,
   Group, Center, Loader, Divider,
-  Card, Alert, Button, Modal, Checkbox,
+  Card, Alert, Button, Modal,
   SimpleGrid, Switch, Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
