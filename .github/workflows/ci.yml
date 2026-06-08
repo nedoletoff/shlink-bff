@@ -77,17 +77,10 @@ jobs:
           go-version: '1.24'
           cache-dependency-path: unified-backend/go.sum
 
-      - name: Download dependencies
-        working-directory: unified-backend
-        run: go mod download
-
-      - name: Install golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin v2.12.2
-
       - name: Run golangci-lint
-        working-directory: unified-backend
-        run: golangci-lint run ./...
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: unified-backend
 
   web-ui:
     name: Build & Lint (Web UI)
