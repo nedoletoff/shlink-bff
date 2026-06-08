@@ -15,9 +15,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const can = (permission: keyof MeResponse['permissions']) =>
     me?.permissions?.[permission] ?? false
 
-  const isAdmin = () =>
-    me?.role === (me as unknown as Record<string, string>)?.adminRole ||
-    me?.permissions?.canManageUsers === true
+  // Баг #1: прежняя логика сравнивала role c adminRole которого нет в MeResponse -
+  // используем canManageUsers как единственный надёжный источник
+  const isAdmin = () => me?.permissions?.canManageUsers === true
 
   if (isLoading) {
     return (

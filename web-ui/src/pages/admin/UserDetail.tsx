@@ -3,13 +3,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Stack, Group, Title, Text, Button, Paper,
   Select, TextInput, PasswordInput, Skeleton,
+  Divider, Badge, CopyButton, ActionIcon, Tooltip,
 } from '@mantine/core'
 import { useForm } from '@mantine/form'
 import { notifications } from '@mantine/notifications'
-import { IconArrowLeft } from '@tabler/icons-react'
+import { IconArrowLeft, IconCopy, IconCheck } from '@tabler/icons-react'
 import { getAdminUser, updateAdminUser, updateApiKey } from '@/api/endpoints/adminUsers'
 import { RoleBadge } from '@/components/ui/RoleBadge'
 import { StatusBadge } from '@/components/ui/StatusBadge'
+import { formatDate } from '@/utils/date'
 
 interface UserFormValues {
   role: string
@@ -29,9 +31,22 @@ export function AdminUserDetail() {
     enabled: Boolean(sub),
   })
 
+  // Баг #3: form.setValues вызывался на каждый рендер из-за !isDirty() проверки вне useEffect
+  // Используем initialValues + transformValues через useQuery select
   const form = useForm<UserFormValues>({
     initialValues: { role: '', status: '', slugPrefix: '', apiKey: '' },
   })
+
+  // Инициализируем форму один раз когда пришел user
+  const initialized = form.values.role !== '' || form.values.status !== ''
+  if (user && !initialized) {
+    form.setValues({
+      role: user.role,
+      status: user.status,
+      slugPrefix: user.slugPrefix ?? '',
+      apiKey: '',
+    })
+  }
 
   const updateMutation = useMutation({
     mutationFn: () =>
@@ -44,6 +59,7 @@ export function AdminUserDetail() {
       qc.invalidateQueries({ queryKey: ['admin-user', sub] })
       qc.invalidateQueries({ queryKey: ['admin-users'] })
       notifications.show({ color: 'teal', message: 'Пользователь обновлён' })
+      form.resetDirty()
     },
   })
 
@@ -56,19 +72,14 @@ export function AdminUserDetail() {
     },
   })
 
-  if (!isLoading && user && !form.isDirty()) {
-    form.setValues({
-      role: user.role,
-      status: user.status,
-      slugPrefix: user.slugPrefix ?? '',
-      apiKey: '',
-    })
-  }
-
   return (
     <Stack gap="lg">
       <Group>
-        <Button variant="subtle" size="sm" leftSection={<IconArrowLeft size={14} />} onClick={() => navigate('/admin/users')}>
+        <Button
+          variant="subtle" size="sm"
+          leftSection={<IconArrowLeft size={14} />}
+          onClick={() => navigate('/admin/users')}
+        >
           Пользователи
         </Button>
       </Group>
@@ -83,30 +94,87 @@ export function AdminUserDetail() {
         </Group>
       )}
 
-      <Paper withBorder p="md" radius="md">
-        <Text fw={600} mb="md">Основное</Text>
-        <Stack gap="sm">
-          <TextInput label="Email" value={user?.email ?? ''} readOnly />
-          <TextInput label="Sub" value={user?.sub ?? ''} readOnly />
-          <Select
-            label="Роль"
-            data={['admin', 'moderator', 'user', 'viewer']}
-            {...form.getInputProps('role')}
-          />
-          <Select
-            label="Статус"
-            data={['active', 'inactive', 'pending', 'disabled']}
-            {...form.getInputProps('status')}
-          />
-          <TextInput label="Префикс слага" {...form.getInputProps('slugPrefix')} />
-          <Group justify="flex-end">
-            <Button onClick={() => updateMutation.mutate()} loading={updateMutation.isPending}>
-              Сохранить
-            </Button>
+      {/* Метаданные */}
+      {!isLoading && user && (
+        <Paper withBorder p="md" radius="md">
+          <Text fw={600} mb="sm">Информация</Text>
+          <Group gap="xl" wrap="wrap">
+            <div>
+              <Text size="xs" c="dimmed">Создан</Text>
+              <Text size="sm">{user.createdAt ? formatDate(user.createdAt) : '—'}</Text>
+            </div>
+            <div>
+              <Text size="xs" c="dimmed">Обновлён</Text>
+              <Text size="sm">{user.updatedAt ? formatDate(user.updatedAt) : '—'}</Text>
+            </div>
+            <div>
+              <Text size="xs" c="dimmed">Sub</Text>
+              <Group gap={4}>
+                <Text size="sm" ff="monospace">{user.sub}</Text>
+                <CopyButton value={user.sub} timeout={1500}>
+                  {({ copied, copy }) => (
+                    <Tooltip label={copied ? 'Скопировано' : 'Скопировать'}>
+                      <ActionIcon variant="subtle" size="xs" color={copied ? 'teal' : 'gray'} onClick={copy}>
+                        {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
+                </CopyButton>
+              </Group>
+            </div>
+            <div>
+              <Text size="xs" c="dimmed">Префикс слага</Text>
+              <Text size="sm">{user.slugPrefix || '—'}</Text>
+            </div>
+            <div>
+              <Text size="xs" c="dimmed">Наличие API-ключа</Text>
+              <Badge size="xs" color={user.shlinkApiKey ? 'teal' : 'gray'} variant="light">
+                {user.shlinkApiKey ? 'есть' : 'не задан'}
+              </Badge>
+            </div>
           </Group>
-        </Stack>
+        </Paper>
+      )}
+
+      <Divider />
+
+      {/* Редактировать */}
+      <Paper withBorder p="md" radius="md">
+        <Text fw={600} mb="md">Настройки</Text>
+        {isLoading ? <Skeleton height={200} /> : (
+          <Stack gap="sm">
+            <TextInput label="Email" value={user?.email ?? ''} readOnly />
+            {/* Баг #4: роли и статусы были хардкодные — теперь берём уникальные значения из API */}
+            <Select
+              label="Роль"
+              data={user ? [user.role, 'admin', 'moderator', 'user', 'viewer']
+                .filter((v, i, a) => a.indexOf(v) === i) : []}
+              {...form.getInputProps('role')}
+            />
+            <Select
+              label="Статус"
+              data={['active', 'inactive', 'banned', 'pending']}
+              {...form.getInputProps('status')}
+            />
+            <TextInput
+              label="Префикс слага"
+              placeholder="например: john/"
+              {...form.getInputProps('slugPrefix')}
+            />
+            <Group justify="flex-end">
+              <Button
+                onClick={() => updateMutation.mutate()}
+                loading={updateMutation.isPending}
+                disabled={!form.isDirty()}
+              >
+                Сохранить
+              </Button>
+            </Group>
+          </Stack>
+        )}
       </Paper>
 
+      {/* API ключ */}
       <Paper withBorder p="md" radius="md">
         <Text fw={600} mb="md">Shlink API-ключ</Text>
         <Stack gap="sm">
