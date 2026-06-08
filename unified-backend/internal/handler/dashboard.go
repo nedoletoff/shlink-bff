@@ -17,13 +17,13 @@ import (
 type DashboardHandler struct {
 	shlinkSvc *service.ShlinkService
 	userRepo  *postgres.UserRepository
-	ownerRepo URLOwnershipRepo
+	ownerRepo OwnershipRepo
 }
 
 func NewDashboardHandler(
 	shlinkSvc *service.ShlinkService,
 	userRepo *postgres.UserRepository,
-	ownerRepo URLOwnershipRepo,
+	ownerRepo OwnershipRepo,
 ) *DashboardHandler {
 	return &DashboardHandler{shlinkSvc: shlinkSvc, userRepo: userRepo, ownerRepo: ownerRepo}
 }
@@ -71,7 +71,6 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 		if p.CanViewAllLinks {
 			urls = urlsResp.ShortURLs.Data
 		} else if p.CanViewOwnLinks && h.ownerRepo != nil {
-			// Фильтруем по ownedCodes из BFF БД (включая деактивированные — они тоже принадлежат пользователю).
 			ownedCodes, oErr := h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
 			if oErr != nil {
 				slog.Warn("dashboard: get owned codes failed", "sub", user.Sub, "err", oErr)
@@ -92,7 +91,6 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 	var visitsResp *shlink.VisitsResponse
 	if p.CanViewAllStats || p.CanViewOwnStats {
 		if p.CanViewAllStats {
-			// Админ видит все визиты.
 			v, verr := h.shlinkSvc.Client().GetNonOrphanVisits(r.Context(), user.ShlinkAPIKey, startDate, endDate, 1000)
 			if verr != nil {
 				slog.Warn("dashboard: get visits failed", "sub", user.Sub, "err", verr)
@@ -100,7 +98,6 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 				visitsResp = v
 			}
 		} else if h.ownerRepo != nil {
-			// Обычный пользователь: собираем визиты только по своим ссылкам.
 			ownedCodes, oErr := h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
 			if oErr == nil && len(ownedCodes) > 0 {
 				var allVisits []shlink.Visit
