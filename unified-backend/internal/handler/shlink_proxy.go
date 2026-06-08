@@ -76,12 +76,17 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var ownedCodes map[string]struct{}
 	if !p.CanViewAllLinks {
-		ownedCodes, _ = h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
+		ownedCodes, _ := h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
+		resp.ShortURLs.Data = h.shlinkSvc.FilterShortURLsByUser(resp.ShortURLs.Data, user, ownedCodes)
+		// Исправляем пагинацию: Shlink вернул глобальные метрики, BFF отдаёт
+		// только ссылки этого пользователя — всё за один запрос.
+		n := len(resp.ShortURLs.Data)
+		resp.ShortURLs.Pagination.TotalItems = n
+		resp.ShortURLs.Pagination.ItemsInCurrentPage = n
+		resp.ShortURLs.Pagination.PagesCount = 1
+		resp.ShortURLs.Pagination.CurrentPage = 1
 	}
-
-	resp.ShortURLs.Data = h.shlinkSvc.FilterShortURLsByUser(resp.ShortURLs.Data, user, ownedCodes)
 
 	h.recordAudit(r, user, "list_short_urls", "success", nil)
 	writeJSON(w, resp, http.StatusOK)
@@ -185,9 +190,6 @@ func (h *ShlinkProxyHandler) UpdateShortURL(w http.ResponseWriter, r *http.Reque
 }
 
 // DELETE /api/shlink/short-urls/{shortCode}
-// Hard delete: удаляет ссылку в Shlink + запись в url_ownership.
-// Освобождает slug для повторного использования.
-// История переходов также удаляется (это ожидаемое поведение hard delete).
 func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -208,7 +210,6 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 1. Удалить в Shlink (hard delete — освобождает slug и историю).
 	if err := h.shlinkSvc.Client().DeleteShortURL(r.Context(), user.ShlinkAPIKey, shortCode); err != nil {
 		slog.Error("proxy: shlink delete failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
 		h.recordAudit(r, user, "delete_short_url", "error", map[string]any{"shortCode": shortCode, "err": err.Error()})
@@ -216,9 +217,7 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 2. Удалить запись ownership из BFF БД.
 	if err := h.ownerRepo.HardDelete(r.Context(), shortCode, ""); err != nil {
-		// Не фатально: ссылка уже удалена в Shlink.
 		slog.Error("proxy: hard delete ownership failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
 	}
 
@@ -227,9 +226,6 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 }
 
 // POST /api/shlink/short-urls/{shortCode}/toggle
-// Деактивирует (enabled=false) или активирует (enabled=true) ссылку.
-// Тело запроса: {"enabled": true|false}
-// История переходов сохраняется, slug остаётся занятым.
 func (h *ShlinkProxyHandler) ToggleShortURL(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -258,7 +254,6 @@ func (h *ShlinkProxyHandler) ToggleShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// PATCH в Shlink: enabled=true/false.
 	patchBody, _ := json.Marshal(map[string]any{"enabled": body.Enabled})
 	result, err := h.shlinkSvc.Client().UpdateShortURL(
 		r.Context(), user.ShlinkAPIKey, shortCode, bytes.NewReader(patchBody),
@@ -270,13 +265,11 @@ func (h *ShlinkProxyHandler) ToggleShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Обновить is_active в BFF БД.
 	if err := h.ownerRepo.SetActive(r.Context(), shortCode, "", body.Enabled); err != nil {
 		slog.Error("proxy: set active failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
 	}
 
-	action := "toggle_short_url"
-	h.recordAudit(r, user, action, "success", map[string]any{"shortCode": shortCode, "enabled": body.Enabled})
+	h.recordAudit(r, user, "toggle_short_url", "success", map[string]any{"shortCode": shortCode, "enabled": body.Enabled})
 	writeJSON(w, result, http.StatusOK)
 }
 
@@ -324,7 +317,7 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp, http.StatusOK)
 }
 
-// PUT /api/shlink/tags
+// PUT /api/shlink/tags/{tagId}
 func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -392,7 +385,6 @@ func friendlyShlinkError(err error) string {
 		return ""
 	}
 	msg := err.Error()
-	// Пробуем распарсить JSON из тела ответа Shlink.
 	start := strings.Index(msg, "{")
 	if start < 0 {
 		return msg
