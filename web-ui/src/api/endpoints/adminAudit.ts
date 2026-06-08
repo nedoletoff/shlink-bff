@@ -13,3 +13,6 @@ export interface AuditParams {
 
 export const getAuditLogs = (params: AuditParams) =>
   apiClient.get<AuditLogsResponse>('/api/admin/logs', { params }).then((r) => r.data)
+
+export const deleteAuditLogs = (ids: number[]) =>
+  apiClient.delete('/api/admin/logs', { data: { ids } }).then((r) => r.data)
