@@ -1,17 +1,12 @@
-import { createContext, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Center, Loader } from '@mantine/core'
 import { getMe } from '@/api/endpoints/auth'
 import type { MeResponse } from '@/types/api'
+import { AuthContext } from './AuthContextDef'
 
-export interface AuthContextValue {
-  me: MeResponse | null
-  isLoading: boolean
-  can: (permission: keyof MeResponse['permissions']) => boolean
-  isAdmin: () => boolean
-}
-
-export const AuthContext = createContext<AuthContextValue | null>(null)
+export { AuthContext } from './AuthContextDef'
+export type { AuthContextValue } from './AuthContextDef'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: me, isLoading } = useQuery({
