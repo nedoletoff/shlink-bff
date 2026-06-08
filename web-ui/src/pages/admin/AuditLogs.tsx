@@ -3,8 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Stack, Group, Title, TextInput, Select, Table,
   Text, Badge, Skeleton, Pagination, Paper,
-  Checkbox, ActionIcon, Tooltip, Collapse, Box,
-  Button, Code,
+  Checkbox, ActionIcon, Tooltip, Box,
+  Button, Code, Transition,
 } from '@mantine/core'
 import { DateInput } from '@mantine/dates'
 import { IconFileText, IconTrash, IconChevronDown, IconChevronRight } from '@tabler/icons-react'
@@ -231,23 +231,25 @@ export function AdminAuditLogs() {
                       {hasDetails && (
                         <Table.Tr key={`exp-${id}`}>
                           <Table.Td colSpan={8} p={0}>
-                            <Collapse in={isExpanded}>
-                              <Box p="md" bg="var(--mantine-color-gray-0)">
-                                {log.userAgent && (
-                                  <Text size="xs" c="dimmed" mb="xs">
-                                    <b>User-Agent:</b> {log.userAgent}
-                                  </Text>
-                                )}
-                                {log.details && (
-                                  <>
-                                    <Text size="xs" c="dimmed" mb={4}><b>Details:</b></Text>
-                                    <Code block style={{ fontSize: 11 }}>
-                                      {JSON.stringify(log.details, null, 2)}
-                                    </Code>
-                                  </>
-                                )}
-                              </Box>
-                            </Collapse>
+                            <Transition mounted={isExpanded} transition="fade" duration={150}>
+                              {(styles) => (
+                                <Box style={styles} p="md" bg="var(--mantine-color-gray-0)">
+                                  {log.userAgent && (
+                                    <Text size="xs" c="dimmed" mb="xs">
+                                      <b>User-Agent:</b> {log.userAgent}
+                                    </Text>
+                                  )}
+                                  {log.details && (
+                                    <>
+                                      <Text size="xs" c="dimmed" mb={4}><b>Details:</b></Text>
+                                      <Code block style={{ fontSize: 11 }}>
+                                        {JSON.stringify(log.details, null, 2)}
+                                      </Code>
+                                    </>
+                                  )}
+                                </Box>
+                              )}
+                            </Transition>
                           </Table.Td>
                         </Table.Tr>
                       )}

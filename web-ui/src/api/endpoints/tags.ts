@@ -1,11 +1,14 @@
-import { apiClient } from '../client'
+import { apiClient } from '@/api/client'
 import type { TagEntry } from '@/types/api'
 
 export const getTags = () =>
-  apiClient.get<{ tags: { data: TagEntry[] } }>('/api/shlink/tags').then((r) => r.data)
+  apiClient.get<TagEntry[]>('/tags').then((r) => r.data)
 
-export const renameTag = (tagId: string, newName: string) =>
-  apiClient.put(`/api/shlink/tags/${tagId}`, { name: newName })
+export const createTag = (tag: string) =>
+  apiClient.post<TagEntry>('/tags', { tag }).then((r) => r.data)
 
-export const deleteTag = (tagName: string) =>
-  apiClient.delete(`/api/shlink/tags/${encodeURIComponent(tagName)}`)
+export const deleteTag = (tag: string) =>
+  apiClient.delete(`/tags/${encodeURIComponent(tag)}`).then((r) => r.data)
+
+export const renameTag = (oldTag: string, newTag: string) =>
+  apiClient.patch(`/tags/${encodeURIComponent(oldTag)}`, { tag: newTag }).then((r) => r.data)

@@ -24,6 +24,7 @@ export interface ShortURL {
   maxVisits?: number | null
   validSince?: string | null
   validUntil?: string | null
+  isActive?: boolean
 }
 
 export interface ShortURLsResponse {

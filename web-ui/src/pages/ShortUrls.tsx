@@ -21,7 +21,6 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate } from '@/utils/date'
 
-// ─── helpers ─────────────────────────────────────────────────────────────────────
 const TAG_COLORS = ['teal', 'blue', 'grape', 'orange', 'cyan', 'pink', 'lime', 'indigo']
 function tagColor(tag: string) {
   let h = 0
@@ -29,7 +28,6 @@ function tagColor(tag: string) {
   return TAG_COLORS[Math.abs(h) % TAG_COLORS.length]
 }
 
-// ─── LinkModal ────────────────────────────────────────────────────────────────────
 function LinkModal({ opened, onClose, initial }: { opened: boolean; onClose: () => void; initial?: ShortURL | null }) {
   const qc = useQueryClient()
   const isEdit = Boolean(initial)
@@ -84,14 +82,14 @@ function LinkModal({ opened, onClose, initial }: { opened: boolean; onClose: () 
               placeholder="Не ограничен"
               clearable
               value={form.values.validSince ? new Date(form.values.validSince) : null}
-              onChange={(d) => form.setFieldValue('validSince', d ? d.toISOString() : undefined)}
+              onChange={(d: Date | null) => form.setFieldValue('validSince', d ? d.toISOString() : undefined)}
             />
             <DateTimePicker
               label="Действителен до"
               placeholder="Не ограничен"
               clearable
               value={form.values.validUntil ? new Date(form.values.validUntil) : null}
-              onChange={(d) => form.setFieldValue('validUntil', d ? d.toISOString() : undefined)}
+              onChange={(d: Date | null) => form.setFieldValue('validUntil', d ? d.toISOString() : undefined)}
             />
           </Group>
           <Group justify="flex-end" mt="xs">
@@ -104,7 +102,6 @@ function LinkModal({ opened, onClose, initial }: { opened: boolean; onClose: () 
   )
 }
 
-// ─── ShortUrls page ─────────────────────────────────────────────────────────────────
 export function ShortUrls() {
   const navigate = useNavigate()
   const qc = useQueryClient()
