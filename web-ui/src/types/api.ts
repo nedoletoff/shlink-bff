@@ -1,272 +1,206 @@
-// Контракт GET /api/me — API key НИКОГДА не присутствует
-export interface Permissions {
-  canCreateShortUrl:            boolean;
-  canCreateWithCustomSlug:      boolean;
-  canEditOwnLinks:              boolean;
-  canDeleteOwnLinks:            boolean;
-  canManageOwnTags:             boolean;
-  canViewAuditLogs:             boolean;
-  canManageUsers:               boolean;
-  // lifecycle
-  canDeactivateOwnLinks:        boolean;
-  canDeactivateAllLinks:        boolean;
-  canReactivateOwnLinks:        boolean;
-  canReactivateAllLinks:        boolean;
-  canDeleteOwnLinksPermanently: boolean;
-  canDeleteAllLinksPermanently: boolean;
-}
-
-export interface FeatureFlags {
-  userSlugPrefixEnabled:    boolean;
-  userTagInternalIdEnabled: boolean;
-}
-
-export type UserRole   = 'admin' | 'user';
-export type UserStatus = 'active' | 'disabled' | 'pending';
-
+// ─── Auth ──────────────────────────────────────────────────────────────────
 export interface MeResponse {
-  sub:         string;
-  username:    string;
-  email:       string;
-  role:        UserRole;
-  permissions: Permissions;
-  hasApiKey:   boolean;
-  features:    FeatureFlags;
-  slugPrefix?: string;
+  sub: string
+  username: string
+  email: string
+  role: string
+  permissions: Record<string, boolean>
+  hasApiKey: boolean
+  features: { userSlugPrefixEnabled: boolean; userTagInternalIdEnabled: boolean }
+  slugPrefix?: string
 }
 
-// Short URL
-export interface VisitsSummary {
-  total: number;
-}
-
+// ─── Short URLs ─────────────────────────────────────────────────────────────
 export interface ShortURL {
-  shortCode:      string;
-  shortUrl:       string;
-  longUrl:        string;
-  title:          string;
-  tags:           string[];
-  visitsSummary:  VisitsSummary;
-  dateCreated:    string;
-  ownerUsername?: string;
-  isActive?:      boolean;
-  deactivatedAt?: string;
-  deactivatedBy?: string;
+  shortCode: string
+  shortUrl: string
+  longUrl: string
+  title: string
+  dateCreated: string
+  tags: string[]
+  visitsSummary: { total: number; nonBots: number }
+  maxVisits?: number | null
+  validSince?: string | null
+  validUntil?: string | null
+  isActive?: boolean
 }
 
-export interface Pagination {
-  currentPage:        number;
-  pagesCount:         number;
-  itemsPerPage:       number;
-  itemsInCurrentPage: number;
-  totalItems:         number;
-}
-
-export interface ShortURLsListResponse {
+export interface ShortURLsResponse {
   shortUrls: {
-    data:       ShortURL[];
-    pagination: Pagination;
-  };
+    data: ShortURL[]
+    pagination: {
+      currentPage: number
+      pagesCount: number
+      itemsInCurrentPage: number
+      itemsPerPage: number
+      totalItems: number
+    }
+  }
 }
 
-// Tags
-export interface TagStats {
-  tag:            string;
-  shortUrlsCount: number;
-  visitsSummary:  VisitsSummary;
+export interface CreateShortURLPayload {
+  longUrl: string
+  title?: string
+  customSlug?: string
+  tags?: string[]
+  maxVisits?: number
+  validSince?: string
+  validUntil?: string
 }
 
-export interface TagsResponse {
-  tags: { data: TagStats[] };
-}
+export type UpdateShortURLPayload = Omit<CreateShortURLPayload, 'customSlug'>
 
-// Dashboard
-export interface TagCount   { tag:  string; count:  number; }
-export interface ClickPoint { date: string; clicks: number; }
-
-export interface DashboardResponse {
-  totalClicks:    number;
-  activeLinks:    number;
-  topTags:        TagCount[];
-  clicksOverTime: ClickPoint[];
-}
-
-export interface TopLink {
-  shortCode: string;
-  title:     string;
-  shortUrl:  string;
-  visits:    number;
-}
-
-export interface OverviewResponse {
-  totalClicks:    number;
-  activeLinks:    number;
-  createdPeriod:  number;
-  uniqueVisitors: number | null;
-  clicksPerDay:   ClickPoint[];
-  topLinks:       TopLink[];
-}
-
-export interface UserActivityRow {
-  sub:            string;
-  username:       string;
-  linksCount:     number;
-  visitsCount:    number;
-  lastActivityAt: string | null;
-}
-
-export interface UserActivityResponse {
-  users:          UserActivityRow[];
-  newLinksPerDay: ClickPoint[];
-}
-
-export interface UrlStatRow {
-  shortCode:   string;
-  title:       string;
-  shortUrl:    string;
-  visitsToday: number;
-  visits7d:    number;
-  visitsTotal: number;
-  status:      string;
-  tags:        string[];
-}
-
-export interface UrlStatsResponse {
-  urls: UrlStatRow[];
-}
-
-export interface DeviceBreakdown {
-  desktop: number;
-  mobile:  number;
-  tablet:  number;
-}
-
-export interface NamedCount { name: string; count: number; }
-
-export interface HeatmapCell {
-  hour:    number;
-  weekday: number;
-  value:   number;
-}
-
-export interface DevicesResponse {
-  devices:  DeviceBreakdown;
-  browsers: NamedCount[];
-  os:       NamedCount[];
-  heatmap?: HeatmapCell[];
-}
+// ─── URL Detail ─────────────────────────────────────────────────────────────
+export interface ClickPoint { date: string; clicks: number }
+export interface NamedCount { name: string; count: number }
+export interface DeviceBreakdown { desktop: number; mobile: number; tablet: number }
 
 export interface VisitRow {
-  date:    string;
-  device:  string;
-  os:      string;
-  referer: string | null;
+  date: string
+  country?: string
+  referer?: string
+  browser: string
+  os: string
+  device: string
 }
 
-export interface UrlDetailResponse {
-  shortCode:      string;
-  title:          string;
-  shortUrl:       string;
-  longUrl:        string;
-  dateCreated:    string;
-  ownerUsername?: string;
-  isActive?:      boolean;
-  deactivatedAt?: string;
-  deactivatedBy?: string;
-  clicksPerDay:   ClickPoint[];
-  devices:        DeviceBreakdown;
-  browsers:       NamedCount[];
-  os:             NamedCount[];
-  visits:         VisitRow[];
-  visitsTotal:    number;
+export interface URLDetailResponse {
+  shortCode: string
+  title: string
+  shortUrl: string
+  longUrl: string
+  dateCreated: string
+  visitsTotal: number
+  clicksPerDay: ClickPoint[]
+  devices: DeviceBreakdown
+  browsers: NamedCount[]
+  os: NamedCount[]
+  visits: VisitRow[]
+  isActive: boolean
+  deactivatedAt?: string
+  deactivatedBy?: string
 }
 
-export interface UserDetailResponse {
-  sub:            string;
-  username:       string;
-  email:          string;
-  role:           UserRole;
-  linksCount:     number;
-  visitsTotal:    number;
-  activityPerDay: ClickPoint[];
-  links:          ShortURL[];
+// ─── Tags ───────────────────────────────────────────────────────────────────
+export interface TagEntry {
+  tag: string
+  shortUrlsCount: number
+  visitsSummary: { total: number }
 }
 
+// ─── Dashboard ──────────────────────────────────────────────────────────────
+export interface HeatCell { weekday: number; hour: number; value: number }
+
+export interface DashboardResponse {
+  overview: {
+    linksCount: number
+    visitsTotal: number
+    topLinks: Array<{ shortCode: string; shortUrl: string; longUrl: string; title: string; visitsTotal: number }>
+    recentLinks: Array<{ shortCode: string; shortUrl: string; longUrl: string; title: string; visitsTotal: number }>
+  }
+  visits: { clicksPerDay: ClickPoint[]; clicksTotal: number }
+  devices: {
+    devices: DeviceBreakdown
+    browsers: NamedCount[]
+    os: NamedCount[]
+    heatmap: HeatCell[]
+  }
+  users?: Array<{ sub: string; username: string; email: string; role: string; status: string }>
+  tags?: Array<{ tag: string; visits: number; urls: number }>
+}
+
+// ─── Settings ───────────────────────────────────────────────────────────────
+export interface ServerSettings {
+  shortCodeLength: number
+  allowCustomSlugs: boolean
+  userSlugPrefix: boolean
+  domain: string
+  shlinkVersion: string
+  connected: boolean
+  maxVisitsDefault: number
+  linkTtlDefaultDays: number
+  adminRole: string
+  roleSource: string
+  corsAllowedOrigins: string
+  shlinkRunnerMode: string
+  shlinkContainerName: string
+}
+
+export interface PatchSettingsPayload {
+  shortCodeLength?: number
+  allowCustomSlugs?: boolean
+  userSlugPrefix?: boolean
+  domain?: string
+  maxVisitsDefault?: number
+  linkTtlDefaultDays?: number
+  adminRole?: string
+  shlinkRunnerMode?: string
+  shlinkContainerName?: string
+}
+
+// ─── Admin — Users ──────────────────────────────────────────────────────────
+export interface UserRecord {
+  sub: string
+  username: string
+  email: string
+  role: string
+  status: string
+  slugPrefix?: string
+  shlinkApiKey?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+// ─── Admin — Roles ──────────────────────────────────────────────────────────
+export interface RolePermissions {
+  role: string
+  updatedAt?: string
+  canViewOwnLinks: boolean
+  canViewAllLinks: boolean
+  canCreateLinks: boolean
+  canCreateWithCustomSlug: boolean
+  canCreateWithoutSlug: boolean
+  canEditOwnLinks: boolean
+  canEditAllLinks: boolean
+  canDeleteOwnLinks: boolean
+  canDeleteAllLinks: boolean
+  canDeactivateOwnLinks: boolean
+  canDeactivateAllLinks: boolean
+  canReactivateOwnLinks: boolean
+  canReactivateAllLinks: boolean
+  canDeleteOwnLinksPermanently: boolean
+  canDeleteAllLinksPermanently: boolean
+  canManageOwnTags: boolean
+  canManageAllTags: boolean
+  canViewOwnStats: boolean
+  canViewAllStats: boolean
+  canViewAuditLogs: boolean
+  canManageUsers: boolean
+  canManageRoles: boolean
+}
+
+export interface RoleEntry { role: string; permissions: string[] }
+export interface RoleMapping { kcGroup: string; appRole: string }
+export interface RolesResponse { roles: RoleEntry[]; mappings: RoleMapping[] }
+
+// ─── Admin — Audit ──────────────────────────────────────────────────────────
 export interface AuditLog {
-  id:        number;
-  createdAt: string;
-  action:    string;
-  username:  string | null;
-  userSub:   string | null;
-  result:    string;
-  role:      string | null;
-  resource:  string | null;
-  ipAddress: string | null;
+  id?: number
+  userSub: string
+  username: string
+  role: string
+  action: string
+  resource: string
+  result: string
+  details?: Record<string, unknown>
+  ipAddress: string
+  userAgent?: string
+  createdAt: string
 }
 
 export interface AuditLogsResponse {
-  logs:  AuditLog[];
-  total: number;
-}
-
-export interface AdminUser {
-  sub:        string;
-  username:   string;
-  email:      string;
-  role:       UserRole;
-  slugPrefix: string | null;
-  status:     UserStatus;
-  hasApiKey:  boolean;
-}
-
-export interface RolePermissions {
-  role:                         string;
-  canViewOwnLinks:              boolean;
-  canViewAllLinks:              boolean;
-  canCreateLinks:               boolean;
-  canCreateWithCustomSlug:      boolean;
-  canCreateWithoutSlug:         boolean;
-  canEditOwnLinks:              boolean;
-  canEditAllLinks:              boolean;
-  canDeleteOwnLinks:            boolean;
-  canDeleteAllLinks:            boolean;
-  canDeactivateOwnLinks:        boolean;
-  canDeactivateAllLinks:        boolean;
-  canReactivateOwnLinks:        boolean;
-  canReactivateAllLinks:        boolean;
-  canDeleteOwnLinksPermanently: boolean;
-  canDeleteAllLinksPermanently: boolean;
-  canManageOwnTags:             boolean;
-  canManageAllTags:             boolean;
-  canViewOwnStats:              boolean;
-  canViewAllStats:              boolean;
-  canViewAuditLogs:             boolean;
-  canManageUsers:               boolean;
-  canManageRoles:               boolean;
-  updatedAt:                    string;
-}
-
-export interface RoleEntry {
-  role:        string;
-  permissions: string[];
-  usersCount:  number;
-}
-
-export interface RoleMapping {
-  kcGroup: string;
-  appRole: string;
-}
-
-export interface RolesResponse {
-  roles:    RoleEntry[];
-  mappings: RoleMapping[];
-}
-
-export interface ShlinkSettings {
-  shortCodeLength:  number;
-  allowCustomSlugs: boolean;
-  userSlugPrefix:   boolean;
-  domain:           string;
-  shlinkVersion:    string;
-  connected:        boolean;
+  items: AuditLog[]
+  page: number
+  perPage: number
+  total: number
 }

@@ -1,30 +1,26 @@
-/**
- * Утилиты для форматирования дат.
- * Все компоненты должны использовать эти функции вместо инлайнового new Date().
- */
+import dayjs from 'dayjs'
+import 'dayjs/locale/ru'
+import relativeTime from 'dayjs/plugin/relativeTime'
 
-/** ДД.ММ.ГГГГ ЧЧ:ММ — для таблиц с timestamp */
-export function formatDateTime(value: string | null | undefined): string {
-  if (value == null || value === '') return '—';
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return String(value); // невалидная строка — показываем как есть
-  return d.toLocaleString('ru-RU', {
-    day:    '2-digit',
-    month:  '2-digit',
-    year:   'numeric',
-    hour:   '2-digit',
-    minute: '2-digit',
-  });
+dayjs.extend(relativeTime)
+dayjs.locale('ru')
+
+export function formatDate(date: string | null | undefined): string {
+  if (!date) return '—'
+  return dayjs(date).format('DD.MM.YYYY')
 }
 
-/** ДД.ММ.ГГГГ — для колонок «Создана» */
-export function formatDate(value: string | null | undefined): string {
-  if (value == null || value === '') return '—';
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return String(value);
-  return d.toLocaleDateString('ru-RU', {
-    day:   '2-digit',
-    month: '2-digit',
-    year:  'numeric',
-  });
+export function formatDateTime(date: string | null | undefined): string {
+  if (!date) return '—'
+  return dayjs(date).format('DD.MM.YYYY HH:mm:ss')
+}
+
+export function formatRelative(date: string | null | undefined): string {
+  if (!date) return '—'
+  return dayjs(date).fromNow()
+}
+
+export function formatDateLong(date: string | null | undefined): string {
+  if (!date) return '—'
+  return dayjs(date).format('DD MMMM YYYY, HH:mm')
 }
