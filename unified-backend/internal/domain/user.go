@@ -54,9 +54,19 @@ type RolePermissions struct {
 	CanEditOwnLinks bool `db:"can_edit_own_links" json:"canEditOwnLinks"`
 	CanEditAllLinks bool `db:"can_edit_all_links" json:"canEditAllLinks"`
 
-	// Удаление
+	// Удаление (soft — деактивация)
 	CanDeleteOwnLinks bool `db:"can_delete_own_links" json:"canDeleteOwnLinks"`
 	CanDeleteAllLinks bool `db:"can_delete_all_links" json:"canDeleteAllLinks"`
+
+	// Деактивация / реактивация
+	CanDeactivateOwnLinks bool `db:"can_deactivate_own_links" json:"canDeactivateOwnLinks"`
+	CanDeactivateAllLinks bool `db:"can_deactivate_all_links" json:"canDeactivateAllLinks"`
+	CanReactivateOwnLinks bool `db:"can_reactivate_own_links" json:"canReactivateOwnLinks"`
+	CanReactivateAllLinks bool `db:"can_reactivate_all_links" json:"canReactivateAllLinks"`
+
+	// Permanent delete (hard delete — необратимо)
+	CanDeleteOwnLinksPermanently bool `db:"can_delete_own_links_permanently" json:"canDeleteOwnLinksPermanently"`
+	CanDeleteAllLinksPermanently bool `db:"can_delete_all_links_permanently" json:"canDeleteAllLinksPermanently"`
 
 	// Теги
 	CanManageOwnTags bool `db:"can_manage_own_tags" json:"canManageOwnTags"`
@@ -77,37 +87,49 @@ type RolePermissions struct {
 // DefaultAdminPermissions — полные права для fallback если БД недоступна.
 func DefaultAdminPermissions(role string) RolePermissions {
 	return RolePermissions{
-		Role:                    role,
-		CanViewOwnLinks:         true,
-		CanViewAllLinks:         true,
-		CanCreateLinks:          true,
-		CanCreateWithCustomSlug: true,
-		CanCreateWithoutSlug:    true,
-		CanEditOwnLinks:         true,
-		CanEditAllLinks:         true,
-		CanDeleteOwnLinks:       true,
-		CanDeleteAllLinks:       true,
-		CanManageOwnTags:        true,
-		CanManageAllTags:        true,
-		CanViewOwnStats:         true,
-		CanViewAllStats:         true,
-		CanViewAuditLogs:        true,
-		CanManageUsers:          true,
-		CanManageRoles:          true,
+		Role:                         role,
+		CanViewOwnLinks:              true,
+		CanViewAllLinks:              true,
+		CanCreateLinks:               true,
+		CanCreateWithCustomSlug:      true,
+		CanCreateWithoutSlug:         true,
+		CanEditOwnLinks:              true,
+		CanEditAllLinks:              true,
+		CanDeleteOwnLinks:            true,
+		CanDeleteAllLinks:            true,
+		CanDeactivateOwnLinks:        true,
+		CanDeactivateAllLinks:        true,
+		CanReactivateOwnLinks:        true,
+		CanReactivateAllLinks:        true,
+		CanDeleteOwnLinksPermanently: true,
+		CanDeleteAllLinksPermanently: true,
+		CanManageOwnTags:             true,
+		CanManageAllTags:             true,
+		CanViewOwnStats:              true,
+		CanViewAllStats:              true,
+		CanViewAuditLogs:             true,
+		CanManageUsers:               true,
+		CanManageRoles:               true,
 	}
 }
 
 // DefaultUserPermissions — минимальные права для fallback.
 func DefaultUserPermissions(role string) RolePermissions {
 	return RolePermissions{
-		Role:                    role,
-		CanViewOwnLinks:         true,
-		CanCreateLinks:          true,
-		CanCreateWithCustomSlug: true,
-		CanCreateWithoutSlug:    true,
-		CanEditOwnLinks:         true,
-		CanDeleteOwnLinks:       true,
-		CanManageOwnTags:        true,
-		CanViewOwnStats:         true,
+		Role:                         role,
+		CanViewOwnLinks:              true,
+		CanCreateLinks:               true,
+		CanCreateWithCustomSlug:      true,
+		CanCreateWithoutSlug:         true,
+		CanEditOwnLinks:              true,
+		CanDeleteOwnLinks:            true,
+		CanDeactivateOwnLinks:        true,
+		CanDeactivateAllLinks:        false,
+		CanReactivateOwnLinks:        true,
+		CanReactivateAllLinks:        false,
+		CanDeleteOwnLinksPermanently: false,
+		CanDeleteAllLinksPermanently: false,
+		CanManageOwnTags:             true,
+		CanViewOwnStats:              true,
 	}
 }

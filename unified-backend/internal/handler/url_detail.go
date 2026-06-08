@@ -16,25 +16,29 @@ import (
 
 type URLDetailHandler struct {
 	svc       *service.ShlinkService
-	ownerRepo URLOwnershipRepo
+	ownerRepo URLLifecycleOwnershipRepo
 }
 
-func NewURLDetailHandler(svc *service.ShlinkService, ownerRepo URLOwnershipRepo) *URLDetailHandler {
+func NewURLDetailHandler(svc *service.ShlinkService, ownerRepo URLLifecycleOwnershipRepo) *URLDetailHandler {
 	return &URLDetailHandler{svc: svc, ownerRepo: ownerRepo}
 }
 
 type urlDetailResponse struct {
-	ShortCode    string          `json:"shortCode"`
-	Title        string          `json:"title"`
-	ShortURL     string          `json:"shortUrl"`
-	LongURL      string          `json:"longUrl"`
-	DateCreated  string          `json:"dateCreated"`
-	VisitsTotal  int             `json:"visitsTotal"`
-	ClicksPerDay []ClickPoint    `json:"clicksPerDay"`
-	Devices      deviceBreakdown `json:"devices"`
-	Browsers     []namedCount    `json:"browsers"`
-	OS           []namedCount    `json:"os"`
-	Visits       []visitRow      `json:"visits"`
+	ShortCode     string          `json:"shortCode"`
+	Title         string          `json:"title"`
+	ShortURL      string          `json:"shortUrl"`
+	LongURL       string          `json:"longUrl"`
+	DateCreated   string          `json:"dateCreated"`
+	VisitsTotal   int             `json:"visitsTotal"`
+	ClicksPerDay  []ClickPoint    `json:"clicksPerDay"`
+	Devices       deviceBreakdown `json:"devices"`
+	Browsers      []namedCount    `json:"browsers"`
+	OS            []namedCount    `json:"os"`
+	Visits        []visitRow      `json:"visits"`
+	// Lifecycle fields
+	IsActive      bool    `json:"isActive"`
+	DeactivatedAt *string `json:"deactivatedAt,omitempty"`
+	DeactivatedBy *string `json:"deactivatedBy,omitempty"`
 }
 
 type deviceBreakdown struct {
@@ -98,6 +102,18 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 			return
 		}
+	}
+
+	// Обогащаем ответ данными о деактивации из url_ownership.
+	isActive := true
+	var deactivatedAt, deactivatedBy *string
+	if ownership, owErr := h.ownerRepo.GetOwnership(r.Context(), shortCode, ""); owErr == nil && ownership != nil {
+		isActive = ownership.IsActive
+		if ownership.DeactivatedAt != nil {
+			s := ownership.DeactivatedAt.Format(time.RFC3339)
+			deactivatedAt = &s
+		}
+		deactivatedBy = ownership.DeactivatedBy
 	}
 
 	end := time.Now()
@@ -173,21 +189,24 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := urlDetailResponse{
-		ShortCode:    info.ShortCode,
-		Title:        info.Title,
-		ShortURL:     info.ShortURL,
-		LongURL:      info.LongURL,
-		DateCreated:  info.DateCreated,
-		VisitsTotal:  info.VisitsSummary.Total,
-		ClicksPerDay: points,
+		ShortCode:     info.ShortCode,
+		Title:         info.Title,
+		ShortURL:      info.ShortURL,
+		LongURL:       info.LongURL,
+		DateCreated:   info.DateCreated,
+		VisitsTotal:   info.VisitsSummary.Total,
+		ClicksPerDay:  points,
 		Devices: deviceBreakdown{
 			Desktop: desktop,
 			Mobile:  mobile,
 			Tablet:  tablet,
 		},
-		Browsers: topCountSlice(browsersMap, 10),
-		OS:       topCountSlice(osMap, 10),
-		Visits:   visitRows,
+		Browsers:      topCountSlice(browsersMap, 10),
+		OS:            topCountSlice(osMap, 10),
+		Visits:        visitRows,
+		IsActive:      isActive,
+		DeactivatedAt: deactivatedAt,
+		DeactivatedBy: deactivatedBy,
 	}
 
 	writeJSON(w, resp, http.StatusOK)

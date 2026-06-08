@@ -28,6 +28,7 @@ type URLOwnershipRepo interface {
 	SetActive(ctx context.Context, shortCode, domain string, active bool) error
 	GetShortCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error)
 	GetActiveCodeSet(ctx context.Context, ownerSub string) (map[string]struct{}, error)
+	GetStatusCodeSet(ctx context.Context, ownerSub string) (map[string]bool, error)
 }
 
 // Compile-time check: postgres.URLOwnershipRepository реализует URLOwnershipRepo.
@@ -55,6 +56,7 @@ func NewShlinkProxyHandler(
 }
 
 // GET /api/shlink/short-urls
+// Поддерживает query param ?status=active|inactive|all (default: active).
 func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -68,6 +70,11 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	statusFilter := r.URL.Query().Get("status")
+	if statusFilter == "" {
+		statusFilter = "active"
+	}
+
 	resp, err := h.shlinkSvc.Client().GetShortURLs(r.Context(), user.ShlinkAPIKey, r.URL.RawQuery)
 	if err != nil {
 		slog.Error("proxy: get short-urls failed", "sub", user.Sub, "err", err)
@@ -79,16 +86,34 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 	if !p.CanViewAllLinks {
 		ownedCodes, _ := h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
 		resp.ShortURLs.Data = h.shlinkSvc.FilterShortURLsByUser(resp.ShortURLs.Data, user, ownedCodes)
-		// Исправляем пагинацию: Shlink вернул глобальные метрики, BFF отдаёт
-		// только ссылки этого пользователя — всё за один запрос.
-		n := len(resp.ShortURLs.Data)
+	}
+
+	// Применяем фильтр по статусу из url_ownership.
+	if statusFilter != "all" {
+		statusMap, _ := h.ownerRepo.GetStatusCodeSet(r.Context(), user.Sub)
+		wantActive := statusFilter == "active"
+		filtered := resp.ShortURLs.Data[:0]
+		for _, u := range resp.ShortURLs.Data {
+			active, known := statusMap[u.ShortCode]
+			if !known {
+				active = true // неизвестные ссылки считаем активными
+			}
+			if active == wantActive {
+				filtered = append(filtered, u)
+			}
+		}
+		resp.ShortURLs.Data = filtered
+	}
+
+	n := len(resp.ShortURLs.Data)
+	if !p.CanViewAllLinks {
 		resp.ShortURLs.Pagination.TotalItems = n
 		resp.ShortURLs.Pagination.ItemsInCurrentPage = n
 		resp.ShortURLs.Pagination.PagesCount = 1
 		resp.ShortURLs.Pagination.CurrentPage = 1
 	}
 
-	h.recordAudit(r, user, "list_short_urls", "success", nil)
+	h.recordAudit(r, user, "list_short_urls", "success", map[string]any{"status": statusFilter})
 	writeJSON(w, resp, http.StatusOK)
 }
 
@@ -190,6 +215,9 @@ func (h *ShlinkProxyHandler) UpdateShortURL(w http.ResponseWriter, r *http.Reque
 }
 
 // DELETE /api/shlink/short-urls/{shortCode}
+// Теперь — legacy endpoint, перенаправляет на permanent delete.
+// Используется только если фронт ещё не перешёл на /permanent.
+// Требует can_delete_*_links_permanently.
 func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -203,11 +231,23 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.checkModifyPermission(r.Context(), user, shortCode, true); err != nil {
-		slog.Warn("proxy: delete denied", "sub", user.Sub, "shortCode", shortCode, "err", err)
-		h.recordAudit(r, user, "delete_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": err.Error()})
-		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
-		return
+	p := h.shlinkSvc.Perms(user)
+	ownedAll := p.CanDeleteAllLinksPermanently
+	ownedOwn := p.CanDeleteOwnLinksPermanently
+	if !ownedAll {
+		if !ownedOwn {
+			h.recordAudit(r, user, "delete_short_url", "denied",
+				map[string]any{"shortCode": shortCode, "reason": "no permanent delete permission"})
+			writeJSON(w, map[string]string{"error": "forbidden: use /deactivate for soft delete"}, http.StatusForbidden)
+			return
+		}
+		isOwner, err := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
+		if err != nil || !isOwner {
+			h.recordAudit(r, user, "delete_short_url", "denied",
+				map[string]any{"shortCode": shortCode, "reason": "not the owner"})
+			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+			return
+		}
 	}
 
 	if err := h.shlinkSvc.Client().DeleteShortURL(r.Context(), user.ShlinkAPIKey, shortCode); err != nil {
@@ -221,56 +261,8 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		slog.Error("proxy: hard delete ownership failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
 	}
 
-	h.recordAudit(r, user, "delete_short_url", "success", map[string]any{"shortCode": shortCode})
+	h.recordAudit(r, user, domain.ActionShortURLDeletedPermanently, "success", map[string]any{"shortCode": shortCode})
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// POST /api/shlink/short-urls/{shortCode}/toggle
-func (h *ShlinkProxyHandler) ToggleShortURL(w http.ResponseWriter, r *http.Request) {
-	user := middleware.UserFromCtx(r.Context())
-	if user == nil {
-		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
-		return
-	}
-
-	shortCode := chi.URLParam(r, "shortCode")
-	if shortCode == "" {
-		writeJSON(w, map[string]string{"error": "shortCode required"}, http.StatusBadRequest)
-		return
-	}
-
-	if err := h.checkModifyPermission(r.Context(), user, shortCode, false); err != nil {
-		slog.Warn("proxy: toggle denied", "sub", user.Sub, "shortCode", shortCode, "err", err)
-		h.recordAudit(r, user, "toggle_short_url", "denied", map[string]any{"shortCode": shortCode, "reason": err.Error()})
-		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
-		return
-	}
-
-	var body struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, map[string]string{"error": "invalid json: expected {\"enabled\": bool}"}, http.StatusBadRequest)
-		return
-	}
-
-	patchBody, _ := json.Marshal(map[string]any{"enabled": body.Enabled})
-	result, err := h.shlinkSvc.Client().UpdateShortURL(
-		r.Context(), user.ShlinkAPIKey, shortCode, bytes.NewReader(patchBody),
-	)
-	if err != nil {
-		slog.Error("proxy: toggle shlink patch failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
-		h.recordAudit(r, user, "toggle_short_url", "error", map[string]any{"shortCode": shortCode, "err": err.Error()})
-		writeJSON(w, map[string]string{"error": friendlyShlinkError(err)}, http.StatusBadGateway)
-		return
-	}
-
-	if err := h.ownerRepo.SetActive(r.Context(), shortCode, "", body.Enabled); err != nil {
-		slog.Error("proxy: set active failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
-	}
-
-	h.recordAudit(r, user, "toggle_short_url", "success", map[string]any{"shortCode": shortCode, "enabled": body.Enabled})
-	writeJSON(w, result, http.StatusOK)
 }
 
 func (h *ShlinkProxyHandler) checkModifyPermission(

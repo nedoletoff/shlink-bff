@@ -82,13 +82,14 @@ func main() {
 	provisioner := shlinkctl.NewProvisioner(db, runner)
 
 	// ── Handlers ─────────────────────────────────────────────────────────────────
-	meH        := handler.NewMeHandler(cfg, permsCache)
-	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo, ownerRepo)
-	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
-	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
-	rolesH     := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
-	urlDetailH := handler.NewURLDetailHandler(shlinkSvc, ownerRepo)
-	settingsH  := handler.NewSettingsHandler(cfg, shlinkSvc, settingsRepo)
+	meH          := handler.NewMeHandler(cfg, permsCache)
+	dashH        := handler.NewDashboardHandler(shlinkSvc, userRepo, ownerRepo)
+	proxyH       := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
+	adminH       := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
+	rolesH       := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
+	urlDetailH   := handler.NewURLDetailHandler(shlinkSvc, ownerRepo)
+	settingsH    := handler.NewSettingsHandler(cfg, shlinkSvc, settingsRepo)
+	lifecycleH   := handler.NewURLLifecycleHandler(shlinkSvc, ownerRepo, auditRepo)
 
 	// ── Router ────────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -117,7 +118,11 @@ func main() {
 		r.Post("/api/shlink/short-urls", proxyH.CreateShortURL)
 		r.Patch("/api/shlink/short-urls/{shortCode}", proxyH.UpdateShortURL)
 		r.Delete("/api/shlink/short-urls/{shortCode}", proxyH.DeleteShortURL)
-		r.Post("/api/shlink/short-urls/{shortCode}/toggle", proxyH.ToggleShortURL)
+
+		// Lifecycle: deactivate / activate / permanent delete
+		r.Post("/api/shlink/short-urls/{shortCode}/deactivate", lifecycleH.DeactivateURL)
+		r.Post("/api/shlink/short-urls/{shortCode}/activate", lifecycleH.ActivateURL)
+		r.Delete("/api/shlink/short-urls/{shortCode}/permanent", lifecycleH.DeleteURLPermanently)
 
 		r.Get("/api/shlink/tags", proxyH.ListTags)
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
@@ -141,11 +146,9 @@ func main() {
 			r.Put("/api/admin/users/{sub}/prefix", adminH.UpdateSlugPrefix)
 			r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
 
-			// Аудит: оба пути работают (фронт может использовать любой)
 			r.Get("/api/admin/logs", adminH.ListLogs)
 			r.Get("/api/admin/audit", adminH.ListLogs)
 
-			// Роли
 			r.Get("/api/admin/roles", rolesH.ListRoles)
 			r.Get("/api/admin/roles/{role}", rolesH.GetRole)
 			r.Put("/api/admin/roles/{role}/permissions", rolesH.UpsertRolePermissions)
