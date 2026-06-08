@@ -10,17 +10,16 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"unified-backend/internal/middleware"
-	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
 )
 
 type URLDetailHandler struct {
 	svc       *service.ShlinkService
-	ownerRepo *postgres.URLOwnershipRepository
+	ownerRepo URLOwnershipRepo
 }
 
-func NewURLDetailHandler(svc *service.ShlinkService, ownerRepo *postgres.URLOwnershipRepository) *URLDetailHandler {
+func NewURLDetailHandler(svc *service.ShlinkService, ownerRepo URLOwnershipRepo) *URLDetailHandler {
 	return &URLDetailHandler{svc: svc, ownerRepo: ownerRepo}
 }
 
