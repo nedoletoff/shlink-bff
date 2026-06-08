@@ -1,189 +1,138 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
-  Stack, Title, Table, Text, Badge, Group, Select,
-  TextInput, Center, Loader, Pagination,
-} from '@mantine/core';
-import { api } from '../../api/client';
-import { formatDateTime } from '../../utils/date';
-import type { AuditLog } from '../../types/api';
+  Stack, Group, Title, TextInput, Select, Table,
+  Text, Badge, Skeleton, Pagination, Paper,
+} from '@mantine/core'
+import { DateInput } from '@mantine/dates'
+import { IconFileText } from '@tabler/icons-react'
+import { getAuditLogs } from '@/api/endpoints/adminAudit'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { formatDateTime } from '@/utils/date'
+import dayjs from 'dayjs'
 
-const PAGE_SIZE = 50;
-
-const ACTION_OPTIONS = [
-  { value: '',                    label: 'Все действия' },
-  { value: 'create_short_url',    label: 'Создание ссылки' },
-  { value: 'update_short_url',    label: 'Обновление ссылки' },
-  { value: 'delete_short_url',    label: 'Удаление ссылки' },
-  { value: 'list_short_urls',     label: 'Просмотр ссылок' },
-  { value: 'create_tag',          label: 'Создание тега' },
-  { value: 'delete_tag',          label: 'Удаление тега' },
-  { value: 'rename_tag',          label: 'Переименование тега' },
-  { value: 'rbac_denied',         label: 'RBAC-отказ' },
-  { value: 'admin_update_user',   label: 'Изменение пользователя' },
-  { value: 'admin_update_apikey', label: 'Обновление API key' },
-  { value: 'admin_update_prefix', label: 'Обновление префикса' },
-];
-
-const RESULT_OPTIONS = [
-  { value: '',        label: 'Все результаты' },
-  { value: 'success', label: 'Успех' },
-  { value: 'denied',  label: 'Отказ' },
-  { value: 'error',   label: 'Ошибка' },
-];
-
-// Бэкенд возвращает { items, total, page, perPage }
-interface AuditLogsApiResponse {
-  items: AuditLog[];
-  total: number;
-  page:  number;
+const RESULT_COLORS: Record<string, string> = {
+  success: 'teal',
+  error: 'red',
+  denied: 'orange',
 }
 
-export function AuditLogs() {
-  const [logs,    setLogs]    = useState<AuditLog[]>([]);
-  const [total,   setTotal]   = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [page,    setPage]    = useState(1);
+export function AdminAuditLogs() {
+  const [page, setPage] = useState(1)
+  const [username, setUsername] = useState('')
+  const [action, setAction] = useState<string | null>(null)
+  const [result, setResult] = useState<string | null>(null)
+  const [dateFrom, setDateFrom] = useState<Date | null>(null)
+  const [dateTo, setDateTo] = useState<Date | null>(null)
 
-  const [username, setUsername] = useState('');
-  const [action,   setAction]   = useState('');
-  const [result,   setResult]   = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo,   setDateTo]   = useState('');
-
-  const fetchLogs = useCallback(() => {
-    setLoading(true);
-    api.get<AuditLogsApiResponse>('/api/admin/logs', {
-      params: {
+  const { data, isLoading } = useQuery({
+    queryKey: ['audit-logs', page, username, action, result, dateFrom, dateTo],
+    queryFn: () =>
+      getAuditLogs({
         page,
-        perPage:  PAGE_SIZE,
+        perPage: 25,
         username: username || undefined,
-        action:   action   || undefined,
-        result:   result   || undefined,
-        dateFrom: dateFrom || undefined,
-        dateTo:   dateTo   || undefined,
-      },
-    })
-      .then(r => { setLogs(r.items ?? []); setTotal(r.total); })
-      .catch(() => { setLogs([]); setTotal(0); })
-      .finally(() => setLoading(false));
-  }, [page, username, action, result, dateFrom, dateTo]);
+        action: action || undefined,
+        result: result || undefined,
+        dateFrom: dateFrom ? dayjs(dateFrom).format('YYYY-MM-DD') : undefined,
+        dateTo: dateTo ? dayjs(dateTo).format('YYYY-MM-DD') : undefined,
+      }),
+  })
 
-  useEffect(() => { fetchLogs(); }, [fetchLogs]);
-
-  const resultColor = (r: string) =>
-    r === 'success' ? 'green' : r === 'denied' ? 'red' : 'orange';
+  const logs = data?.items ?? []
+  const total = data?.total ?? 0
+  const totalPages = Math.ceil(total / 25)
 
   return (
-    <Stack gap="lg">
-      <Title order={2}>Журнал аудита</Title>
+    <Stack gap="md">
+      <Title order={2}>Аудит-логи</Title>
 
-      <Group wrap="wrap">
+      <Group gap="sm" wrap="wrap">
         <TextInput
-          placeholder="Фильтр по username"
+          placeholder="Пользователь"
           value={username}
-          onChange={e => { setUsername(e.currentTarget.value); setPage(1); }}
-          style={{ flex: 1, minWidth: 160 }}
+          onChange={(e) => { setUsername(e.currentTarget.value); setPage(1) }}
+          w={180}
         />
         <Select
-          data={ACTION_OPTIONS} value={action}
-          onChange={v => { setAction(v ?? ''); setPage(1); }}
-          style={{ minWidth: 200 }}
+          placeholder="Действие"
+          clearable
+          data={['create', 'edit', 'delete', 'deactivate', 'activate', 'login', 'logout']}
+          value={action}
+          onChange={(v) => { setAction(v); setPage(1) }}
+          w={180}
         />
         <Select
-          data={RESULT_OPTIONS} value={result}
-          onChange={v => { setResult(v ?? ''); setPage(1); }}
-          style={{ minWidth: 140 }}
+          placeholder="Результат"
+          clearable
+          data={['success', 'error', 'denied']}
+          value={result}
+          onChange={(v) => { setResult(v); setPage(1) }}
+          w={150}
         />
-        <TextInput
-          type="date" placeholder="С"
+        <DateInput
+          placeholder="От"
           value={dateFrom}
-          onChange={e => { setDateFrom(e.currentTarget.value); setPage(1); }}
-          style={{ width: 150 }}
+          onChange={(v) => { setDateFrom(v); setPage(1) }}
+          w={140}
+          clearable
         />
-        <TextInput
-          type="date" placeholder="По"
+        <DateInput
+          placeholder="До"
           value={dateTo}
-          onChange={e => { setDateTo(e.currentTarget.value); setPage(1); }}
-          style={{ width: 150 }}
+          onChange={(v) => { setDateTo(v); setPage(1) }}
+          w={140}
+          clearable
         />
       </Group>
 
-      {loading ? (
-        <Center h={200}><Loader /></Center>
+      {isLoading ? (
+        <Skeleton height={400} />
+      ) : logs.length === 0 ? (
+        <EmptyState icon={<IconFileText size={24} />} title="Записей нет" description="Попробуйте снять фильтры" />
       ) : (
-        <>
-          <Table striped highlightOnHover withTableBorder>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Время</Table.Th>
-                <Table.Th>Пользователь</Table.Th>
-                <Table.Th>Роль</Table.Th>
-                <Table.Th>Действие</Table.Th>
-                <Table.Th>Ресурс</Table.Th>
-                <Table.Th>Результат</Table.Th>
-                <Table.Th>IP</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {logs.map(log => (
-                <Table.Tr key={log.id}>
-                  <Table.Td>
-                    <Text size="xs" ff="monospace">
-                      {formatDateTime(log.createdAt)}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm">{log.username ?? '—'}</Text>
-                    <Text size="xs" c="dimmed" ff="monospace">
-                      {log.userSub ? `${log.userSub.slice(0, 8)}…` : '—'}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Badge size="sm" color={log.role === 'admin' ? 'red' : 'blue'} variant="light">
-                      {log.role ?? '—'}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm" ff="monospace">{log.action}</Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm" c="dimmed" truncate="end" maw={200}>{log.resource ?? '—'}</Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Badge size="sm" color={resultColor(log.result)} variant="light">
-                      {log.result}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="xs" ff="monospace" c="dimmed">{log.ipAddress ?? '—'}</Text>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-              {logs.length === 0 && (
+        <Paper withBorder radius="md">
+          <Table.ScrollContainer minWidth={700}>
+            <Table striped highlightOnHover>
+              <Table.Thead>
                 <Table.Tr>
-                  <Table.Td colSpan={7}>
-                    <Center p="xl"><Text c="dimmed">Записей не найдено</Text></Center>
-                  </Table.Td>
+                  <Table.Th>Дата</Table.Th>
+                  <Table.Th>Пользователь</Table.Th>
+                  <Table.Th>Действие</Table.Th>
+                  <Table.Th>Ресурс</Table.Th>
+                  <Table.Th>Результат</Table.Th>
+                  <Table.Th>IP</Table.Th>
                 </Table.Tr>
-              )}
-            </Table.Tbody>
-          </Table>
+              </Table.Thead>
+              <Table.Tbody>
+                {logs.map((log, i) => (
+                  <Table.Tr key={log.id ?? i}>
+                    <Table.Td><Text size="xs">{formatDateTime(log.createdAt)}</Text></Table.Td>
+                    <Table.Td>
+                      <Text size="sm" fw={500}>{log.username}</Text>
+                      <Text size="xs" c="dimmed">{log.role}</Text>
+                    </Table.Td>
+                    <Table.Td><Badge variant="light" size="sm">{log.action}</Badge></Table.Td>
+                    <Table.Td><Text size="xs" c="dimmed" lineClamp={1}>{log.resource}</Text></Table.Td>
+                    <Table.Td>
+                      <Badge color={RESULT_COLORS[log.result] ?? 'gray'} variant="light" size="sm">
+                        {log.result}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td><Text size="xs" c="dimmed">{log.ipAddress}</Text></Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
+        </Paper>
+      )}
 
-          <Group justify="space-between" align="center">
-            <Text size="sm" c="dimmed">
-              {total === 0
-                ? 'Нет записей'
-                : `Записи ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, total)} из ${total}`}
-            </Text>
-            <Pagination
-              total={Math.max(1, Math.ceil(total / PAGE_SIZE))}
-              value={page}
-              onChange={setPage}
-              siblings={1}
-            />
-          </Group>
-        </>
+      {totalPages > 1 && (
+        <Group justify="center">
+          <Pagination total={totalPages} value={page} onChange={setPage} size="sm" />
+        </Group>
       )}
     </Stack>
-  );
+  )
 }

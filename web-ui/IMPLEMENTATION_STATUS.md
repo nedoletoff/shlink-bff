@@ -27,12 +27,16 @@
 - [x] `pages/UrlDetail.tsx`
 - [x] `pages/Tags.tsx`
 
-### ⏳ Stage 4 — Admin pages (commit 4/4)
-- [ ] `pages/admin/Users.tsx`
-- [ ] `pages/admin/UserDetail.tsx`
-- [ ] `pages/admin/Roles.tsx`
-- [ ] `pages/admin/AuditLogs.tsx`
-- [ ] `pages/admin/Settings.tsx`
+### ✅ Stage 4 — Admin pages (commit 4/4)
+- [x] `pages/admin/Users.tsx`
+- [x] `pages/admin/UserDetail.tsx`
+- [x] `pages/admin/Roles.tsx`
+- [x] `pages/admin/AuditLogs.tsx`
+- [x] `pages/admin/Settings.tsx`
+
+---
+
+## ✅ DONE — all 4 stages complete
 
 ## Stack
 

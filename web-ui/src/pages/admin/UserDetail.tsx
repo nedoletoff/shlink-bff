@@ -1,173 +1,126 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Stack, Title, Text, Card, Group, Badge,
-  ActionIcon, Tooltip, Table, Skeleton, Center,
-  Grid, Anchor,
-} from '@mantine/core';
-import { IconArrowLeft, IconUserCog } from '@tabler/icons-react';
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip as RTooltip, ResponsiveContainer,
-} from 'recharts';
-import { api } from '../../api/client';
-import { useAuth } from '../../contexts/AuthContext';
-import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
-import { formatDate } from '../../utils/date';
-import type { UserDetailResponse } from '../../types/api';
+  Stack, Group, Title, Text, Button, Paper,
+  Select, TextInput, PasswordInput, Skeleton,
+  Divider,
+} from '@mantine/core'
+import { useForm } from '@mantine/form'
+import { notifications } from '@mantine/notifications'
+import { IconArrowLeft } from '@tabler/icons-react'
+import { getAdminUser, updateAdminUser, updateApiKey } from '@/api/endpoints/adminUsers'
+import { RoleBadge } from '@/components/ui/RoleBadge'
+import { StatusBadge } from '@/components/ui/StatusBadge'
 
-export function UserDetail() {
-  const { id }       = useParams<{ id: string }>();
-  const navigate     = useNavigate();
-  const { user: me } = useAuth();
+export function AdminUserDetail() {
+  const { sub } = useParams<{ sub: string }>()
+  const navigate = useNavigate()
+  const qc = useQueryClient()
 
-  const [data,    setData]    = useState<UserDetailResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err,     setErr]     = useState<string | null>(null);
+  const { data: user, isLoading } = useQuery({
+    queryKey: ['admin-user', sub],
+    queryFn: () => getAdminUser(sub!),
+    enabled: Boolean(sub),
+  })
 
-  useEffect(() => {
-    if (!id) return;
-    setLoading(true); setErr(null);
-    api.get<UserDetailResponse>(`/api/admin/users/${encodeURIComponent(id)}`)
-      .then(setData)
-      .catch((e: unknown) => setErr(e instanceof Error ? e.message : 'Ошибка загрузки'))
-      .finally(() => setLoading(false));
-  }, [id]);
+  const form = useForm({
+    initialValues: { role: '', status: '', slugPrefix: '', apiKey: '' },
+  })
 
-  if (loading) return (
-    <Stack gap="lg">
-      <Skeleton height={32} width={240} />
-      <Skeleton height={100} radius="md" />
-      <Skeleton height={240} radius="md" />
-      <Skeleton height={300} radius="md" />
-    </Stack>
-  );
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      updateAdminUser(sub!, {
+        role: form.values.role || undefined,
+        status: form.values.status || undefined,
+        slugPrefix: form.values.slugPrefix || undefined,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-user', sub] })
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+      notifications.show({ color: 'teal', message: 'Пользователь обновлён' })
+    },
+  })
 
-  if (err) return <Center h={300}><Text c="red">{err}</Text></Center>;
-  if (!data) return null;
+  const apiKeyMutation = useMutation({
+    mutationFn: () => updateApiKey(sub!, form.values.apiKey),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-user', sub] })
+      notifications.show({ color: 'teal', message: 'API-ключ обновлён' })
+      form.setFieldValue('apiKey', '')
+    },
+  })
 
-  const isSelf = data.sub === me?.sub;
+  if (!isLoading && user && !form.isDirty()) {
+    form.setValues({
+      role: user.role,
+      status: user.status,
+      slugPrefix: user.slugPrefix ?? '',
+      apiKey: '',
+    })
+  }
 
   return (
     <Stack gap="lg">
-      {/* Навигация */}
       <Group>
-        <ActionIcon variant="subtle" onClick={() => navigate(-1)}>
-          <IconArrowLeft size={18} />
-        </ActionIcon>
-        <Title order={2}>{data.username}</Title>
-        <Badge
-          ml={4}
-          color={data.role === 'admin' ? 'red' : 'blue'}
-          variant="light"
-        >
-          {data.role}
-        </Badge>
+        <Button variant="subtle" size="sm" leftSection={<IconArrowLeft size={14} />} onClick={() => navigate('/admin/users')}>
+          Пользователи
+        </Button>
       </Group>
 
-      {/* Инфо-карточка */}
-      <Card withBorder radius="md" p="lg">
-        <Grid>
-          <Grid.Col span={{ base: 12, sm: 4 }}>
-            <Text size="xs" c="dimmed">Email</Text>
-            <Text size="sm" fw={500}>{data.email}</Text>
-          </Grid.Col>
-          <Grid.Col span={{ base: 12, sm: 4 }}>
-            <Text size="xs" c="dimmed">Ссылок</Text>
-            <Text size="sm" fw={500}>{data.linksCount.toLocaleString('ru-RU')}</Text>
-          </Grid.Col>
-          <Grid.Col span={{ base: 12, sm: 4 }}>
-            <Text size="xs" c="dimmed">Переходов всего</Text>
-            <Text size="sm" fw={500}>{data.visitsTotal.toLocaleString('ru-RU')}</Text>
-          </Grid.Col>
-        </Grid>
-
-        {/* Блок смены роли */}
-        <Group mt="md">
-          <Tooltip
-            label={isSelf ? 'Нельзя изменить роль себе' : 'Изменить роль'}
-            withArrow
-          >
-            <ActionIcon
-              variant="light"
-              color="blue"
-              disabled={isSelf}
-              onClick={() => navigate(`/admin/users?highlight=${data.sub}`)}
-            >
-              <IconUserCog size={16} />
-            </ActionIcon>
-          </Tooltip>
-          <Text size="xs" c="dimmed">Изменить роль — перейти в управление пользователями</Text>
+      {isLoading ? (
+        <Skeleton height={80} />
+      ) : (
+        <Group gap="xs" align="center">
+          <Title order={2}>{user?.username}</Title>
+          <RoleBadge role={user?.role ?? ''} />
+          <StatusBadge status={user?.status ?? ''} />
         </Group>
-      </Card>
+      )}
 
-      {/* График активности */}
-      <ErrorBoundary section="График">
-        <Card withBorder radius="md" p="lg">
-          <Text fw={600} mb="md">Активность по дням</Text>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={data.activityPerDay}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#373A40" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <RTooltip />
-              <Line type="monotone" dataKey="clicks"
-                stroke="#51cf66" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-      </ErrorBoundary>
-
-      {/* Таблица ссылок */}
-      <ErrorBoundary section="Ссылки пользователя">
-        <Card withBorder radius="md" p={0}>
-          <Group px="lg" py="md">
-            <Text fw={600}>Ссылки пользователя</Text>
+      <Paper withBorder p="md" radius="md">
+        <Text fw={600} mb="md">Основное</Text>
+        <Stack gap="sm">
+          <TextInput label="Email" value={user?.email ?? ''} readOnly />
+          <TextInput label="Sub" value={user?.sub ?? ''} readOnly />
+          <Select
+            label="Роль"
+            data={['admin', 'moderator', 'user', 'viewer']}
+            {...form.getInputProps('role')}
+          />
+          <Select
+            label="Статус"
+            data={['active', 'inactive', 'pending', 'disabled']}
+            {...form.getInputProps('status')}
+          />
+          <TextInput label="Префикс слага" {...form.getInputProps('slugPrefix')} />
+          <Group justify="flex-end">
+            <Button onClick={() => updateMutation.mutate()} loading={updateMutation.isPending}>
+              Сохранить
+            </Button>
           </Group>
-          <Table striped highlightOnHover>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Название</Table.Th>
-                <Table.Th>Короткая</Table.Th>
-                <Table.Th>Переходов</Table.Th>
-                <Table.Th>Создана</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {data.links.map(link => (
-                <Table.Tr
-                  key={link.shortCode}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => navigate(`/links/${link.shortCode}`)}
-                >
-                  <Table.Td>
-                    <Text size="sm" fw={500} c={link.title ? undefined : 'dimmed'}>
-                      {link.title || 'Без названия'}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Anchor
-                      href={link.shortUrl} target="_blank"
-                      size="sm" onClick={e => e.stopPropagation()}
-                    >
-                      {link.shortUrl}
-                    </Anchor>
-                  </Table.Td>
-                  <Table.Td>{link.visitsSummary.total.toLocaleString('ru-RU')}</Table.Td>
-                  <Table.Td><Text size="sm">{formatDate(link.dateCreated)}</Text></Table.Td>
-                </Table.Tr>
-              ))}
-              {data.links.length === 0 && (
-                <Table.Tr>
-                  <Table.Td colSpan={4}>
-                    <Center p="xl"><Text c="dimmed">Ссылок нет</Text></Center>
-                  </Table.Td>
-                </Table.Tr>
-              )}
-            </Table.Tbody>
-          </Table>
-        </Card>
-      </ErrorBoundary>
+        </Stack>
+      </Paper>
+
+      <Paper withBorder p="md" radius="md">
+        <Text fw={600} mb="md">Shlink API-ключ</Text>
+        <Stack gap="sm">
+          <PasswordInput
+            label="Новый API-ключ"
+            placeholder={user?.shlinkApiKey ? 'Уже задан, введите для замены' : 'Введите ключ'}
+            {...form.getInputProps('apiKey')}
+          />
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              onClick={() => apiKeyMutation.mutate()}
+              loading={apiKeyMutation.isPending}
+              disabled={!form.values.apiKey}
+            >
+              Обновить ключ
+            </Button>
+          </Group>
+        </Stack>
+      </Paper>
     </Stack>
-  );
+  )
 }
