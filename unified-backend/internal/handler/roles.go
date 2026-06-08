@@ -18,6 +18,7 @@ import (
 type RolesRepository interface {
 	GetAll(ctx context.Context) ([]domain.RolePermissions, error)
 	Upsert(ctx context.Context, p *domain.RolePermissions) error
+	Delete(ctx context.Context, role string) error
 }
 
 // RolesHandler — управление permissions ролей.
@@ -109,6 +110,31 @@ func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Requ
 	h.cache.Set(p)
 	slog.Info("roles: permissions updated", "role", role)
 	writeJSON(w, p, http.StatusOK)
+}
+
+// DELETE /api/admin/roles/{role}
+func (h *RolesHandler) DeleteRole(w http.ResponseWriter, r *http.Request) {
+	role := chi.URLParam(r, "role")
+	if role == "" {
+		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
+		return
+	}
+
+	// Не даём удалить встроенные роли.
+	if role == h.cfg.AdminRole || role == "user" {
+		writeJSON(w, map[string]string{"error": "cannot delete built-in role"}, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.permsRepo.Delete(r.Context(), role); err != nil {
+		slog.Error("roles: delete failed", "role", role, "err", err)
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+
+	h.cache.Delete(role)
+	slog.Info("roles: role deleted", "role", role)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // permToStringSlice переводит флаги RolePermissions в список строк.

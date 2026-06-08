@@ -2,90 +2,64 @@ package service
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 
 	"unified-backend/internal/domain"
 )
 
-// RolePermissionsReader — интерфейс для загрузки permissions из хранилища.
-type RolePermissionsReader interface {
+// RolesRepo — интерфейс хранилища ролей.
+type RolesRepo interface {
 	GetAll(ctx context.Context) ([]domain.RolePermissions, error)
+	Upsert(ctx context.Context, p *domain.RolePermissions) error
 }
 
-// PermissionsCache — потокобезопасный in-memory кеш permissions по роли.
+// PermissionsCache — потокобезопасный кэш permissions ролей.
 type PermissionsCache struct {
-	mu    sync.RWMutex
-	cache map[string]domain.RolePermissions
-	repo  RolePermissionsReader
-	admin string
+	mu        sync.RWMutex
+	data      map[string]domain.RolePermissions
+	repo      RolesRepo
+	adminRole string
 }
 
-func NewPermissionsCache(repo RolePermissionsReader, adminRole string) *PermissionsCache {
+func NewPermissionsCache(repo RolesRepo, adminRole string) *PermissionsCache {
 	return &PermissionsCache{
-		cache: make(map[string]domain.RolePermissions),
-		repo:  repo,
-		admin: adminRole,
+		data:      make(map[string]domain.RolePermissions),
+		repo:      repo,
+		adminRole: adminRole,
 	}
 }
 
-// NewStaticPermissionsCache создаёт кеш из заранее заданной мапы.
-// Используется в unit-тестах без реальной БД.
-func NewStaticPermissionsCache(perms map[string]domain.RolePermissions) *staticPermissionsCache {
-	return &staticPermissionsCache{cache: perms}
-}
-
-type staticPermissionsCache struct {
-	cache map[string]domain.RolePermissions
-}
-
-func (s *staticPermissionsCache) Get(role string) domain.RolePermissions {
-	if p, ok := s.cache[role]; ok {
-		return p
-	}
-	return domain.RolePermissions{}
-}
-
-// Load загружает все permissions из БД в кеш. Вызывается при старте.
+// Load загружает все роли из БД в кэш.
 func (c *PermissionsCache) Load(ctx context.Context) error {
-	all, err := c.repo.GetAll(ctx)
+	perms, err := c.repo.GetAll(ctx)
 	if err != nil {
 		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, p := range all {
-		c.cache[p.Role] = p
+	for _, p := range perms {
+		c.data[p.Role] = p
 	}
-	slog.Info("permissions cache loaded", "roles", len(c.cache))
 	return nil
 }
 
-// Get возвращает permissions для одной роли.
+// Get возвращает permissions для роли. Если нет — fallback.
 func (c *PermissionsCache) Get(role string) domain.RolePermissions {
 	c.mu.RLock()
-	p, ok := c.cache[role]
+	p, ok := c.data[role]
 	c.mu.RUnlock()
 	if ok {
 		return p
 	}
-	if role == c.admin {
-		slog.Warn("permissions cache: admin role not in DB, using defaults", "role", role)
+	if role == c.adminRole {
 		return domain.DefaultAdminPermissions(role)
 	}
-	slog.Warn("permissions cache: unknown role, using minimal defaults", "role", role)
 	return domain.DefaultUserPermissions(role)
 }
 
-// GetMerged возвращает объединённые permissions для набора ролей (OR-семантика).
+// GetMerged возвращает OR-объединение нескольких ролей.
 func (c *PermissionsCache) GetMerged(roles []string) domain.RolePermissions {
-	if len(roles) == 0 {
-		return domain.RolePermissions{}
-	}
-	if len(roles) == 1 {
-		return c.Get(roles[0])
-	}
-	merged := domain.RolePermissions{Role: ""}
+	var merged domain.RolePermissions
 	for _, r := range roles {
 		p := c.Get(r)
 		merged.CanViewOwnLinks = merged.CanViewOwnLinks || p.CanViewOwnLinks
@@ -108,19 +82,26 @@ func (c *PermissionsCache) GetMerged(roles []string) domain.RolePermissions {
 	return merged
 }
 
-// Set обновляет одну роль в кеше.
+// Set обновляет запись в кэше.
 func (c *PermissionsCache) Set(p domain.RolePermissions) {
 	c.mu.Lock()
-	c.cache[p.Role] = p
+	c.data[p.Role] = p
 	c.mu.Unlock()
 }
 
-// GetAll возвращает снимок всего кеша.
+// Delete удаляет роль из кэша.
+func (c *PermissionsCache) Delete(role string) {
+	c.mu.Lock()
+	delete(c.data, role)
+	c.mu.Unlock()
+}
+
+// GetAll возвращает снимок всех ролей.
 func (c *PermissionsCache) GetAll() []domain.RolePermissions {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]domain.RolePermissions, 0, len(c.cache))
-	for _, p := range c.cache {
+	out := make([]domain.RolePermissions, 0, len(c.data))
+	for _, p := range c.data {
 		out = append(out, p)
 	}
 	return out

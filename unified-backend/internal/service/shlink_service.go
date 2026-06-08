@@ -37,11 +37,12 @@ type PermissionsCacheIface interface {
 	Get(role string) domain.RolePermissions
 }
 
-// PermissionsCacheAdmin — расширенный интерфейс для админ-хендлеров (roles).
+// PermissionsCacheAdmin — расширенный интерфейс для админ-хендлеров.
 type PermissionsCacheAdmin interface {
 	PermissionsCacheIface
 	GetAll() []domain.RolePermissions
 	Set(p domain.RolePermissions)
+	Delete(role string)
 }
 
 // Compile-time check: *PermissionsCache реализует PermissionsCacheAdmin.
@@ -57,12 +58,10 @@ func NewShlinkService(client ShlinkClientIface, cfg *config.Config, perms Permis
 	return &ShlinkService{client: client, cfg: cfg, perms: perms}
 }
 
-// Perms возвращает permissions для роли пользователя.
 func (s *ShlinkService) Perms(user *domain.User) domain.RolePermissions {
 	return s.perms.Get(user.Role)
 }
 
-// EnforceSlugPrefix валидирует/устанавливает slug с учётом permissions.
 func (s *ShlinkService) EnforceSlugPrefix(
 	ctx context.Context,
 	user *domain.User,
@@ -112,7 +111,6 @@ func (s *ShlinkService) EnforceSlugPrefix(
 	return slug, nil
 }
 
-// FilterShortURLsByUser фильтрует ссылки согласно permissions роли.
 func (s *ShlinkService) FilterShortURLsByUser(
 	urls []shlink.ShortURL,
 	user *domain.User,
@@ -136,7 +134,6 @@ func (s *ShlinkService) FilterShortURLsByUser(
 	return filtered
 }
 
-// CanModifyShortCodeByPerms проверяет права роли на edit/delete.
 func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bool) (canAll bool, canOwn bool) {
 	p := s.perms.Get(user.Role)
 	if isDelete {
@@ -145,12 +142,10 @@ func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bo
 	return p.CanEditAllLinks, p.CanEditOwnLinks
 }
 
-// Client возвращает shlink-клиент для хендлеров.
 func (s *ShlinkService) Client() ShlinkClientIface {
 	return s.client
 }
 
-// ShlinkShortIDLength возвращает сконфигурированную длину short ID.
 func (s *ShlinkService) ShlinkShortIDLength() int {
 	return s.cfg.ShlinkShortIDLength
 }
