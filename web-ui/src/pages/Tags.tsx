@@ -41,7 +41,7 @@ export function Tags() {
     },
   })
 
-  const form = useForm({ initialValues: { name: renaming ?? '' } })
+  const form = useForm<{ name: string }>({ initialValues: { name: renaming ?? '' } })
 
   const openRename = (tag: string) => {
     setRenaming(tag)
@@ -95,7 +95,7 @@ export function Tags() {
       )}
 
       <Modal opened={Boolean(renaming)} onClose={() => setRenaming(null)} title="Переименовать тег" size="sm">
-        <form onSubmit={form.onSubmit((v) => renameMutation.mutate({ old: renaming!, next: v.name }))}>
+        <form onSubmit={form.onSubmit((v: { name: string }) => renameMutation.mutate({ old: renaming!, next: v.name }))}>
           <Stack gap="sm">
             <TextInput label="Новое название" required {...form.getInputProps('name')} />
             <Group justify="flex-end">

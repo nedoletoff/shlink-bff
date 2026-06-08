@@ -11,6 +11,13 @@ import { getAdminUser, updateAdminUser, updateApiKey } from '@/api/endpoints/adm
 import { RoleBadge } from '@/components/ui/RoleBadge'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 
+interface UserFormValues {
+  role: string
+  status: string
+  slugPrefix: string
+  apiKey: string
+}
+
 export function AdminUserDetail() {
   const { sub } = useParams<{ sub: string }>()
   const navigate = useNavigate()
@@ -22,7 +29,7 @@ export function AdminUserDetail() {
     enabled: Boolean(sub),
   })
 
-  const form = useForm({
+  const form = useForm<UserFormValues>({
     initialValues: { role: '', status: '', slugPrefix: '', apiKey: '' },
   })
 

@@ -71,7 +71,7 @@ export function AdminSettings() {
       {isLoading ? (
         <Skeleton height={500} />
       ) : (
-        <form onSubmit={form.onSubmit((v) => mutation.mutate(v))}>
+        <form onSubmit={form.onSubmit((v: PatchSettingsPayload) => mutation.mutate(v))}>
           <Stack gap="md">
             <Paper withBorder p="md" radius="md">
               <Text fw={600} mb="md">Shlink</Text>

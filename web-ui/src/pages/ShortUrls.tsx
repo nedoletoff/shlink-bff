@@ -52,7 +52,7 @@ function LinkModal({
 
   return (
     <Modal opened={opened} onClose={onClose} title={isEdit ? 'Редактировать ссылку' : 'Создать ссылку'}>
-      <form onSubmit={form.onSubmit((v) => mutation.mutate(v))}>
+      <form onSubmit={form.onSubmit((v: CreateShortURLPayload) => mutation.mutate(v))}>
         <Stack gap="sm">
           <TextInput label="Длинный URL" required {...form.getInputProps('longUrl')} />
           <TextInput label="Заголовок" {...form.getInputProps('title')} />
@@ -116,7 +116,7 @@ export function ShortUrls() {
             { value: 'inactive', label: 'Неактивные' },
           ]}
           value={status}
-          onChange={(v) => { setStatus(v); setPage(1) }}
+          onChange={(v: string | null) => { setStatus(v); setPage(1) }}
           w={140}
         />
       </Group>
