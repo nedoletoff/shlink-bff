@@ -1,4 +1,4 @@
-import { Paper, Stack, Text, Group, type PaperProps } from '@mantine/core'
+import { Paper, Text, Group, type PaperProps } from '@mantine/core'
 import type { ReactNode } from 'react'
 
 interface Props extends PaperProps {

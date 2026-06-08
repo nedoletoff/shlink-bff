@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Stack, Group, Title, TextInput, Select, Button,
-  Table, Text, Badge, ActionIcon, Tooltip, Modal,
+  Table, Text, ActionIcon, Tooltip, Modal,
   NumberInput, Skeleton, Pagination,
 } from '@mantine/core'
 import { useForm } from '@mantine/form'
@@ -10,7 +10,7 @@ import { useDisclosure } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import { IconPlus, IconPencil, IconTrash, IconLink, IconExternalLink } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
-import { getLinks, createLink, editLink, deleteLink, deactivateLink, activateLink } from '@/api/endpoints/links'
+import { getLinks, createLink, editLink, deleteLink } from '@/api/endpoints/links'
 import type { CreateShortURLPayload, ShortURL } from '@/types/api'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { StatusBadge } from '@/components/ui/StatusBadge'
@@ -92,12 +92,6 @@ export function ShortUrls() {
     },
   })
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ shortCode, active }: { shortCode: string; active: boolean }) =>
-      active ? deactivateLink(shortCode, '') : activateLink(shortCode, ''),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['links'] }),
-  })
-
   const links = data?.shortUrls.data ?? []
   const pagination = data?.shortUrls.pagination
 
@@ -146,7 +140,7 @@ export function ShortUrls() {
             </Table.Thead>
             <Table.Tbody>
               {links.map((link) => {
-                const isActive = !link.visitsSummary  // heuristic; use field when available
+                const isActive = !link.visitsSummary
                 return (
                   <Table.Tr key={link.shortCode} style={{ cursor: 'pointer' }}>
                     <Table.Td>

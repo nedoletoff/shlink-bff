@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Stack, Group, Title, Text, Button, Paper,
   Select, TextInput, PasswordInput, Skeleton,
-  Divider,
 } from '@mantine/core'
 import { useForm } from '@mantine/form'
 import { notifications } from '@mantine/notifications'

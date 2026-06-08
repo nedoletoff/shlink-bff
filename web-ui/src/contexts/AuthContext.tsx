@@ -4,14 +4,20 @@ import { Center, Loader } from '@mantine/core'
 import { getMe } from '@/api/endpoints/auth'
 import type { MeResponse } from '@/types/api'
 
-interface AuthContextValue {
+export interface AuthContextValue {
   me: MeResponse | null
   isLoading: boolean
   can: (permission: keyof MeResponse['permissions']) => boolean
   isAdmin: () => boolean
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null)
+export const AuthContext = createContext<AuthContextValue | null>(null)
+
+export function useAuth() {
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider')
+  return ctx
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: me, isLoading } = useQuery({
@@ -40,10 +46,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       {children}
     </AuthContext.Provider>
   )
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider')
-  return ctx
 }

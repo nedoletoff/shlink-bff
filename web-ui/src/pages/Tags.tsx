@@ -4,7 +4,6 @@ import {
   Stack, Group, Title, Table, Text,
   ActionIcon, Tooltip, TextInput, Modal, Button, Skeleton,
 } from '@mantine/core'
-import { useDisclosure } from '@mantine/hooks'
 import { useForm } from '@mantine/form'
 import { notifications } from '@mantine/notifications'
 import { IconPencil, IconTrash, IconTags } from '@tabler/icons-react'
