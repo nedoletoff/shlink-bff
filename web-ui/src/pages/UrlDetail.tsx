@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Stack, Title, Text, Card, Group, Anchor,
   ActionIcon, Tooltip, SegmentedControl, Table,
   Skeleton, Center, Grid, CopyButton, Pagination,
-  Badge, Alert, Button,
+  Badge, Alert,
 } from '@mantine/core';
 import {
   IconArrowLeft, IconCopy, IconCheck,
@@ -48,7 +48,7 @@ export function UrlDetail() {
   const canReactivate = perms?.canReactivateOwnLinks || perms?.canReactivateAllLinks;
   const canPermDelete = perms?.canDeleteOwnLinksPermanently || perms?.canDeleteAllLinksPermanently;
 
-  const loadData = () => {
+  const loadData = useCallback(() => {
     if (!shortCode) return;
     setLoading(true);
     setErr(null);
@@ -56,8 +56,9 @@ export function UrlDetail() {
       .then(setData)
       .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
-  };
+  }, [shortCode, period]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadData(); }, [shortCode, period]);
 
   const handleDeactivate = async () => {

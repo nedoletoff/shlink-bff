@@ -5,7 +5,7 @@ import {
 } from '@mantine/core';
 import { api } from '../../api/client';
 import { formatDateTime } from '../../utils/date';
-import type { AuditLog, AuditLogsResponse } from '../../types/api';
+import type { AuditLog } from '../../types/api';
 
 const PAGE_SIZE = 50;
 
@@ -31,6 +31,13 @@ const RESULT_OPTIONS = [
   { value: 'error',   label: 'Ошибка' },
 ];
 
+// Бэкенд возвращает { items, total, page, perPage }
+interface AuditLogsApiResponse {
+  items: AuditLog[];
+  total: number;
+  page:  number;
+}
+
 export function AuditLogs() {
   const [logs,    setLogs]    = useState<AuditLog[]>([]);
   const [total,   setTotal]   = useState(0);
@@ -45,10 +52,10 @@ export function AuditLogs() {
 
   const fetchLogs = useCallback(() => {
     setLoading(true);
-    api.get<AuditLogsResponse>('/api/admin/logs', {
+    api.get<AuditLogsApiResponse>('/api/admin/logs', {
       params: {
         page,
-        limit:    PAGE_SIZE,
+        perPage:  PAGE_SIZE,
         username: username || undefined,
         action:   action   || undefined,
         result:   result   || undefined,
@@ -56,7 +63,7 @@ export function AuditLogs() {
         dateTo:   dateTo   || undefined,
       },
     })
-      .then(r => { setLogs(r.logs ?? []); setTotal(r.total); })
+      .then(r => { setLogs(r.items ?? []); setTotal(r.total); })
       .catch(() => { setLogs([]); setTotal(0); })
       .finally(() => setLoading(false));
   }, [page, username, action, result, dateFrom, dateTo]);
@@ -121,7 +128,6 @@ export function AuditLogs() {
               {logs.map(log => (
                 <Table.Tr key={log.id}>
                   <Table.Td>
-                    {/* 2.4 — безопасный парсинг даты через formatDateTime */}
                     <Text size="xs" ff="monospace">
                       {formatDateTime(log.createdAt)}
                     </Text>

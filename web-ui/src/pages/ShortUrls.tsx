@@ -9,7 +9,7 @@ import { notifications } from '@mantine/notifications';
 import {
   IconPlus, IconTrash, IconSearch, IconEdit,
   IconCopy, IconCheck, IconBan, IconExternalLink,
-  IconPlayerPlay, IconAlertTriangle,
+  IconPlayerPlay,
 } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
