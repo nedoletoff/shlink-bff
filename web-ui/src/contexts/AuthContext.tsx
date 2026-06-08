@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react'
+import { createContext, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Center, Loader } from '@mantine/core'
 import { getMe } from '@/api/endpoints/auth'
@@ -12,12 +12,6 @@ export interface AuthContextValue {
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)
-
-export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider')
-  return ctx
-}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: me, isLoading } = useQuery({
