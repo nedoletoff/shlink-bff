@@ -45,15 +45,12 @@ func main() {
 	ownerRepo    := postgres.NewURLOwnershipRepository(db)
 	settingsRepo := postgres.NewServerSettingsRepository(db)
 
-	// ── DB config overrides ────────────────────────────────────────────────────────
-	if src, _ := settingsRepo.Get(ctx, "config_source"); src == "db" {
-		dbSettings, err := settingsRepo.GetAll(ctx)
-		if err != nil {
-			slog.Warn("config: failed to load db overrides", "err", err)
-		} else {
-			handler.ApplyDBOverrides(cfg, dbSettings)
-			slog.Info("config: applied db overrides", "keys", len(dbSettings))
-		}
+	// ── DB config: seed on first run, then always apply ────────────────────────────
+	if err := settingsRepo.SeedFromEnv(ctx, cfg); err != nil {
+		slog.Warn("settings: seed from env failed", "err", err)
+	}
+	if err := settingsRepo.ApplyAll(ctx, cfg); err != nil {
+		slog.Warn("settings: apply from db failed", "err", err)
 	}
 
 	// ── Shlink client ────────────────────────────────────────────────────────────────
@@ -82,14 +79,14 @@ func main() {
 	provisioner := shlinkctl.NewProvisioner(db, runner)
 
 	// ── Handlers ─────────────────────────────────────────────────────────────────
-	meH          := handler.NewMeHandler(cfg, permsCache)
-	dashH        := handler.NewDashboardHandler(shlinkSvc, userRepo, ownerRepo)
-	proxyH       := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
-	adminH       := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
-	rolesH       := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
-	urlDetailH   := handler.NewURLDetailHandler(shlinkSvc, ownerRepo)
-	settingsH    := handler.NewSettingsHandler(cfg, shlinkSvc, settingsRepo)
-	lifecycleH   := handler.NewURLLifecycleHandler(shlinkSvc, ownerRepo, auditRepo)
+	meH        := handler.NewMeHandler(cfg, permsCache)
+	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo, ownerRepo)
+	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
+	adminH     := handler.NewAdminHandler(userRepo, auditRepo, rolesRepo)
+	rolesH     := handler.NewRolesHandler(permsCache, rolesRepo, cfg)
+	urlDetailH := handler.NewURLDetailHandler(shlinkSvc, ownerRepo)
+	settingsH  := handler.NewSettingsHandler(cfg, shlinkSvc, settingsRepo)
+	lifecycleH := handler.NewURLLifecycleHandler(shlinkSvc, ownerRepo, auditRepo)
 
 	// ── Router ────────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()

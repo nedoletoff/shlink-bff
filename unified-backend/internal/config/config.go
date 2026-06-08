@@ -64,6 +64,10 @@ type Config struct {
 	ShlinkRunnerMode    string
 	ShlinkContainerName string
 	ShlinkBin           string
+
+	// Ограничения по умолчанию для новых ссылок (0 = без ограничений).
+	MaxVisitsDefault   int
+	LinkTtlDefaultDays int
 }
 
 // MustLoad загружает конфиг и завершает процесс при отсутствии обязательных переменных.
@@ -93,6 +97,8 @@ func Load() *Config {
 		ShlinkRunnerMode:         getEnv("SHLINK_RUNNER_MODE", "docker"),
 		ShlinkContainerName:      getEnv("SHLINK_CONTAINER", "shlink-api"),
 		ShlinkBin:                getEnv("SHLINK_BIN", "shlink"),
+		MaxVisitsDefault:         getInt("MAX_VISITS_DEFAULT", 0),
+		LinkTtlDefaultDays:       getInt("LINK_TTL_DEFAULT_DAYS", 0),
 	}
 	slog.Info("config loaded",
 		"role_source", cfg.RoleSource,
@@ -104,6 +110,8 @@ func Load() *Config {
 		"shlink_runner_mode", cfg.ShlinkRunnerMode,
 		"cors_origins", cfg.CORSAllowedOrigins,
 		"shlink_admin_api_key_set", cfg.ShlinkAdminAPIKey != "",
+		"max_visits_default", cfg.MaxVisitsDefault,
+		"link_ttl_default_days", cfg.LinkTtlDefaultDays,
 	)
 	return cfg
 }

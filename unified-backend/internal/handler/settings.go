@@ -2,11 +2,11 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"unified-backend/internal/config"
 	"unified-backend/internal/middleware"
@@ -16,8 +16,8 @@ import (
 
 // SettingsHandler обрабатывает GET/PATCH /api/settings (и /api/admin/settings).
 type SettingsHandler struct {
-	cfg         *config.Config
-	shlinkSvc   *service.ShlinkService
+	cfg          *config.Config
+	shlinkSvc    *service.ShlinkService
 	settingsRepo *postgres.ServerSettingsRepository
 }
 
@@ -30,12 +30,19 @@ func NewSettingsHandler(
 }
 
 type settingsResponse struct {
-	ShortCodeLength  int    `json:"shortCodeLength"`
-	AllowCustomSlugs bool   `json:"allowCustomSlugs"`
-	UserSlugPrefix   bool   `json:"userSlugPrefix"`
-	Domain           string `json:"domain"`
-	ShlinkVersion    string `json:"shlinkVersion"`
-	Connected        bool   `json:"connected"`
+	ShortCodeLength     int    `json:"shortCodeLength"`
+	AllowCustomSlugs    bool   `json:"allowCustomSlugs"`
+	UserSlugPrefix      bool   `json:"userSlugPrefix"`
+	Domain              string `json:"domain"`
+	ShlinkVersion       string `json:"shlinkVersion"`
+	Connected           bool   `json:"connected"`
+	MaxVisitsDefault    int    `json:"maxVisitsDefault"`
+	LinkTtlDefaultDays  int    `json:"linkTtlDefaultDays"`
+	AdminRole           string `json:"adminRole"`
+	RoleSource          string `json:"roleSource"`
+	CorsAllowedOrigins  string `json:"corsAllowedOrigins"`
+	ShlinkRunnerMode    string `json:"shlinkRunnerMode"`
+	ShlinkContainerName string `json:"shlinkContainerName"`
 }
 
 // GET /api/settings  (и /api/admin/settings)
@@ -53,20 +60,32 @@ func (h *SettingsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, settingsResponse{
-		ShortCodeLength:  h.cfg.ShlinkShortIDLength,
-		AllowCustomSlugs: h.cfg.UserCustomSlugEnabled,
-		UserSlugPrefix:   h.cfg.UserSlugPrefixEnabled,
-		Domain:           domain,
-		ShlinkVersion:    version,
-		Connected:        connected,
+		ShortCodeLength:     h.cfg.ShlinkShortIDLength,
+		AllowCustomSlugs:    h.cfg.UserCustomSlugEnabled,
+		UserSlugPrefix:      h.cfg.UserSlugPrefixEnabled,
+		Domain:              domain,
+		ShlinkVersion:       version,
+		Connected:           connected,
+		MaxVisitsDefault:    h.cfg.MaxVisitsDefault,
+		LinkTtlDefaultDays:  h.cfg.LinkTtlDefaultDays,
+		AdminRole:           h.cfg.AdminRole,
+		RoleSource:          string(h.cfg.RoleSource),
+		CorsAllowedOrigins:  strings.Join(h.cfg.CORSAllowedOrigins, ","),
+		ShlinkRunnerMode:    h.cfg.ShlinkRunnerMode,
+		ShlinkContainerName: h.cfg.ShlinkContainerName,
 	}, http.StatusOK)
 }
 
 type patchSettingsPayload struct {
-	ShortCodeLength  *int    `json:"shortCodeLength"`
-	AllowCustomSlugs *bool   `json:"allowCustomSlugs"`
-	UserSlugPrefix   *bool   `json:"userSlugPrefix"`
-	Domain           *string `json:"domain"`
+	ShortCodeLength     *int    `json:"shortCodeLength"`
+	AllowCustomSlugs    *bool   `json:"allowCustomSlugs"`
+	UserSlugPrefix      *bool   `json:"userSlugPrefix"`
+	Domain              *string `json:"domain"`
+	MaxVisitsDefault    *int    `json:"maxVisitsDefault"`
+	LinkTtlDefaultDays  *int    `json:"linkTtlDefaultDays"`
+	AdminRole           *string `json:"adminRole"`
+	ShlinkRunnerMode    *string `json:"shlinkRunnerMode"`
+	ShlinkContainerName *string `json:"shlinkContainerName"`
 }
 
 // PATCH /api/settings  (и /api/admin/settings)
@@ -114,6 +133,26 @@ func (h *SettingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 		h.cfg.ShlinkDefaultDomain = *payload.Domain
 		dbUpdates["default_domain"] = *payload.Domain
 	}
+	if payload.MaxVisitsDefault != nil {
+		h.cfg.MaxVisitsDefault = *payload.MaxVisitsDefault
+		dbUpdates["max_visits_default"] = strconv.Itoa(*payload.MaxVisitsDefault)
+	}
+	if payload.LinkTtlDefaultDays != nil {
+		h.cfg.LinkTtlDefaultDays = *payload.LinkTtlDefaultDays
+		dbUpdates["link_ttl_default_days"] = strconv.Itoa(*payload.LinkTtlDefaultDays)
+	}
+	if payload.AdminRole != nil && *payload.AdminRole != "" {
+		h.cfg.AdminRole = *payload.AdminRole
+		dbUpdates["admin_role"] = *payload.AdminRole
+	}
+	if payload.ShlinkRunnerMode != nil && *payload.ShlinkRunnerMode != "" {
+		h.cfg.ShlinkRunnerMode = *payload.ShlinkRunnerMode
+		dbUpdates["shlink_runner_mode"] = *payload.ShlinkRunnerMode
+	}
+	if payload.ShlinkContainerName != nil && *payload.ShlinkContainerName != "" {
+		h.cfg.ShlinkContainerName = *payload.ShlinkContainerName
+		dbUpdates["shlink_container_name"] = *payload.ShlinkContainerName
+	}
 
 	// ── 2. Персистируем в БД ──────────────────────────────────────────────────
 	if h.settingsRepo != nil && len(dbUpdates) > 0 {
@@ -137,15 +176,14 @@ func (h *SettingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 		); err != nil {
 			slog.Warn("settings: shlink PATCH /settings failed", "err", err,
 				"shortCodeLength", h.cfg.ShlinkShortIDLength)
-			// Не фатально: наш cfg обновлён, shlink может не поддерживать endpoint
 		}
 	}
 
 	writeJSON(w, map[string]string{"status": "updated"}, http.StatusOK)
 }
 
-// ApplyDBOverrides загружает значения из БД и переопределяет cfg.
-// Вызывается из main.go после MustLoad(), если config_source=db.
+// ApplyDBOverrides оставлен для обратной совместимости.
+// Deprecated: используйте ServerSettingsRepository.ApplyAll.
 func ApplyDBOverrides(cfg *config.Config, settings map[string]string) {
 	if v, ok := settings["short_code_length"]; ok {
 		if n, err := strconv.Atoi(v); err == nil && n >= 3 && n <= 32 {
@@ -165,5 +203,4 @@ func ApplyDBOverrides(cfg *config.Config, settings map[string]string) {
 	if v, ok := settings["default_domain"]; ok && v != "" {
 		cfg.ShlinkDefaultDomain = v
 	}
-	_ = fmt.Sprintf // keep import
 }

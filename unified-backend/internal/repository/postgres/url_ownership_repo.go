@@ -12,6 +12,7 @@ type URLOwnershipRecord struct {
 	ShortCode     string
 	Domain        string
 	OwnerSub      string
+	OwnerUsername string
 	IsActive      bool
 	DeactivatedAt *time.Time
 	DeactivatedBy *string
@@ -32,18 +33,19 @@ func NewURLOwnershipRepository(pool *pgxpool.Pool) *URLOwnershipRepository {
 
 // Save сохраняет новую запись ownership (is_active=true).
 // При конфликте — обновляет is_active=true и сбрасывает deleted_at (повторное создание).
-func (r *URLOwnershipRepository) Save(ctx context.Context, shortCode, ownerSub, domain string) error {
+func (r *URLOwnershipRepository) Save(ctx context.Context, shortCode, ownerSub, ownerUsername, domain string) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO url_ownership (short_code, domain, owner_sub, is_active)
-		 VALUES ($1, $2, $3, TRUE)
+		`INSERT INTO url_ownership (short_code, domain, owner_sub, owner_username, is_active)
+		 VALUES ($1, $2, $3, $4, TRUE)
 		 ON CONFLICT (short_code, domain)
 		 DO UPDATE SET owner_sub      = EXCLUDED.owner_sub,
+		               owner_username = EXCLUDED.owner_username,
 		               is_active      = TRUE,
 		               deactivated_at = NULL,
 		               deactivated_by = NULL,
 		               deleted_at     = NULL,
 		               deleted_by     = NULL`,
-		shortCode, domain, ownerSub,
+		shortCode, domain, ownerSub, ownerUsername,
 	)
 	return err
 }
@@ -66,14 +68,14 @@ func (r *URLOwnershipRepository) GetOwner(ctx context.Context, shortCode, domain
 func (r *URLOwnershipRepository) GetOwnership(ctx context.Context, shortCode, domain string) (*URLOwnershipRecord, error) {
 	var rec URLOwnershipRecord
 	err := r.pool.QueryRow(ctx,
-		`SELECT short_code, domain, owner_sub, is_active,
+		`SELECT short_code, domain, owner_sub, owner_username, is_active,
 		        deactivated_at, deactivated_by,
 		        created_at, deleted_at, deleted_by
 		   FROM url_ownership
 		  WHERE short_code = $1 AND domain = $2`,
 		shortCode, domain,
 	).Scan(
-		&rec.ShortCode, &rec.Domain, &rec.OwnerSub, &rec.IsActive,
+		&rec.ShortCode, &rec.Domain, &rec.OwnerSub, &rec.OwnerUsername, &rec.IsActive,
 		&rec.DeactivatedAt, &rec.DeactivatedBy,
 		&rec.CreatedAt, &rec.DeletedAt, &rec.DeletedBy,
 	)
@@ -169,7 +171,7 @@ func (r *URLOwnershipRepository) SetActive(ctx context.Context, shortCode, domai
 // GetByOwner возвращает все активные (не удалённые) ссылки пользователя.
 func (r *URLOwnershipRepository) GetByOwner(ctx context.Context, ownerSub string) ([]URLOwnershipRecord, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT short_code, domain, owner_sub, is_active,
+		`SELECT short_code, domain, owner_sub, owner_username, is_active,
 		        deactivated_at, deactivated_by,
 		        created_at, deleted_at, deleted_by
 		   FROM url_ownership
@@ -186,7 +188,7 @@ func (r *URLOwnershipRepository) GetByOwner(ctx context.Context, ownerSub string
 	for rows.Next() {
 		var rec URLOwnershipRecord
 		if err := rows.Scan(
-			&rec.ShortCode, &rec.Domain, &rec.OwnerSub, &rec.IsActive,
+			&rec.ShortCode, &rec.Domain, &rec.OwnerSub, &rec.OwnerUsername, &rec.IsActive,
 			&rec.DeactivatedAt, &rec.DeactivatedBy,
 			&rec.CreatedAt, &rec.DeletedAt, &rec.DeletedBy,
 		); err != nil {

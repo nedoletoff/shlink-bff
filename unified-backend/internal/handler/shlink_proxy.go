@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,6 +39,46 @@ func NewShlinkProxyHandler(
 		ownerRepo: ownerRepo,
 		cfg:       cfg,
 	}
+}
+
+// createShortURLRequest используется только для BFF-валидации;
+// само тело проксируется без изменений (кроме customSlug enforcement).
+type createShortURLRequest struct {
+	LongURL    string   `json:"longUrl"`
+	Title      string   `json:"title"`
+	CustomSlug string   `json:"customSlug"`
+	Tags       []string `json:"tags"`
+	MaxVisits  *int     `json:"maxVisits"`
+	ValidSince *string  `json:"validSince"`
+	ValidUntil *string  `json:"validUntil"`
+}
+
+func validateCreateShortURLPayload(req *createShortURLRequest) error {
+	if req.MaxVisits != nil && *req.MaxVisits < 1 {
+		return fmt.Errorf("maxVisits must be >= 1")
+	}
+	if req.ValidSince != nil && req.ValidUntil != nil {
+		since, err1 := time.Parse(time.RFC3339, *req.ValidSince)
+		until, err2 := time.Parse(time.RFC3339, *req.ValidUntil)
+		if err1 != nil {
+			return fmt.Errorf("validSince: invalid RFC3339 format")
+		}
+		if err2 != nil {
+			return fmt.Errorf("validUntil: invalid RFC3339 format")
+		}
+		if !since.Before(until) {
+			return fmt.Errorf("validSince must be before validUntil")
+		}
+	}
+	if len(req.Tags) > 20 {
+		return fmt.Errorf("tags: max 20 tags allowed")
+	}
+	for _, tag := range req.Tags {
+		if len(tag) > 64 {
+			return fmt.Errorf("tags: each tag must be <= 64 characters")
+		}
+	}
+	return nil
 }
 
 // GET /api/shlink/short-urls
@@ -115,6 +156,17 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Декодируем для валидации; payload остаётся как map для slug enforcement.
+	var req createShortURLRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
+		return
+	}
+	if err := validateCreateShortURLPayload(&req); err != nil {
+		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusUnprocessableEntity)
+		return
+	}
+
 	var payload map[string]any
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
@@ -149,7 +201,7 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.ownerRepo.Save(r.Context(), result.ShortCode, user.Sub, ""); err != nil {
+	if err := h.ownerRepo.Save(r.Context(), result.ShortCode, user.Sub, user.Username, ""); err != nil {
 		slog.Error("proxy: failed to save url ownership", "sub", user.Sub, "shortCode", result.ShortCode, "err", err)
 	}
 
