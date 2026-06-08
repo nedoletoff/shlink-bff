@@ -11,7 +11,7 @@ import (
 	"unified-backend/internal/shlink"
 )
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 type stubRolesRepoSvc struct{ data []domain.RolePermissions }
 
@@ -19,7 +19,17 @@ func (s *stubRolesRepoSvc) GetAll(_ context.Context) ([]domain.RolePermissions, 
 	return s.data, nil
 }
 
-// newShlinkServiceWithPerms создаёт ShlinkService с произвольным набором ролей.
+func (s *stubRolesRepoSvc) Upsert(_ context.Context, p *domain.RolePermissions) error {
+	for i, d := range s.data {
+		if d.Role == p.Role {
+			s.data[i] = *p
+			return nil
+		}
+	}
+	s.data = append(s.data, *p)
+	return nil
+}
+
 func newShlinkServiceWithPerms(perms []domain.RolePermissions, cfg *config.Config) *service.ShlinkService {
 	if cfg.ShlinkURL == "" {
 		cfg.ShlinkURL = "http://shlink-api:8080"
@@ -30,7 +40,6 @@ func newShlinkServiceWithPerms(perms []domain.RolePermissions, cfg *config.Confi
 	return service.NewShlinkService(cli, cfg, cache)
 }
 
-// newShlinkService — удобный хелпер для одной роли и базового cfg.
 func newShlinkService(p domain.RolePermissions) *service.ShlinkService {
 	return newShlinkServiceWithPerms([]domain.RolePermissions{p}, &config.Config{
 		AdminRole:             domain.RoleAdmin,
@@ -39,7 +48,6 @@ func newShlinkService(p domain.RolePermissions) *service.ShlinkService {
 	})
 }
 
-// newShlinkServiceFull — хелпер с контролем feature-флагов slug.
 func newShlinkServiceFull(slugPrefixEnabled, userCustomSlugEnabled bool) *service.ShlinkService {
 	return newShlinkServiceWithPerms(
 		[]domain.RolePermissions{
@@ -54,9 +62,8 @@ func newShlinkServiceFull(slugPrefixEnabled, userCustomSlugEnabled bool) *servic
 	)
 }
 
-// ── EnforceSlugPrefix ──────────────────────────────────────────────────────
+// ── EnforceSlugPrefix ──────────────────────────────────────────────────────────────
 
-// TestEnforceSlugPrefix_AdminBypass — для admin prefix не применяется
 func TestEnforceSlugPrefix_AdminBypass(t *testing.T) {
 	svc := newShlinkServiceFull(true, true)
 	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
@@ -71,7 +78,6 @@ func TestEnforceSlugPrefix_AdminBypass(t *testing.T) {
 	}
 }
 
-// TestEnforceSlugPrefix_UserNoPrefix — feature enabled, нет prefix → ошибка
 func TestEnforceSlugPrefix_UserNoPrefix(t *testing.T) {
 	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: ""}
@@ -83,7 +89,6 @@ func TestEnforceSlugPrefix_UserNoPrefix(t *testing.T) {
 	}
 }
 
-// TestEnforceSlugPrefix_UserCorrectPrefix — slug с правильным prefix → OK
 func TestEnforceSlugPrefix_UserCorrectPrefix(t *testing.T) {
 	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
@@ -98,7 +103,6 @@ func TestEnforceSlugPrefix_UserCorrectPrefix(t *testing.T) {
 	}
 }
 
-// TestEnforceSlugPrefix_UserWrongPrefix — slug без prefix → ошибка
 func TestEnforceSlugPrefix_UserWrongPrefix(t *testing.T) {
 	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
@@ -110,7 +114,6 @@ func TestEnforceSlugPrefix_UserWrongPrefix(t *testing.T) {
 	}
 }
 
-// TestEnforceSlugPrefix_FeatureDisabled — feature выключен → slug не трогается
 func TestEnforceSlugPrefix_FeatureDisabled(t *testing.T) {
 	svc := newShlinkServiceFull(false, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
@@ -125,7 +128,6 @@ func TestEnforceSlugPrefix_FeatureDisabled(t *testing.T) {
 	}
 }
 
-// TestEnforceSlugPrefix_UserNilSlug — nil slug + prefix → возвращает prefix
 func TestEnforceSlugPrefix_UserNilSlug(t *testing.T) {
 	svc := newShlinkServiceFull(true, true)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u2-"}
@@ -139,8 +141,6 @@ func TestEnforceSlugPrefix_UserNilSlug(t *testing.T) {
 	}
 }
 
-// TestEnforceSlugPrefix_UserCustomSlugFeatureDisabled —
-// UserCustomSlugEnabled=false → user получает ошибку при любом кастомном слаге
 func TestEnforceSlugPrefix_UserCustomSlugFeatureDisabled(t *testing.T) {
 	svc := newShlinkServiceFull(false, false)
 	user := &domain.User{Role: domain.RoleUser, SlugPrefix: "u1-"}
@@ -155,8 +155,6 @@ func TestEnforceSlugPrefix_UserCustomSlugFeatureDisabled(t *testing.T) {
 	}
 }
 
-// TestEnforceSlugPrefix_AdminIgnoresFeatureFlag —
-// UserCustomSlugEnabled=false → admin всё равно может задавать любой слаг
 func TestEnforceSlugPrefix_AdminIgnoresFeatureFlag(t *testing.T) {
 	svc := newShlinkServiceFull(false, false)
 	admin := &domain.User{Role: domain.RoleAdmin, SlugPrefix: "adm-"}
@@ -171,9 +169,8 @@ func TestEnforceSlugPrefix_AdminIgnoresFeatureFlag(t *testing.T) {
 	}
 }
 
-// ── DefaultPermissions ─────────────────────────────────────────────────────
+// ── DefaultPermissions ──────────────────────────────────────────────────────────────
 
-// TestDefaultPermissions_Admin — admin получает все права
 func TestDefaultPermissions_Admin(t *testing.T) {
 	perms := domain.DefaultAdminPermissions(domain.RoleAdmin)
 
@@ -185,7 +182,6 @@ func TestDefaultPermissions_Admin(t *testing.T) {
 	}
 }
 
-// TestDefaultPermissions_User — user не получает admin-права
 func TestDefaultPermissions_User(t *testing.T) {
 	perms := domain.DefaultUserPermissions(domain.RoleUser)
 

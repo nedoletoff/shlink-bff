@@ -17,7 +17,7 @@ import (
 	"unified-backend/internal/service"
 )
 
-// ── stubs ─────────────────────────────────────────────────────────────────────
+// ── stubs ─────────────────────────────────────────────────────────────────────────────────
 
 type stubRolesRepo struct {
 	data      []domain.RolePermissions
@@ -40,6 +40,15 @@ func (s *stubRolesRepo) Upsert(_ context.Context, p *domain.RolePermissions) err
 	s.data = append(s.data, *p)
 	return nil
 }
+func (s *stubRolesRepo) Delete(_ context.Context, role string) error {
+	for i, r := range s.data {
+		if r.Role == role {
+			s.data = append(s.data[:i], s.data[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
 
 func newTestCache(perms ...domain.RolePermissions) *service.PermissionsCache {
 	repo := &stubRolesRepo{data: perms}
@@ -58,7 +67,7 @@ func testCfg() *config.Config {
 	}
 }
 
-// ── ListRoles ─────────────────────────────────────────────────────────────────
+// ── ListRoles ─────────────────────────────────────────────────────────────────────────────
 
 func TestListRoles_ReturnsRolesAndMappings(t *testing.T) {
 	cache := newTestCache(
@@ -86,7 +95,7 @@ func TestListRoles_ReturnsRolesAndMappings(t *testing.T) {
 	}
 }
 
-// ── GetRole ───────────────────────────────────────────────────────────────────
+// ── GetRole ─────────────────────────────────────────────────────────────────────────────────
 
 func TestGetRole_ExistingRole(t *testing.T) {
 	cache := newTestCache(
@@ -137,7 +146,7 @@ func TestGetRole_UnknownRole_ReturnsFallback(t *testing.T) {
 	}
 }
 
-// ── UpsertRolePermissions ─────────────────────────────────────────────────────
+// ── UpsertRolePermissions ────────────────────────────────────────────────────────────────────
 
 func TestUpsertRolePermissions_Valid(t *testing.T) {
 	cache := newTestCache()
@@ -195,7 +204,7 @@ func TestUpsertRolePermissions_RepoError(t *testing.T) {
 	}
 }
 
-// ── permToStringSlice (через ListRoles) ───────────────────────────────────────
+// ── permToStringSlice (через ListRoles) ─────────────────────────────────────────────────
 
 func TestPermToStringSlice_OnlyTrueFlags(t *testing.T) {
 	cache := newTestCache(
@@ -232,7 +241,7 @@ func TestPermToStringSlice_OnlyTrueFlags(t *testing.T) {
 	}
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────────────────
 
 var errHandlerStub = &handlerErr{"stub"}
 

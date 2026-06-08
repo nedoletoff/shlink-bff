@@ -17,7 +17,7 @@ import (
 	"unified-backend/internal/service"
 )
 
-// ── in-memory RolesRepository ──────────────────────────────────────────────
+// ── in-memory RolesRepository ──────────────────────────────────────────────────────
 
 type memRolesRepo struct {
 	mu    sync.RWMutex
@@ -49,7 +49,14 @@ func (r *memRolesRepo) Upsert(_ context.Context, p *domain.RolePermissions) erro
 	return nil
 }
 
-// ── fixtures ───────────────────────────────────────────────────────────────
+func (r *memRolesRepo) Delete(_ context.Context, role string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.store, role)
+	return nil
+}
+
+// ── fixtures ────────────────────────────────────────────────────────────────────
 
 func newRolesHandler(initial ...domain.RolePermissions) *handler.RolesHandler {
 	cache := service.NewPermissionsCache(nil, domain.RoleAdmin)
@@ -61,7 +68,7 @@ func newRolesHandler(initial ...domain.RolePermissions) *handler.RolesHandler {
 	return handler.NewRolesHandler(cache, repo, cfg)
 }
 
-// ── ListRoles ──────────────────────────────────────────────────────────────
+// ── ListRoles ────────────────────────────────────────────────────────────────────
 
 func TestListRoles_ReturnsAllRolesAndMappings(t *testing.T) {
 	adminP := domain.DefaultAdminPermissions(domain.RoleAdmin)
@@ -97,7 +104,7 @@ func TestListRoles_ReturnsAllRolesAndMappings(t *testing.T) {
 	}
 }
 
-// ── GetRole ────────────────────────────────────────────────────────────────
+// ── GetRole ──────────────────────────────────────────────────────────────────────────
 
 func TestGetRole_KnownRole(t *testing.T) {
 	adminP := domain.DefaultAdminPermissions(domain.RoleAdmin)
@@ -121,8 +128,6 @@ func TestGetRole_KnownRole(t *testing.T) {
 	}
 }
 
-// TestGetRole_UnknownRoleReturnsMinimalDefaults verifies that an unknown role
-// falls back to DefaultUserPermissions (own-only flags), not an all-false struct.
 func TestGetRole_UnknownRoleReturnsMinimalDefaults(t *testing.T) {
 	h := newRolesHandler()
 	w, r := newChiRequest(http.MethodGet, "/api/admin/roles/ghost", "", "role", "ghost")
@@ -133,12 +138,11 @@ func TestGetRole_UnknownRoleReturnsMinimalDefaults(t *testing.T) {
 	}
 	var p domain.RolePermissions
 	_ = json.NewDecoder(w.Body).Decode(&p)
-	// minimal defaults: own-only flags are true, elevated flags are false
 	if !p.CanViewOwnLinks {
 		t.Error("unknown role: CanViewOwnLinks should be true (minimal default)")
 	}
 	if p.CanViewAllLinks {
-		t.Error("unknown role: CanViewAllLinks must be false (no elevation)")
+		t.Error("unknown role: CanViewAllLinks must be false")
 	}
 	if p.CanManageUsers {
 		t.Error("unknown role: CanManageUsers must be false")
@@ -148,7 +152,7 @@ func TestGetRole_UnknownRoleReturnsMinimalDefaults(t *testing.T) {
 	}
 }
 
-// ── UpsertRolePermissions ──────────────────────────────────────────────────
+// ── UpsertRolePermissions ────────────────────────────────────────────────────────────
 
 func TestUpsertRolePermissions_CreateNew(t *testing.T) {
 	h := newRolesHandler()
@@ -212,7 +216,7 @@ func TestUpsertRolePermissions_InvalidJSON(t *testing.T) {
 	}
 }
 
-// ── permToStringSlice round-trip ───────────────────────────────────────────
+// ── permToStringSlice round-trip ─────────────────────────────────────────────────────
 
 func TestPermToStringSlice_AllFlags(t *testing.T) {
 	p := domain.DefaultAdminPermissions(domain.RoleAdmin)
@@ -247,10 +251,8 @@ func TestPermToStringSlice_NoFlags(t *testing.T) {
 	}
 }
 
-// ── chi URL param injection helper ────────────────────────────────────────
+// ── chi URL param injection helper ──────────────────────────────────────────────
 
-// newChiRequest injects a chi URL param using chi.RouteCtxKey so that
-// chi.URLParam resolves the param correctly inside handlers.
 func newChiRequest(
 	method, path, body string,
 	paramKey, paramVal string,
@@ -265,7 +267,6 @@ func newChiRequest(
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chiContext()
 	rctx.URLParams.Add(paramKey, paramVal)
-	// Use chi.RouteCtxKey — the same key chi.URLParam reads internally.
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 	return httptest.NewRecorder(), req
 }
