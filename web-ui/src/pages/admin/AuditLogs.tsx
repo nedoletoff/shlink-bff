@@ -59,7 +59,7 @@ export function AdminAuditLogs() {
           clearable
           data={['create', 'edit', 'delete', 'deactivate', 'activate', 'login', 'logout']}
           value={action}
-          onChange={(v) => { setAction(v); setPage(1) }}
+          onChange={(v: string | null) => { setAction(v); setPage(1) }}
           w={180}
         />
         <Select
@@ -67,20 +67,20 @@ export function AdminAuditLogs() {
           clearable
           data={['success', 'error', 'denied']}
           value={result}
-          onChange={(v) => { setResult(v); setPage(1) }}
+          onChange={(v: string | null) => { setResult(v); setPage(1) }}
           w={150}
         />
         <DateInput
           placeholder="От"
           value={dateFrom}
-          onChange={(v) => { setDateFrom(v); setPage(1) }}
+          onChange={(v: Date | null) => { setDateFrom(v); setPage(1) }}
           w={140}
           clearable
         />
         <DateInput
           placeholder="До"
           value={dateTo}
-          onChange={(v) => { setDateTo(v); setPage(1) }}
+          onChange={(v: Date | null) => { setDateTo(v); setPage(1) }}
           w={140}
           clearable
         />
