@@ -1,69 +1,30 @@
-import { Center, Loader, Stack, Text, Button } from '@mantine/core';
-import { useAuth } from '../contexts/AuthContext';
-import type { UserRole } from '../types/api';
+import { Center, Loader, Stack, Text, Button } from '@mantine/core'
+import { useAuth } from '../hooks/useAuth'
 
 interface Props {
-  children:      React.ReactNode;
-  requiredRole?: UserRole;
+  children: React.ReactNode
+  requiredRole?: string
 }
 
 export function ProtectedRoute({ children, requiredRole }: Props) {
-  const { user, loading, error } = useAuth();
+  const { me: user, isLoading: loading } = useAuth()
 
   if (loading) {
     return (
       <Center h="100vh">
         <Loader size="xl" />
       </Center>
-    );
+    )
   }
 
-  if (!user && !error) {
-    // Нет пользователя и нет ошибки — редирект на oauth2.
-    // rd должен включать search и hash, иначе после логина теряются query-параметры (#11).
+  if (!user) {
     const returnTo =
-      window.location.pathname + window.location.search + window.location.hash;
-    window.location.href = '/oauth2/start?rd=' + encodeURIComponent(returnTo);
-    return null;
+      window.location.pathname + window.location.search + window.location.hash
+    window.location.href = '/oauth2/start?rd=' + encodeURIComponent(returnTo)
+    return null
   }
 
-  if (error) {
-    // Ошибка от /api/me (403 = не провизионирован, 500 = внутренняя)
-    // Не редиректим в бесконечный цикл — показываем страницу ошибки
-    return (
-      <Center h="100vh">
-        <Stack align="center" gap="md">
-          <Text size="xl" fw={700} c="red">Ошибка авторизации</Text>
-          <Text c="dimmed" ta="center" maw={400}>
-            {error.includes('403') || error.includes('Forbidden')
-              ? 'Ваш аккаунт не провизионирован администратором. Обратитесь к администратору системы.'
-              : `Не удалось получить данные профиля: ${error}`
-            }
-          </Text>
-          <Button
-            variant="light"
-            onClick={() => {
-              // POST-форма: GET /oauth2/sign_out без сессии уходит в цикл редиректов
-              const form = document.createElement('form');
-              form.method = 'POST';
-              form.action = '/oauth2/sign_out';
-              const rd = document.createElement('input');
-              rd.type = 'hidden';
-              rd.name = 'rd';
-              rd.value = '/oauth2/sign_in';
-              form.appendChild(rd);
-              document.body.appendChild(form);
-              form.submit();
-            }}
-          >
-            Выйти
-          </Button>
-        </Stack>
-      </Center>
-    );
-  }
-
-  if (requiredRole && user!.role !== requiredRole) {
+  if (requiredRole && user.role !== requiredRole) {
     return (
       <Center h="100vh">
         <Stack align="center" gap="md">
@@ -74,8 +35,8 @@ export function ProtectedRoute({ children, requiredRole }: Props) {
           </Button>
         </Stack>
       </Center>
-    );
+    )
   }
 
-  return <>{children}</>;
+  return <>{children}</>
 }

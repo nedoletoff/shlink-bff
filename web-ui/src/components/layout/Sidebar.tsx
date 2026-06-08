@@ -1,74 +1,68 @@
+import { NavLink, Stack, Text } from '@mantine/core'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
-  NavLink, Stack, Divider, Text, Box,
-} from '@mantine/core'
-import {
-  IconLayoutDashboard, IconLink, IconTags,
-  IconUsers, IconShield, IconFileText,
-  IconSettings,
+  IconHome, IconLink, IconTags, IconUsers,
+  IconShield, IconClipboardList, IconSettings,
 } from '@tabler/icons-react'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { useAuth } from '@/contexts/AuthContext'
+import { useAuth } from '@/hooks/useAuth'
+import type { MeResponse } from '@/types/api'
 
-interface NavItem {
-  label: string
-  path: string
-  icon: React.ReactNode
-  adminOnly?: boolean
+interface Props {
+  me: MeResponse | null
 }
 
-const navItems: NavItem[] = [
-  { label: 'Дашборд', path: '/', icon: <IconLayoutDashboard size={18} /> },
-  { label: 'Ссылки', path: '/links', icon: <IconLink size={18} /> },
-  { label: 'Теги', path: '/tags', icon: <IconTags size={18} /> },
+const userLinks = [
+  { to: '/', label: 'Дашборд', icon: IconHome },
+  { to: '/links', label: 'Ссылки', icon: IconLink },
+  { to: '/tags', label: 'Теги', icon: IconTags },
 ]
 
-const adminItems: NavItem[] = [
-  { label: 'Пользователи', path: '/admin/users', icon: <IconUsers size={18} /> },
-  { label: 'Роли', path: '/admin/roles', icon: <IconShield size={18} /> },
-  { label: 'Аудит', path: '/admin/audit', icon: <IconFileText size={18} /> },
-  { label: 'Настройки', path: '/admin/settings', icon: <IconSettings size={18} /> },
+const adminLinks = [
+  { to: '/admin/users', label: 'Пользователи', icon: IconUsers },
+  { to: '/admin/roles', label: 'Роли', icon: IconShield },
+  { to: '/admin/audit', label: 'Аудит', icon: IconClipboardList },
+  { to: '/admin/settings', label: 'Настройки', icon: IconSettings },
 ]
 
-export function Sidebar({ onClose }: { onClose?: () => void }) {
-  const { pathname } = useLocation()
+export function Sidebar({ me }: Props) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { isAdmin } = useAuth()
 
-  const go = (path: string) => {
-    navigate(path)
-    onClose?.()
-  }
-
   return (
-    <Box h="100%" py="sm">
-      <Stack gap={2}>
-        {navItems.map((item) => (
-          <NavLink
-            key={item.path}
-            label={item.label}
-            leftSection={item.icon}
-            active={pathname === item.path}
-            onClick={() => go(item.path)}
-          />
-        ))}
+    <Stack gap={4}>
+      {userLinks.map(({ to, label, icon: Icon }) => (
+        <NavLink
+          key={to}
+          label={label}
+          leftSection={<Icon size={16} />}
+          active={location.pathname === to}
+          onClick={() => navigate(to)}
+        />
+      ))}
 
-        {isAdmin() && (
-          <>
-            <Divider my="xs" label={
-              <Text size="xs" c="dimmed" fw={600} tt="uppercase" style={{ letterSpacing: '0.05em' }}>Админ</Text>
-            } />
-            {adminItems.map((item) => (
-              <NavLink
-                key={item.path}
-                label={item.label}
-                leftSection={item.icon}
-                active={pathname === item.path}
-                onClick={() => go(item.path)}
-              />
-            ))}
-          </>
-        )}
-      </Stack>
-    </Box>
+      {isAdmin() && (
+        <>
+          <Text size="xs" c="dimmed" px="sm" mt="sm" mb={2} tt="uppercase" fw={600}>
+            Администрирование
+          </Text>
+          {adminLinks.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              label={label}
+              leftSection={<Icon size={16} />}
+              active={location.pathname.startsWith(to)}
+              onClick={() => navigate(to)}
+            />
+          ))}
+        </>
+      )}
+
+      {me && (
+        <Text size="xs" c="dimmed" px="sm" mt="auto" pt="md">
+          {me.email}
+        </Text>
+      )}
+    </Stack>
   )
 }

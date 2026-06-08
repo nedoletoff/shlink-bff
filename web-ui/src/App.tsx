@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Center, Loader, Title, Text, Button, Stack } from '@mantine/core'
 import { AppShellWrapper } from '@/components/layout/AppShellWrapper'
-import { useAuth } from '@/contexts/AuthContext'
+import { useAuth } from '@/hooks/useAuth'
 import { Dashboard } from '@/pages/Dashboard'
 import { ShortUrls } from '@/pages/ShortUrls'
 import { UrlDetail } from '@/pages/UrlDetail'

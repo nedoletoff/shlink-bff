@@ -1,47 +1,45 @@
-import { Group, Burger, Title, ActionIcon, Menu, Avatar, Text } from '@mantine/core'
+import { Group, Text, Avatar, Menu, UnstyledButton } from '@mantine/core'
 import { IconLogout, IconUser } from '@tabler/icons-react'
-import { useAuth } from '@/contexts/AuthContext'
-import { ThemeToggle } from './ThemeToggle'
+import { useAuth } from '@/hooks/useAuth'
+import type { MeResponse } from '@/types/api'
 
-interface HeaderProps {
-  opened: boolean
-  onToggle: () => void
+interface Props {
+  me: MeResponse | null
 }
 
-export function Header({ opened, onToggle }: HeaderProps) {
-  const { me } = useAuth()
-
-  const logout = () => { window.location.href = '/auth/logout' }
+export function Header({ me }: Props) {
+  const { isAdmin } = useAuth()
 
   return (
-    <Group h="100%" px="md" justify="space-between">
-      <Group>
-        <Burger opened={opened} onClick={onToggle} hiddenFrom="sm" size="sm" />
-        <Title order={4} style={{ letterSpacing: '-0.02em' }}>Shlink</Title>
-      </Group>
-
-      <Group gap="xs">
-        <ThemeToggle />
-        <Menu position="bottom-end" shadow="md">
+    <Group gap="sm">
+      {me && (
+        <Menu shadow="md" width={180}>
           <Menu.Target>
-            <ActionIcon variant="subtle" size="lg" aria-label="Меню пользователя">
-              <Avatar size={30} radius="xl" color="teal">
-                {me?.username?.[0]?.toUpperCase() ?? <IconUser size={16} />}
-              </Avatar>
-            </ActionIcon>
+            <UnstyledButton>
+              <Group gap="xs">
+                <Avatar size="sm" color="teal" radius="xl">
+                  {me.username?.[0]?.toUpperCase()}
+                </Avatar>
+                <Text size="sm" fw={500} visibleFrom="sm">{me.username}</Text>
+              </Group>
+            </UnstyledButton>
           </Menu.Target>
           <Menu.Dropdown>
-            <Menu.Label>
-              <Text size="sm" fw={500}>{me?.username}</Text>
-              <Text size="xs" c="dimmed">{me?.email}</Text>
-            </Menu.Label>
+            <Menu.Label>{isAdmin() ? 'Администратор' : 'Пользователь'}</Menu.Label>
+            <Menu.Item leftSection={<IconUser size={14} />}>
+              {me.email}
+            </Menu.Item>
             <Menu.Divider />
-            <Menu.Item leftSection={<IconLogout size={14} />} color="red" onClick={logout}>
+            <Menu.Item
+              color="red"
+              leftSection={<IconLogout size={14} />}
+              onClick={() => { window.location.href = '/oauth2/sign_out' }}
+            >
               Выйти
             </Menu.Item>
           </Menu.Dropdown>
         </Menu>
-      </Group>
+      )}
     </Group>
   )
 }
