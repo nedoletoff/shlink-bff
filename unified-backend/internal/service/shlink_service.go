@@ -3,44 +3,63 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/shlink"
 )
 
-type ShlinkService struct {
-	client *shlink.Client
-	cfg    *config.Config
-	perms  *PermissionsCache
+// ShlinkClientIface — интерфейс Shlink HTTP-клиента.
+// Определён здесь чтобы позволить подменять stub в unit-тестах без реального Shlink.
+type ShlinkClientIface interface {
+	GetShortURLs(ctx context.Context, apiKey, rawQuery string) (*shlink.ShortURLsResponse, error)
+	GetShortURL(ctx context.Context, apiKey, shortCode string) (*shlink.ShortURL, error)
+	GetShortURLVisits(ctx context.Context, apiKey, shortCode, startDate, endDate string, itemsPerPage int) (*shlink.VisitsResponse, error)
+	CreateShortURL(ctx context.Context, apiKey string, body io.Reader) (*shlink.ShortURL, error)
+	UpdateShortURL(ctx context.Context, apiKey, shortCode string, body io.Reader) (*shlink.ShortURL, error)
+	DeleteShortURL(ctx context.Context, apiKey, shortCode string) error
+	GetTags(ctx context.Context, apiKey string) (*shlink.TagsWithStatsResponse, error)
+	RenameTag(ctx context.Context, apiKey string, body io.Reader) error
+	DeleteTags(ctx context.Context, apiKey string, tags []string) error
+	GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endDate string, itemsPerPage int) (*shlink.VisitsResponse, error)
+	PatchSettings(ctx context.Context, adminAPIKey string, shortCodeLength int) error
+	GetHealth(ctx context.Context) (*shlink.HealthResponse, error)
+	ValidateVersion(ctx context.Context, minMajor int, attempts int, delay time.Duration) error
 }
 
-func NewShlinkService(client *shlink.Client, cfg *config.Config, perms *PermissionsCache) *ShlinkService {
+// Compile-time check: *shlink.Client реализует ShlinkClientIface.
+var _ ShlinkClientIface = (*shlink.Client)(nil)
+
+type ShlinkService struct {
+	client ShlinkClientIface
+	cfg    *config.Config
+	perms  PermissionsCacheIface
+}
+
+// PermissionsCacheIface позволяет подменять кеш в тестах.
+type PermissionsCacheIface interface {
+	Get(role string) domain.RolePermissions
+}
+
+func NewShlinkService(client ShlinkClientIface, cfg *config.Config, perms PermissionsCacheIface) *ShlinkService {
 	return &ShlinkService{client: client, cfg: cfg, perms: perms}
 }
 
 // Perms возвращает permissions для роли пользователя.
 func (s *ShlinkService) Perms(user *domain.User) domain.RolePermissions {
-	return s.perms.Get(user.Role)
+	return s.perms.Get(string(user.Role))
 }
 
 // EnforceSlugPrefix валидирует/устанавливает slug с учётом permissions.
-//
-// Логика:
-//  1. Если у роли нет can_create_links → ошибка.
-//  2. Если передан customSlug:
-//     a. Если UserCustomSlugEnabled=false и роль не admin (CanViewAllLinks) → ошибка.
-//     b. Если нет can_create_with_custom_slug → ошибка.
-//  3. Если не передан slug и нет can_create_without_slug → ошибка.
-//  4. Если включён UserSlugPrefixEnabled и роль не имеет глобальных прав
-//     → принудительно добавляем slug_prefix.
 func (s *ShlinkService) EnforceSlugPrefix(
 	ctx context.Context,
 	user *domain.User,
 	customSlug *string,
 ) (string, error) {
-	p := s.perms.Get(user.Role)
+	p := s.perms.Get(string(user.Role))
 
 	if !p.CanCreateLinks {
 		return "", fmt.Errorf("role %q is not allowed to create links", user.Role)
@@ -48,13 +67,10 @@ func (s *ShlinkService) EnforceSlugPrefix(
 
 	hasCustomSlug := customSlug != nil && *customSlug != ""
 
-	// Двухступенчатая проверка кастомного слага.
 	if hasCustomSlug {
-		// Ступень 1: feature-флаг. Не распространяется на admin (CanViewAllLinks).
 		if !p.CanViewAllLinks && !s.cfg.UserCustomSlugEnabled {
 			return "", fmt.Errorf("custom slugs are disabled for role %q", user.Role)
 		}
-		// Ступень 2: permission роли.
 		if !p.CanCreateWithCustomSlug {
 			return "", fmt.Errorf("role %q is not allowed to set a custom slug", user.Role)
 		}
@@ -64,8 +80,6 @@ func (s *ShlinkService) EnforceSlugPrefix(
 		return "", fmt.Errorf("role %q must provide a custom slug", user.Role)
 	}
 
-	// Принудительный slug_prefix только если изоляция включена
-	// и роль не имеет глобального доступа к чужим ссылкам.
 	if !s.cfg.UserSlugPrefixEnabled || p.CanViewAllLinks {
 		if hasCustomSlug {
 			return *customSlug, nil
@@ -90,14 +104,12 @@ func (s *ShlinkService) EnforceSlugPrefix(
 }
 
 // FilterShortURLsByUser фильтрует ссылки согласно permissions роли.
-// Фильтрация по ownership (конкретные short_code) должна была быть выполнена до вызова этого метода:
-// хендлер должен передать только ownedCodes (сет short_code из url_ownership).
 func (s *ShlinkService) FilterShortURLsByUser(
 	urls []shlink.ShortURL,
 	user *domain.User,
 	ownedCodes map[string]struct{},
 ) []shlink.ShortURL {
-	p := s.perms.Get(user.Role)
+	p := s.perms.Get(string(user.Role))
 
 	if p.CanViewAllLinks {
 		return urls
@@ -106,7 +118,6 @@ func (s *ShlinkService) FilterShortURLsByUser(
 		return []shlink.ShortURL{}
 	}
 
-	// Фильтрация по явной таблице ownership.
 	filtered := make([]shlink.ShortURL, 0, len(ownedCodes))
 	for _, u := range urls {
 		if _, ok := ownedCodes[u.ShortCode]; ok {
@@ -117,9 +128,8 @@ func (s *ShlinkService) FilterShortURLsByUser(
 }
 
 // CanModifyShortCodeByPerms проверяет права роли на edit/delete.
-// Не проверяет ownership — это делает хендлер через ownerRepo.IsOwner.
 func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bool) (canAll bool, canOwn bool) {
-	p := s.perms.Get(user.Role)
+	p := s.perms.Get(string(user.Role))
 	if isDelete {
 		return p.CanDeleteAllLinks, p.CanDeleteOwnLinks
 	}
@@ -127,11 +137,11 @@ func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bo
 }
 
 // Client возвращает shlink-клиент для хендлеров.
-func (s *ShlinkService) Client() *shlink.Client {
+func (s *ShlinkService) Client() ShlinkClientIface {
 	return s.client
 }
 
-// ShlinkShortIDLength возвращает сконфигурированную длину short ID (0 = не задана).
+// ShlinkShortIDLength возвращает сконфигурированную длину short ID.
 func (s *ShlinkService) ShlinkShortIDLength() int {
 	return s.cfg.ShlinkShortIDLength
 }

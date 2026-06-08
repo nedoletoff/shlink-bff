@@ -9,20 +9,16 @@ import (
 )
 
 // RolePermissionsReader — интерфейс для загрузки permissions из хранилища.
-// Используется вместо прямой зависимости от *postgres.RolePermissionsRepository,
-// что позволяет подставлять stub в unit-тестах без поднятия БД.
 type RolePermissionsReader interface {
 	GetAll(ctx context.Context) ([]domain.RolePermissions, error)
 }
 
 // PermissionsCache — потокобезопасный in-memory кеш permissions по роли.
-// Загружается при старте, обновляется при изменении через admin API.
-// Если роль отсутствует в кеше — возвращаются нулевые права (deny by default).
 type PermissionsCache struct {
 	mu    sync.RWMutex
 	cache map[string]domain.RolePermissions
 	repo  RolePermissionsReader
-	admin string // adminRole из cfg — получает DefaultAdminPermissions при отсутствии в БД
+	admin string
 }
 
 func NewPermissionsCache(repo RolePermissionsReader, adminRole string) *PermissionsCache {
@@ -31,6 +27,23 @@ func NewPermissionsCache(repo RolePermissionsReader, adminRole string) *Permissi
 		repo:  repo,
 		admin: adminRole,
 	}
+}
+
+// NewStaticPermissionsCache создаёт кеш из заранее заданной мапы.
+// Используется в unit-тестах без реальной БД.
+func NewStaticPermissionsCache(perms map[string]domain.RolePermissions) *staticPermissionsCache {
+	return &staticPermissionsCache{cache: perms}
+}
+
+type staticPermissionsCache struct {
+	cache map[string]domain.RolePermissions
+}
+
+func (s *staticPermissionsCache) Get(role string) domain.RolePermissions {
+	if p, ok := s.cache[role]; ok {
+		return p
+	}
+	return domain.RolePermissions{}
 }
 
 // Load загружает все permissions из БД в кеш. Вызывается при старте.
@@ -49,8 +62,6 @@ func (c *PermissionsCache) Load(ctx context.Context) error {
 }
 
 // Get возвращает permissions для одной роли.
-// Если роль не найдена и это adminRole — возвращает DefaultAdminPermissions.
-// Иначе — DefaultUserPermissions (deny all management флаги).
 func (c *PermissionsCache) Get(role string) domain.RolePermissions {
 	c.mu.RLock()
 	p, ok := c.cache[role]
@@ -67,8 +78,6 @@ func (c *PermissionsCache) Get(role string) domain.RolePermissions {
 }
 
 // GetMerged возвращает объединённые permissions для набора ролей (OR-семантика).
-// Если пользователь имеет несколько ролей — получает все флаги, разрешённые хотя бы в одной.
-// Поле Role в результате — пустая строка (merged не привязан к одной роли).
 func (c *PermissionsCache) GetMerged(roles []string) domain.RolePermissions {
 	if len(roles) == 0 {
 		return domain.RolePermissions{}
@@ -99,14 +108,14 @@ func (c *PermissionsCache) GetMerged(roles []string) domain.RolePermissions {
 	return merged
 }
 
-// Set обновляет одну роль в кеше (вызывается после Upsert в БД).
+// Set обновляет одну роль в кеше.
 func (c *PermissionsCache) Set(p domain.RolePermissions) {
 	c.mu.Lock()
 	c.cache[p.Role] = p
 	c.mu.Unlock()
 }
 
-// GetAll возвращает снимок всего кеша (для /api/admin/roles).
+// GetAll возвращает снимок всего кеша.
 func (c *PermissionsCache) GetAll() []domain.RolePermissions {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

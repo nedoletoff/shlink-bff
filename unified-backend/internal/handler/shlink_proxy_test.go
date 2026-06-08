@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -57,10 +59,10 @@ func (s *stubShlinkClient) GetShortURL(_ context.Context, _, _ string) (*shlink.
 func (s *stubShlinkClient) GetShortURLVisits(_ context.Context, _, _, _, _ string, _ int) (*shlink.VisitsResponse, error) {
 	return nil, nil
 }
-func (s *stubShlinkClient) CreateShortURL(_ context.Context, _ string, _ interface{ Read([]byte) (int, error) }) (*shlink.ShortURL, error) {
+func (s *stubShlinkClient) CreateShortURL(_ context.Context, _ string, _ io.Reader) (*shlink.ShortURL, error) {
 	return s.createResult, s.createError
 }
-func (s *stubShlinkClient) UpdateShortURL(_ context.Context, _, _ string, _ interface{ Read([]byte) (int, error) }) (*shlink.ShortURL, error) {
+func (s *stubShlinkClient) UpdateShortURL(_ context.Context, _, _ string, _ io.Reader) (*shlink.ShortURL, error) {
 	return s.updateResult, s.updateError
 }
 func (s *stubShlinkClient) DeleteShortURL(_ context.Context, _, _ string) error {
@@ -69,10 +71,8 @@ func (s *stubShlinkClient) DeleteShortURL(_ context.Context, _, _ string) error 
 func (s *stubShlinkClient) GetTags(_ context.Context, _ string) (*shlink.TagsWithStatsResponse, error) {
 	return nil, nil
 }
-func (s *stubShlinkClient) RenameTag(_ context.Context, _ string, _ interface{ Read([]byte) (int, error) }) error {
-	return nil
-}
-func (s *stubShlinkClient) DeleteTags(_ context.Context, _ string, _ []string) error { return nil }
+func (s *stubShlinkClient) RenameTag(_ context.Context, _ string, _ io.Reader) error { return nil }
+func (s *stubShlinkClient) DeleteTags(_ context.Context, _ string, _ []string) error  { return nil }
 func (s *stubShlinkClient) GetNonOrphanVisits(_ context.Context, _, _, _ string, _ int) (*shlink.VisitsResponse, error) {
 	return nil, nil
 }
@@ -80,7 +80,7 @@ func (s *stubShlinkClient) PatchSettings(_ context.Context, _ string, _ int) err
 func (s *stubShlinkClient) GetHealth(_ context.Context) (*shlink.HealthResponse, error) {
 	return &shlink.HealthResponse{Status: "pass", Version: "3.0.0"}, nil
 }
-func (s *stubShlinkClient) ValidateVersion(_ context.Context, _ int, _ int, _ interface{ Hours() float64 }) error {
+func (s *stubShlinkClient) ValidateVersion(_ context.Context, _ int, _ int, _ time.Duration) error {
 	return nil
 }
 
@@ -91,16 +91,18 @@ func newTestShlinkSvc(client service.ShlinkClientIface) *service.ShlinkService {
 		AdminRole:           "admin",
 		ShlinkDefaultDomain: "http://localhost",
 	}
-	perms := service.NewStaticPermissionsCache(map[string]domain.Permissions{
+	perms := service.NewStaticPermissionsCache(map[string]domain.RolePermissions{
 		"user": {
 			CanViewOwnLinks:  true,
+			CanCreateLinks:   true,
 			CanEditOwnLinks:  true,
-			CanDeleteOwnLink: true,
+			CanDeleteOwnLinks: true,
+			CanCreateWithoutSlug: true,
 		},
 		"admin": {
 			CanViewAllLinks:  true,
 			CanEditAllLinks:  true,
-			CanDeleteAllLink: true,
+			CanDeleteAllLinks: true,
 		},
 	})
 	return service.NewShlinkService(client, cfg, perms)
