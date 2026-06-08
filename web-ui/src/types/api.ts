@@ -1,16 +1,18 @@
-// ─── Auth ───────────────────────────────────────────────────────────────────
+// ─── Auth ───────────────────────────────────────────────────────────────────────
+export type UserRole = string
+
 export interface MeResponse {
   sub: string
   username: string
   email: string
-  role: string
+  role: UserRole
   permissions: Record<string, boolean>
   hasApiKey: boolean
   features: { userSlugPrefixEnabled: boolean; userTagInternalIdEnabled: boolean }
   slugPrefix?: string
 }
 
-// ─── Short URLs ─────────────────────────────────────────────────────────────
+// ─── Short URLs ──────────────────────────────────────────────────────────────────
 export interface ShortURL {
   shortCode: string
   shortUrl: string
@@ -49,7 +51,7 @@ export interface CreateShortURLPayload {
 
 export type EditShortURLPayload = Omit<CreateShortURLPayload, 'customSlug'>
 
-// ─── URL Detail ─────────────────────────────────────────────────────────────
+// ─── URL Detail ───────────────────────────────────────────────────────────────────
 export interface ClickPoint { date: string; clicks: number }
 export interface NamedCount { name: string; count: number }
 export interface DeviceBreakdown { desktop: number; mobile: number; tablet: number }
@@ -80,14 +82,14 @@ export interface URLDetailResponse {
   deactivatedBy?: string
 }
 
-// ─── Tags ───────────────────────────────────────────────────────────────────
+// ─── Tags ──────────────────────────────────────────────────────────────────────────
 export interface TagEntry {
   tag: string
   shortUrlsCount: number
   visitsSummary: { total: number }
 }
 
-// ─── Dashboard ──────────────────────────────────────────────────────────────
+// ─── Dashboard ─────────────────────────────────────────────────────────────────────
 export interface HeatCell { weekday: number; hour: number; value: number }
 
 export interface DashboardResponse {
@@ -108,7 +110,7 @@ export interface DashboardResponse {
   tags?: Array<{ tag: string; visits: number; urls: number }>
 }
 
-// ─── Settings ───────────────────────────────────────────────────────────────
+// ─── Settings ────────────────────────────────────────────────────────────────────
 export interface ServerSettings {
   shortCodeLength: number
   allowCustomSlugs: boolean
@@ -137,12 +139,12 @@ export interface PatchSettingsPayload {
   shlinkContainerName?: string
 }
 
-// ─── Admin — Users ──────────────────────────────────────────────────────────
+// ─── Admin — Users ────────────────────────────────────────────────────────────────
 export interface UserRecord {
   sub: string
   username: string
   email: string
-  role: string
+  role: UserRole
   status: string
   slugPrefix?: string
   shlinkApiKey?: string
@@ -150,7 +152,7 @@ export interface UserRecord {
   updatedAt?: string
 }
 
-// ─── Admin — Roles ──────────────────────────────────────────────────────────
+// ─── Admin — Roles ────────────────────────────────────────────────────────────────
 export interface RolePermissions {
   role: string
   updatedAt?: string
@@ -182,7 +184,7 @@ export interface RoleEntry { role: string; permissions: string[] }
 export interface RoleMapping { kcGroup: string; appRole: string }
 export interface RolesResponse { roles: RoleEntry[]; mappings: RoleMapping[] }
 
-// ─── Admin — Audit ──────────────────────────────────────────────────────────
+// ─── Admin — Audit ────────────────────────────────────────────────────────────────
 export interface AuditLog {
   id?: number
   userSub: string
