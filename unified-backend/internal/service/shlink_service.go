@@ -13,7 +13,6 @@ import (
 )
 
 // ShlinkClientIface — интерфейс Shlink HTTP-клиента.
-// Определён здесь чтобы позволить подменять stub в unit-тестах без реального Shlink.
 type ShlinkClientIface interface {
 	GetShortURLs(ctx context.Context, apiKey, rawQuery string) (*shlink.ShortURLsResponse, error)
 	GetShortURL(ctx context.Context, apiKey, shortCode string) (*shlink.ShortURL, error)
@@ -33,15 +32,25 @@ type ShlinkClientIface interface {
 // Compile-time check: *shlink.Client реализует ShlinkClientIface.
 var _ ShlinkClientIface = (*shlink.Client)(nil)
 
+// PermissionsCacheIface — базовый интерфейс чтения permissions.
+type PermissionsCacheIface interface {
+	Get(role string) domain.RolePermissions
+}
+
+// PermissionsCacheAdmin — расширенный интерфейс для админ-хендлеров (roles).
+type PermissionsCacheAdmin interface {
+	PermissionsCacheIface
+	GetAll() []domain.RolePermissions
+	Set(p domain.RolePermissions)
+}
+
+// Compile-time check: *PermissionsCache реализует PermissionsCacheAdmin.
+var _ PermissionsCacheAdmin = (*PermissionsCache)(nil)
+
 type ShlinkService struct {
 	client ShlinkClientIface
 	cfg    *config.Config
 	perms  PermissionsCacheIface
-}
-
-// PermissionsCacheIface позволяет подменять кеш в тестах.
-type PermissionsCacheIface interface {
-	Get(role string) domain.RolePermissions
 }
 
 func NewShlinkService(client ShlinkClientIface, cfg *config.Config, perms PermissionsCacheIface) *ShlinkService {
@@ -50,7 +59,7 @@ func NewShlinkService(client ShlinkClientIface, cfg *config.Config, perms Permis
 
 // Perms возвращает permissions для роли пользователя.
 func (s *ShlinkService) Perms(user *domain.User) domain.RolePermissions {
-	return s.perms.Get(string(user.Role))
+	return s.perms.Get(user.Role)
 }
 
 // EnforceSlugPrefix валидирует/устанавливает slug с учётом permissions.
@@ -59,7 +68,7 @@ func (s *ShlinkService) EnforceSlugPrefix(
 	user *domain.User,
 	customSlug *string,
 ) (string, error) {
-	p := s.perms.Get(string(user.Role))
+	p := s.perms.Get(user.Role)
 
 	if !p.CanCreateLinks {
 		return "", fmt.Errorf("role %q is not allowed to create links", user.Role)
@@ -109,7 +118,7 @@ func (s *ShlinkService) FilterShortURLsByUser(
 	user *domain.User,
 	ownedCodes map[string]struct{},
 ) []shlink.ShortURL {
-	p := s.perms.Get(string(user.Role))
+	p := s.perms.Get(user.Role)
 
 	if p.CanViewAllLinks {
 		return urls
@@ -129,7 +138,7 @@ func (s *ShlinkService) FilterShortURLsByUser(
 
 // CanModifyShortCodeByPerms проверяет права роли на edit/delete.
 func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bool) (canAll bool, canOwn bool) {
-	p := s.perms.Get(string(user.Role))
+	p := s.perms.Get(user.Role)
 	if isDelete {
 		return p.CanDeleteAllLinks, p.CanDeleteOwnLinks
 	}

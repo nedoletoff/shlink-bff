@@ -15,21 +15,19 @@ import (
 )
 
 // RolesRepository — минимальный интерфейс для персистентности permissions ролей.
-// Позволяет подменять реализацию в тестах без зависимости от пакета postgres.
 type RolesRepository interface {
 	GetAll(ctx context.Context) ([]domain.RolePermissions, error)
 	Upsert(ctx context.Context, p *domain.RolePermissions) error
 }
 
 // RolesHandler — управление permissions ролей.
-// Доступен только ролям с can_manage_roles = true.
 type RolesHandler struct {
-	cache     *service.PermissionsCache
+	cache     service.PermissionsCacheAdmin
 	permsRepo RolesRepository
 	cfg       *config.Config
 }
 
-func NewRolesHandler(cache *service.PermissionsCache, repo RolesRepository, cfg *config.Config) *RolesHandler {
+func NewRolesHandler(cache service.PermissionsCacheAdmin, repo RolesRepository, cfg *config.Config) *RolesHandler {
 	return &RolesHandler{cache: cache, permsRepo: repo, cfg: cfg}
 }
 
@@ -49,7 +47,7 @@ type rolesListResponse struct {
 	Mappings []roleMapping `json:"mappings"`
 }
 
-// GET /api/admin/roles — список всех ролей с их permissions + маппинги из конфига
+// GET /api/admin/roles
 func (h *RolesHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 	perms := h.cache.GetAll()
 
@@ -59,11 +57,10 @@ func (h *RolesHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 		roles = append(roles, roleEntry{
 			Role:        p.Role,
 			Permissions: flags,
-			UsersCount:  0, // не считаем здесь — дорого; при необходимости добавить userRepo
+			UsersCount:  0,
 		})
 	}
 
-	// Маппинги из ROLE_GROUPS: keycloak-group → app-role
 	mappings := make([]roleMapping, 0, len(h.cfg.RoleGroups))
 	for group, role := range h.cfg.RoleGroups {
 		mappings = append(mappings, roleMapping{KcGroup: group, AppRole: role})
@@ -72,7 +69,7 @@ func (h *RolesHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rolesListResponse{Roles: roles, Mappings: mappings}, http.StatusOK)
 }
 
-// GET /api/admin/roles/{role} — permissions конкретной роли
+// GET /api/admin/roles/{role}
 func (h *RolesHandler) GetRole(w http.ResponseWriter, r *http.Request) {
 	role := chi.URLParam(r, "role")
 	p := h.cache.Get(role)
@@ -82,7 +79,7 @@ func (h *RolesHandler) GetRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p, http.StatusOK)
 }
 
-// PUT /api/admin/roles/{role}/permissions — полное обновление permissions
+// PUT /api/admin/roles/{role}/permissions
 func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Request) {
 	role := chi.URLParam(r, "role")
 	if role == "" {
@@ -101,7 +98,7 @@ func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
 		return
 	}
-	p.Role = role // role из URL — канонический источник
+	p.Role = role
 
 	if err := h.permsRepo.Upsert(r.Context(), &p); err != nil {
 		slog.Error("roles: upsert permissions failed", "role", role, "err", err)
@@ -109,13 +106,12 @@ func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Обновляем кеш сразу — без перезапуска сервиса
 	h.cache.Set(p)
 	slog.Info("roles: permissions updated", "role", role)
 	writeJSON(w, p, http.StatusOK)
 }
 
-// permToStringSlice переводит флаги RolePermissions в список строк (только true-флаги).
+// permToStringSlice переводит флаги RolePermissions в список строк.
 func permToStringSlice(p domain.RolePermissions) []string {
 	var out []string
 	if p.CanViewOwnLinks         { out = append(out, "canViewOwnLinks") }
