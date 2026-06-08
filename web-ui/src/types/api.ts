@@ -1,12 +1,19 @@
 // Контракт GET /api/me — API key НИКОГДА не присутствует
 export interface Permissions {
-  canCreateShortUrl:      boolean;
-  canCreateWithCustomSlug: boolean;
-  canEditOwnLinks:        boolean;
-  canDeleteOwnLinks:      boolean;
-  canManageOwnTags:       boolean;
-  canViewAuditLogs:       boolean;
-  canManageUsers:         boolean;
+  canCreateShortUrl:            boolean;
+  canCreateWithCustomSlug:      boolean;
+  canEditOwnLinks:              boolean;
+  canDeleteOwnLinks:            boolean;
+  canManageOwnTags:             boolean;
+  canViewAuditLogs:             boolean;
+  canManageUsers:               boolean;
+  // lifecycle
+  canDeactivateOwnLinks:        boolean;
+  canDeactivateAllLinks:        boolean;
+  canReactivateOwnLinks:        boolean;
+  canReactivateAllLinks:        boolean;
+  canDeleteOwnLinksPermanently: boolean;
+  canDeleteAllLinksPermanently: boolean;
 }
 
 export interface FeatureFlags {
@@ -14,7 +21,7 @@ export interface FeatureFlags {
   userTagInternalIdEnabled: boolean;
 }
 
-export type UserRole = 'admin' | 'user';
+export type UserRole   = 'admin' | 'user';
 export type UserStatus = 'active' | 'disabled' | 'pending';
 
 export interface MeResponse {
@@ -41,8 +48,10 @@ export interface ShortURL {
   tags:           string[];
   visitsSummary:  VisitsSummary;
   dateCreated:    string;
-  ownerUsername?: string;   // возвращается только admin-у
-  isActive?:      boolean;  // false = деактивирована
+  ownerUsername?: string;
+  isActive?:      boolean;
+  deactivatedAt?: string;
+  deactivatedBy?: string;
 }
 
 export interface Pagination {
@@ -71,9 +80,9 @@ export interface TagsResponse {
   tags: { data: TagStats[] };
 }
 
-// Dashboard — базовые типы (Overview)
-export interface TagCount    { tag:    string; count:  number; }
-export interface ClickPoint  { date:   string; clicks: number; }
+// Dashboard
+export interface TagCount   { tag:  string; count:  number; }
+export interface ClickPoint { date: string; clicks: number; }
 
 export interface DashboardResponse {
   totalClicks:    number;
@@ -82,12 +91,11 @@ export interface DashboardResponse {
   clicksOverTime: ClickPoint[];
 }
 
-// Dashboard — расширенные типы для вкладок 1–4
 export interface TopLink {
-  shortCode:  string;
-  title:      string;
-  shortUrl:   string;
-  visits:     number;
+  shortCode: string;
+  title:     string;
+  shortUrl:  string;
+  visits:    number;
 }
 
 export interface OverviewResponse {
@@ -136,8 +144,8 @@ export interface DeviceBreakdown {
 export interface NamedCount { name: string; count: number; }
 
 export interface HeatmapCell {
-  hour:    number;  // 0-23
-  weekday: number;  // 0=вс, 1=пн … 6=сб
+  hour:    number;
+  weekday: number;
   value:   number;
 }
 
@@ -148,13 +156,11 @@ export interface DevicesResponse {
   heatmap?: HeatmapCell[];
 }
 
-// URL detail page
 export interface VisitRow {
   date:    string;
   device:  string;
   os:      string;
   referer: string | null;
-  // country намеренно убрана: shlink не возвращает её без GeoIP-подписки
 }
 
 export interface UrlDetailResponse {
@@ -165,6 +171,8 @@ export interface UrlDetailResponse {
   dateCreated:    string;
   ownerUsername?: string;
   isActive?:      boolean;
+  deactivatedAt?: string;
+  deactivatedBy?: string;
   clicksPerDay:   ClickPoint[];
   devices:        DeviceBreakdown;
   browsers:       NamedCount[];
@@ -173,29 +181,27 @@ export interface UrlDetailResponse {
   visitsTotal:    number;
 }
 
-// User detail page
 export interface UserDetailResponse {
-  sub:         string;
-  username:    string;
-  email:       string;
-  role:        UserRole;
-  linksCount:  number;
-  visitsTotal: number;
+  sub:            string;
+  username:       string;
+  email:          string;
+  role:           UserRole;
+  linksCount:     number;
+  visitsTotal:    number;
   activityPerDay: ClickPoint[];
-  links:       ShortURL[];
+  links:          ShortURL[];
 }
 
-// Audit Logs
 export interface AuditLog {
-  id:         number;
-  createdAt:  string;
-  action:     string;
-  username:   string | null;
-  userSub:    string | null;
-  result:     string;
-  role:       string | null;
-  resource:   string | null;
-  ipAddress:  string | null;
+  id:        number;
+  createdAt: string;
+  action:    string;
+  username:  string | null;
+  userSub:   string | null;
+  result:    string;
+  role:      string | null;
+  resource:  string | null;
+  ipAddress: string | null;
 }
 
 export interface AuditLogsResponse {
@@ -203,7 +209,6 @@ export interface AuditLogsResponse {
   total: number;
 }
 
-// Admin Users
 export interface AdminUser {
   sub:        string;
   username:   string;
@@ -214,26 +219,31 @@ export interface AdminUser {
   hasApiKey:  boolean;
 }
 
-// Admin Roles
 export interface RolePermissions {
-  role:                    string;
-  canViewOwnLinks:         boolean;
-  canViewAllLinks:         boolean;
-  canCreateLinks:          boolean;
-  canCreateWithCustomSlug: boolean;
-  canCreateWithoutSlug:    boolean;
-  canEditOwnLinks:         boolean;
-  canEditAllLinks:         boolean;
-  canDeleteOwnLinks:       boolean;
-  canDeleteAllLinks:       boolean;
-  canManageOwnTags:        boolean;
-  canManageAllTags:        boolean;
-  canViewOwnStats:         boolean;
-  canViewAllStats:         boolean;
-  canViewAuditLogs:        boolean;
-  canManageUsers:          boolean;
-  canManageRoles:          boolean;
-  updatedAt:               string;
+  role:                         string;
+  canViewOwnLinks:              boolean;
+  canViewAllLinks:              boolean;
+  canCreateLinks:               boolean;
+  canCreateWithCustomSlug:      boolean;
+  canCreateWithoutSlug:         boolean;
+  canEditOwnLinks:              boolean;
+  canEditAllLinks:              boolean;
+  canDeleteOwnLinks:            boolean;
+  canDeleteAllLinks:            boolean;
+  canDeactivateOwnLinks:        boolean;
+  canDeactivateAllLinks:        boolean;
+  canReactivateOwnLinks:        boolean;
+  canReactivateAllLinks:        boolean;
+  canDeleteOwnLinksPermanently: boolean;
+  canDeleteAllLinksPermanently: boolean;
+  canManageOwnTags:             boolean;
+  canManageAllTags:             boolean;
+  canViewOwnStats:              boolean;
+  canViewAllStats:              boolean;
+  canViewAuditLogs:             boolean;
+  canManageUsers:               boolean;
+  canManageRoles:               boolean;
+  updatedAt:                    string;
 }
 
 export interface RoleEntry {
@@ -252,7 +262,6 @@ export interface RolesResponse {
   mappings: RoleMapping[];
 }
 
-// Admin Settings
 export interface ShlinkSettings {
   shortCodeLength:  number;
   allowCustomSlugs: boolean;

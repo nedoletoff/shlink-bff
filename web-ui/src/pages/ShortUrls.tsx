@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Stack, Title, Button, TextInput, Table, ActionIcon, Group,
   Badge, Text, Loader, Center, Modal, Tooltip, Pagination,
-  Anchor, CopyButton, Box, Card,
+  Anchor, CopyButton, Box, Card, SegmentedControl,
 } from '@mantine/core';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
   IconPlus, IconTrash, IconSearch, IconEdit,
   IconCopy, IconCheck, IconBan, IconExternalLink,
+  IconPlayerPlay, IconAlertTriangle,
 } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,22 +21,24 @@ import type { Pagination as PaginationInfo, ShortURL, ShortURLsListResponse } fr
 
 const ITEMS_PER_PAGE = 20;
 
+type StatusFilter = 'active' | 'inactive' | 'all';
+
 // ─── Create / Edit modal ─────────────────────────────────────────────────────
 function CreateEditModal({
   opened, onClose, onSaved, editTarget,
 }: {
-  opened: boolean;
-  onClose: () => void;
-  onSaved: () => void;
+  opened:     boolean;
+  onClose:    () => void;
+  onSaved:    () => void;
   editTarget: ShortURL | null;
 }) {
   const { user } = useAuth();
   const canCustomSlug = user?.permissions.canCreateWithCustomSlug ?? false;
 
-  const [longUrl,    setLongUrl]   = useState('');
-  const [title,      setTitle]     = useState('');
-  const [customSlug, setSlug]      = useState('');
-  const [saving,     setSaving]    = useState(false);
+  const [longUrl,    setLongUrl]  = useState('');
+  const [title,      setTitle]    = useState('');
+  const [customSlug, setSlug]     = useState('');
+  const [saving,     setSaving]   = useState(false);
 
   useEffect(() => {
     if (editTarget) {
@@ -61,7 +64,6 @@ function CreateEditModal({
         await api.post('/api/shlink/short-urls', {
           longUrl:    longUrl.trim(),
           title:      title.trim() || undefined,
-          // передаём customSlug только если пользователь имеет право и ввёл значение
           ...(canCustomSlug && customSlug.trim() ? { customSlug: customSlug.trim() } : {}),
         });
         notifications.show({ message: 'Ссылка создана', color: 'green' });
@@ -97,7 +99,6 @@ function CreateEditModal({
           value={title}
           onChange={e => setTitle(e.currentTarget.value)}
         />
-        {/* Поле кастомного слага — только при создании и только если есть право */}
         {!editTarget && canCustomSlug && (
           <TextInput
             label="Кастомный слаг (опционально)"
@@ -120,20 +121,28 @@ function CreateEditModal({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 export function ShortUrls() {
-  const { user }  = useAuth();
-  const isAdmin   = useIsAdmin();
-  const navigate  = useNavigate();
+  const { user } = useAuth();
+  const isAdmin  = useIsAdmin();
+  const navigate = useNavigate();
 
-  const [urls,         setUrls]         = useState<ShortURL[]>([]);
-  const [pagination,   setPagination]   = useState<PaginationInfo | null>(null);
-  const [loading,      setLoading]      = useState(true);
-  const [search,       setSearch]       = useState('');
-  const [page,         setPage]         = useState(1);
-  const [deleteTarget, setDeleteTarget] = useState<ShortURL | null>(null);
-  const [editTarget,   setEditTarget]   = useState<ShortURL | null>(null);
+  const [urls,           setUrls]           = useState<ShortURL[]>([]);
+  const [pagination,     setPagination]     = useState<PaginationInfo | null>(null);
+  const [loading,        setLoading]        = useState(true);
+  const [search,         setSearch]         = useState('');
+  const [page,           setPage]           = useState(1);
+  const [statusFilter,   setStatusFilter]   = useState<StatusFilter>('active');
+  const [deactivateTarget, setDeactivateTarget] = useState<ShortURL | null>(null);
+  const [activateTarget,   setActivateTarget]   = useState<ShortURL | null>(null);
+  const [deleteTarget,     setDeleteTarget]     = useState<ShortURL | null>(null);
+  const [editTarget,       setEditTarget]       = useState<ShortURL | null>(null);
   const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure(false);
 
   const [debouncedSearch] = useDebouncedValue(search, 350);
+
+  const perms = user?.permissions;
+  const canDeactivate  = perms?.canDeactivateOwnLinks  || perms?.canDeactivateAllLinks;
+  const canReactivate  = perms?.canReactivateOwnLinks  || perms?.canReactivateAllLinks;
+  const canPermDelete  = perms?.canDeleteOwnLinksPermanently || perms?.canDeleteAllLinksPermanently;
 
   const fetchUrls = useCallback(() => {
     setLoading(true);
@@ -142,6 +151,7 @@ export function ShortUrls() {
         searchTerm:   debouncedSearch || undefined,
         page,
         itemsPerPage: ITEMS_PER_PAGE,
+        status:       statusFilter,
       },
     })
       .then(r => {
@@ -150,21 +160,39 @@ export function ShortUrls() {
       })
       .catch(() => { setUrls([]); setPagination(null); })
       .finally(() => setLoading(false));
-  }, [debouncedSearch, page]);
+  }, [debouncedSearch, page, statusFilter]);
 
   useEffect(() => { fetchUrls(); }, [fetchUrls]);
-  useEffect(() => { setPage(1); }, [debouncedSearch]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter]);
 
-  const handleDelete = async () => {
+  const handleDeactivate = async () => {
+    if (!deactivateTarget) return;
+    try {
+      await api.post(`/api/shlink/short-urls/${deactivateTarget.shortCode}/deactivate`, {});
+      notifications.show({ message: 'Ссылка деактивирована', color: 'orange' });
+      setDeactivateTarget(null);
+      fetchUrls();
+    } catch { /* already shown */ }
+  };
+
+  const handleActivate = async () => {
+    if (!activateTarget) return;
+    try {
+      await api.post(`/api/shlink/short-urls/${activateTarget.shortCode}/activate`, {});
+      notifications.show({ message: 'Ссылка активирована', color: 'green' });
+      setActivateTarget(null);
+      fetchUrls();
+    } catch { /* already shown */ }
+  };
+
+  const handlePermanentDelete = async () => {
     if (!deleteTarget) return;
     try {
-      await api.delete(`/api/shlink/short-urls/${deleteTarget.shortCode}`);
-      notifications.show({ message: 'Ссылка деактивирована', color: 'green' });
+      await api.delete(`/api/shlink/short-urls/${deleteTarget.shortCode}/permanent`);
+      notifications.show({ message: 'Ссылка удалена безвозвратно', color: 'red' });
       setDeleteTarget(null);
       fetchUrls();
-    } catch {
-      /* already shown */
-    }
+    } catch { /* already shown */ }
   };
 
   const totalPages = pagination ? pagination.pagesCount : 1;
@@ -185,14 +213,27 @@ export function ShortUrls() {
         )}
       </Group>
 
-      {/* Search */}
-      <TextInput
-        placeholder="Поиск по ссылке или коду…"
-        leftSection={<IconSearch size={14} />}
-        value={search}
-        onChange={e => setSearch(e.currentTarget.value)}
-        size="sm"
-      />
+      {/* Filters */}
+      <Group gap="sm" wrap="nowrap">
+        <TextInput
+          placeholder="Поиск по ссылке или коду…"
+          leftSection={<IconSearch size={14} />}
+          value={search}
+          onChange={e => setSearch(e.currentTarget.value)}
+          size="sm"
+          style={{ flex: 1 }}
+        />
+        <SegmentedControl
+          size="sm"
+          value={statusFilter}
+          onChange={v => setStatusFilter(v as StatusFilter)}
+          data={[
+            { label: 'Активные',       value: 'active'   },
+            { label: 'Деактивиров.',   value: 'inactive' },
+            { label: 'Все',            value: 'all'      },
+          ]}
+        />
+      </Group>
 
       {/* Table */}
       <Card withBorder p={0} radius="md" style={{ overflow: 'hidden' }}>
@@ -213,16 +254,16 @@ export function ShortUrls() {
                   <Table.Th style={{ width: 80 }} ta="right">Клики</Table.Th>
                   {isAdmin && <Table.Th style={{ width: 110 }}>Владелец</Table.Th>}
                   <Table.Th style={{ width: 90 }}>Статус</Table.Th>
-                  <Table.Th style={{ width: 90 }} />
+                  <Table.Th style={{ width: 100 }} />
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
                 {urls.map(url => {
-                  const deleted = url.isActive === false;
+                  const inactive = url.isActive === false;
                   return (
                     <Table.Tr
                       key={url.shortCode}
-                      style={{ opacity: deleted ? 0.5 : 1 }}
+                      style={{ opacity: inactive ? 0.6 : 1 }}
                     >
                       {/* Code + copy */}
                       <Table.Td>
@@ -289,9 +330,9 @@ export function ShortUrls() {
 
                       {/* Status */}
                       <Table.Td>
-                        {deleted ? (
-                          <Badge size="xs" variant="light" color="red" leftSection={<IconBan size={10} />}>
-                            Удалена
+                        {inactive ? (
+                          <Badge size="xs" variant="light" color="orange" leftSection={<IconBan size={10} />}>
+                            Деактив.
                           </Badge>
                         ) : (
                           <Badge size="xs" variant="light" color="green">Активна</Badge>
@@ -301,7 +342,7 @@ export function ShortUrls() {
                       {/* Actions */}
                       <Table.Td>
                         <Group gap={4} justify="flex-end" wrap="nowrap">
-                          {user?.permissions.canEditOwnLinks && !deleted && (
+                          {user?.permissions.canEditOwnLinks && !inactive && (
                             <Tooltip label="Редактировать">
                               <ActionIcon
                                 variant="subtle" size="sm" color="blue"
@@ -311,8 +352,28 @@ export function ShortUrls() {
                               </ActionIcon>
                             </Tooltip>
                           )}
-                          {user?.permissions.canDeleteOwnLinks && !deleted && (
+                          {canDeactivate && !inactive && (
                             <Tooltip label="Деактивировать">
+                              <ActionIcon
+                                variant="subtle" size="sm" color="orange"
+                                onClick={e => { e.stopPropagation(); setDeactivateTarget(url); }}
+                              >
+                                <IconBan size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                          {canReactivate && inactive && (
+                            <Tooltip label="Активировать">
+                              <ActionIcon
+                                variant="subtle" size="sm" color="green"
+                                onClick={e => { e.stopPropagation(); setActivateTarget(url); }}
+                              >
+                                <IconPlayerPlay size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                          {canPermDelete && (
+                            <Tooltip label="Удалить безвозвратно">
                               <ActionIcon
                                 variant="subtle" size="sm" color="red"
                                 onClick={e => { e.stopPropagation(); setDeleteTarget(url); }}
@@ -348,10 +409,27 @@ export function ShortUrls() {
       />
 
       <ConfirmDialog
-        opened={deleteTarget !== null}
+        opened={deactivateTarget !== null}
         title="Деактивировать ссылку?"
-        message={`Ссылка «${deleteTarget?.shortCode}» перестанет работать. История переходов сохранится.`}
-        onConfirm={handleDelete}
+        message={`Ссылка «${deactivateTarget?.shortCode}» перестанет работать. Историю переходов можно восстановить активацией.`}
+        onConfirm={handleDeactivate}
+        onCancel={() => setDeactivateTarget(null)}
+      />
+
+      <ConfirmDialog
+        opened={activateTarget !== null}
+        title="Активировать ссылку?"
+        message={`Ссылка «${activateTarget?.shortCode}» снова начнёт работать.`}
+        onConfirm={handleActivate}
+        onCancel={() => setActivateTarget(null)}
+      />
+
+      <ConfirmDialog
+        opened={deleteTarget !== null}
+        title="Удалить ссылку безвозвратно?"
+        message={`Ссылка «${deleteTarget?.shortCode}» и все её переходы будут удалены навсегда. Это действие нельзя отменить.`}
+        confirmColor="red"
+        onConfirm={handlePermanentDelete}
         onCancel={() => setDeleteTarget(null)}
       />
     </Stack>

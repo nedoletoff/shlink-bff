@@ -4,10 +4,12 @@ import {
   Stack, Title, Text, Card, Group, Anchor,
   ActionIcon, Tooltip, SegmentedControl, Table,
   Skeleton, Center, Grid, CopyButton, Pagination,
+  Badge, Alert, Button,
 } from '@mantine/core';
 import {
   IconArrowLeft, IconCopy, IconCheck,
-  IconEdit, IconTrash,
+  IconEdit, IconTrash, IconBan, IconPlayerPlay,
+  IconAlertTriangle,
 } from '@tabler/icons-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -15,6 +17,7 @@ import {
   PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import { ErrorBoundary } from '../components/ui/ErrorBoundary';
 import { formatDate, formatDateTime } from '../utils/date';
 import type { UrlDetailResponse } from '../types/api';
@@ -32,6 +35,7 @@ const PAGE_SIZE = 20;
 export function UrlDetail() {
   const { shortCode } = useParams<{ shortCode: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [data,    setData]    = useState<UrlDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -39,7 +43,12 @@ export function UrlDetail() {
   const [period,  setPeriod]  = useState('30');
   const [page,    setPage]    = useState(1);
 
-  useEffect(() => {
+  const perms = user?.permissions;
+  const canDeactivate = perms?.canDeactivateOwnLinks || perms?.canDeactivateAllLinks;
+  const canReactivate = perms?.canReactivateOwnLinks || perms?.canReactivateAllLinks;
+  const canPermDelete = perms?.canDeleteOwnLinksPermanently || perms?.canDeleteAllLinksPermanently;
+
+  const loadData = () => {
     if (!shortCode) return;
     setLoading(true);
     setErr(null);
@@ -47,7 +56,36 @@ export function UrlDetail() {
       .then(setData)
       .catch((e: Error) => setErr(e.message ?? 'Ошибка загрузки'))
       .finally(() => setLoading(false));
-  }, [shortCode, period]);
+  };
+
+  useEffect(() => { loadData(); }, [shortCode, period]);
+
+  const handleDeactivate = async () => {
+    if (!shortCode) return;
+    if (!confirm('Деактивировать ссылку? Она перестанет работать.')) return;
+    try {
+      await api.post(`/api/shlink/short-urls/${shortCode}/deactivate`, {});
+      loadData();
+    } catch { /* shown */ }
+  };
+
+  const handleActivate = async () => {
+    if (!shortCode) return;
+    if (!confirm('Активировать ссылку? Она снова начнёт работать.')) return;
+    try {
+      await api.post(`/api/shlink/short-urls/${shortCode}/activate`, {});
+      loadData();
+    } catch { /* shown */ }
+  };
+
+  const handlePermanentDelete = async () => {
+    if (!shortCode) return;
+    if (!confirm('Удалить ссылку БЕЗВОЗВРАТНО? Все переходы будут уничтожены.')) return;
+    try {
+      await api.delete(`/api/shlink/short-urls/${shortCode}/permanent`);
+      navigate(-1);
+    } catch { /* shown */ }
+  };
 
   if (loading) return (
     <Stack gap="lg">
@@ -64,12 +102,12 @@ export function UrlDetail() {
   );
 
   if (err) return (
-    <Center py="xl">
-      <Text c="red">{err}</Text>
-    </Center>
+    <Center py="xl"><Text c="red">{err}</Text></Center>
   );
 
   if (!data) return null;
+
+  const isInactive = data.isActive === false;
 
   const totalPages = Math.ceil((data.visits?.length ?? 0) / PAGE_SIZE);
   const visitsPage = (data.visits ?? []).slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -103,12 +141,20 @@ export function UrlDetail() {
   return (
     <ErrorBoundary>
       <Stack gap="lg">
+        {/* Header */}
         <Group gap="sm">
           <ActionIcon variant="subtle" onClick={() => navigate(-1)}>
             <IconArrowLeft size={18} />
           </ActionIcon>
-          <Stack gap={2}>
-            <Title order={3}>{data.title || 'Без названия'}</Title>
+          <Stack gap={2} style={{ flex: 1 }}>
+            <Group gap="sm">
+              <Title order={3}>{data.title || 'Без названия'}</Title>
+              {isInactive && (
+                <Badge color="orange" variant="light" leftSection={<IconBan size={12} />}>
+                  Деактивирована
+                </Badge>
+              )}
+            </Group>
             <Group gap="xs">
               <Anchor href={data.shortUrl} target="_blank" fz="sm" fw={500}>
                 {data.shortUrl}
@@ -126,6 +172,24 @@ export function UrlDetail() {
           </Stack>
         </Group>
 
+        {/* Deactivated banner */}
+        {isInactive && (
+          <Alert
+            icon={<IconAlertTriangle size={16} />}
+            color="orange"
+            title="Ссылка деактивирована"
+          >
+            {data.deactivatedAt && (
+              <Text size="sm">
+                Деактивирована {formatDateTime(data.deactivatedAt)}
+                {data.deactivatedBy ? ` пользователем ${data.deactivatedBy}` : ''}.
+              </Text>
+            )}
+            <Text size="sm">Переходы по ней не работают.</Text>
+          </Alert>
+        )}
+
+        {/* Info card */}
         <Card withBorder radius="md" p="md">
           <Grid>
             <Grid.Col span={{ base: 12, sm: 6 }}>
@@ -145,6 +209,7 @@ export function UrlDetail() {
           </Grid>
         </Card>
 
+        {/* Analytics toolbar */}
         <Group justify="space-between">
           <Title order={5}>Аналитика</Title>
           <Group gap="sm">
@@ -154,19 +219,39 @@ export function UrlDetail() {
               data={PERIOD_OPTIONS}
               size="xs"
             />
-            <ActionIcon variant="light" color="blue" onClick={() => navigate(`/admin/urls/${shortCode}/edit`)}>
-              <IconEdit size={16} />
-            </ActionIcon>
-            <ActionIcon variant="light" color="red" onClick={() => {
-              if (confirm('Удалить ссылку? Все переходы перестанут работать.')) {
-                api.delete(`/api/shlink/short-urls/${shortCode}`).then(() => navigate(-1));
-              }
-            }}>
-              <IconTrash size={16} />
-            </ActionIcon>
+            {!isInactive && user?.permissions.canEditOwnLinks && (
+              <ActionIcon
+                variant="light" color="blue"
+                onClick={() => navigate(`/admin/urls/${shortCode}/edit`)}
+              >
+                <IconEdit size={16} />
+              </ActionIcon>
+            )}
+            {canDeactivate && !isInactive && (
+              <Tooltip label="Деактивировать ссылку">
+                <ActionIcon variant="light" color="orange" onClick={handleDeactivate}>
+                  <IconBan size={16} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+            {canReactivate && isInactive && (
+              <Tooltip label="Активировать ссылку">
+                <ActionIcon variant="light" color="green" onClick={handleActivate}>
+                  <IconPlayerPlay size={16} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+            {canPermDelete && (
+              <Tooltip label="Удалить безвозвратно">
+                <ActionIcon variant="light" color="red" onClick={handlePermanentDelete}>
+                  <IconTrash size={16} />
+                </ActionIcon>
+              </Tooltip>
+            )}
           </Group>
         </Group>
 
+        {/* Line chart */}
         <Card withBorder radius="md" p="md">
           <Title order={5} mb="sm">Переходы по дням</Title>
           <ResponsiveContainer width="100%" height={220}>
@@ -180,12 +265,14 @@ export function UrlDetail() {
           </ResponsiveContainer>
         </Card>
 
+        {/* Donuts */}
         <Grid>
           <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(devicesArr, 'Устройства')}</Grid.Col>
           <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.browsers ?? []), 'Браузеры')}</Grid.Col>
           <Grid.Col span={{ base: 12, sm: 4 }}>{renderDonut(toValueArr(data.os ?? []), 'ОС')}</Grid.Col>
         </Grid>
 
+        {/* Visits table */}
         <Card withBorder radius="md" p="md">
           <Title order={5} mb="sm">Журнал переходов</Title>
           <Table fz="sm" verticalSpacing="xs" style={{ tableLayout: 'fixed' }}>
