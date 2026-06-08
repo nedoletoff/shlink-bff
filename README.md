@@ -61,6 +61,10 @@ DB_NAME=shlink_bff
 # unified-backend его НЕ использует — работает с per-user ключами из БД.
 ADMIN_SHLINK_API_KEY=your-admin-shlink-api-key
 
+# Admin API key для shlink-api (используется только для PATCH /rest/v3/settings).
+# Опциональный — если не задан, изменение shortCodeLength в shlink не применяется.
+SHLINK_ADMIN_API_KEY=your-admin-shlink-api-key
+
 # Маппинг Keycloak-групп → роли (формат: group=role,...)
 # Группы сравниваются case-insensitive.
 ROLE_GROUPS=shlink-admins=admin,shlink-users=user
@@ -150,7 +154,7 @@ server_name shlink-create.example.com;  # ваш домен
 server_name shlink.example.com;         # ваш публичный домен
 ```
 
-Сертификат положить в `nginx/ssl/cert.pem` (cert + key в одном PEM).
+Сертификат положить в `nginx/ssl/` (раздельные файлы — см. раздел «TLS-сертификаты nginx»).
 
 ### Шаг 6. Запустить
 
@@ -193,6 +197,8 @@ curl -sk https://shlink-create.example.com/api/me  # в браузере (пос
 {"level":"INFO","msg":"migration applied","file":"001_init_schema.sql"}
 {"level":"INFO","msg":"migration applied","file":"002_open_role_constraint.sql"}
 {"level":"INFO","msg":"migration applied","file":"003_role_permissions.sql"}
+{"level":"INFO","msg":"migration applied","file":"004_url_ownership.sql"}
+{"level":"INFO","msg":"migration applied","file":"005_server_settings.sql"}
 {"level":"INFO","msg":"permissions cache loaded","roles":2}
 {"level":"INFO","msg":"shlink_client: version validated"}
 {"level":"INFO","msg":"server starting","port":"8080"}
@@ -210,7 +216,7 @@ docker logs unified-backend 2>&1 | grep -E '(ERROR|migration)'
 
 | Ошибка | Причина | Решение |
 |---|---|---|
-| `failed to connect to postgres` | postgres-bff не поднялся | `docker compose restart unified-backend` |
+| `failed to connect to postgres` | postgres не поднялся | `docker compose restart unified-backend` |
 | `apply migration 001_...: ...already exists` | Таблица уже есть без `IF NOT EXISTS` | Миграция использует `CREATE TABLE IF NOT EXISTS` — не должно возникать |
 | `apply migration NNN_...: syntax error` | Сломан SQL в файле миграции | Исправить файл, пересобрать образ |
 
@@ -218,7 +224,7 @@ docker logs unified-backend 2>&1 | grep -E '(ERROR|migration)'
 
 ```bash
 # Создать файл с порядковым номером
-cat > unified-backend/internal/migrations/sql/004_new_table.sql << 'EOF'
+cat > unified-backend/internal/migrations/sql/006_new_table.sql << 'EOF'
 CREATE TABLE IF NOT EXISTS new_table (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid()
 );
@@ -433,6 +439,41 @@ unified-backend:
 
 ---
 
+## Настройки сервера (Settings API)
+
+`unified-backend` предоставляет API для управления серверными настройками. Настройки персистируются в таблице `server_settings` (миграция `005_server_settings.sql`) и применяются к live-конфигу без рестарта.
+
+### GET /api/settings
+
+Возвращает текущие настройки сервера:
+
+```json
+{
+  "shortCodeLength": 5,
+  "allowCustomSlugs": true,
+  "userSlugPrefix": false,
+  "domain": "shlink.example.com",
+  "shlinkVersion": "4.x.x",
+  "connected": true
+}
+```
+
+### PATCH /api/settings
+
+Частичное обновление настроек (только переданные поля):
+
+```bash
+curl -X PATCH https://shlink-create.example.com/api/settings \
+  -H 'Content-Type: application/json' \
+  -d '{"shortCodeLength": 6, "allowCustomSlugs": false}'
+```
+
+Доступные поля: `shortCodeLength` (int, 3–32), `allowCustomSlugs` (bool), `userSlugPrefix` (bool), `domain` (string).
+
+Для применения `shortCodeLength` в shlink backend использует `SHLINK_ADMIN_API_KEY` и вызывает `PATCH /rest/v3/settings` — если переменная не задана, изменение применится только локально.
+
+---
+
 ## Nginx + OAuth2 Proxy
 
 ### Как работает auth_request
@@ -496,6 +537,7 @@ location = /logout {
 |---|---|---|
 | Go | ≥ 1.24 | Runtime |
 | Chi | v5 | HTTP-роутер |
+| Chi CORS | v1 | CORS middleware |
 | pgx | v5 | PostgreSQL-клиент |
 | PostgreSQL | 17 | База данных BFF |
 | embed.FS | stdlib | Встроенные SQL-миграции |
@@ -510,10 +552,21 @@ unified-backend/
 │   ├── config/         # Конфигурация из env
 │   ├── domain/         # Типы, permissions
 │   ├── handler/        # HTTP-обработчики
-│   │   ├── admin.go    # Управление пользователями, аудит, настройки
-│   │   ├── roles.go    # Управление ролями и permissions (с инвалидацией кеша)
-│   │   └── ...         # me, dashboard, proxy, settings, url_detail
+│   │   ├── admin.go        # Управление пользователями, аудит
+│   │   ├── dashboard.go    # Dashboard: статистика, топ ссылок
+│   │   ├── export.go       # Экспорт внутренних функций для тестов
+│   │   ├── helpers.go      # Вспомогательные функции
+│   │   ├── me.go           # GET /api/me
+│   │   ├── roles.go        # Управление ролями и permissions (с инвалидацией кеша)
+│   │   ├── settings.go     # GET/PATCH /api/settings (персистентные настройки)
+│   │   ├── shlink_proxy.go # Проксирование запросов к shlink-api с RBAC
+│   │   └── url_detail.go   # Детальная информация о ссылке
 │   ├── middleware/      # Auth, RBAC, logging
+│   │   ├── active_user.go  # Провизионирование и upsert пользователя
+│   │   ├── identity.go     # ExtractIdentity: разбор X-Auth-Request-* заголовков
+│   │   ├── logging.go      # HTTP-логирование
+│   │   ├── rbac.go         # AdminOnly, RequirePermission middleware
+│   │   └── userctx.go      # UserFromCtx helper
 │   ├── migrations/
 │   │   └── sql/        # SQL-миграции (embed в бинарник)
 │   ├── repository/
@@ -521,11 +574,25 @@ unified-backend/
 │   ├── service/
 │   │   ├── permissions_cache.go  # In-memory кеш прав с OR-семантикой для мультироли
 │   │   └── shlink_service.go     # Бизнес-логика Shlink
-│   └── shlink/         # Клиент Shlink API
-├── test/               # Unit-тесты (бизнес-логика, без БД)
+│   ├── shlink/         # Клиент Shlink API
+│   └── shlinkctl/      # CLI-провизионер per-user API keys
+│       ├── provisioner.go  # Логика создания API key при первом логине
+│       └── runner.go       # Абстракция запуска Shlink CLI (docker / native)
+├── test/               # Black-box тесты (внешний пакет, без БД)
 ├── Dockerfile
 └── go.mod
 ```
+
+### Дополнительные переменные конфигурации
+
+Помимо переменных из `.env.example`, backend поддерживает:
+
+| Переменная | Default | Описание |
+|---|---|---|
+| `SHLINK_ADMIN_API_KEY` | `""` | Admin API key для `PATCH /rest/v3/settings` в shlink |
+| `SHLINK_DEFAULT_DOMAIN` | `""` | Домен по умолчанию для новых ссылок; если не задан — используется `SHLINK_INTERNAL_URL` |
+| `CORS_ALLOWED_ORIGINS` | `*` | Разрешённые CORS origins через запятую |
+| `DATABASE_URL` | — | Полный DSN (приоритет над `DB_*` переменными) |
 
 ---
 
@@ -568,17 +635,41 @@ go test -v -race ./...
 
 ### Структура тестов
 
+Тесты распределены по трём уровням:
+
 ```
 unified-backend/
-├── internal/config/
-│   └── config_test.go             # Конфигурация: defaults и overrides
-└── test/
-    ├── audit_sanitize_test.go     # Sanitize чувствительных полей в аудит-логах
-    ├── handler_me_test.go         # GET /api/me: сборка ответа, permissions
-    ├── permissions_cache_test.go  # PermissionsCache: Set, GetMerged, fallback
-    ├── permissions_test.go        # DefaultAdminPermissions, DefaultUserPermissions
-    ├── rbac_test.go               # ExtractIdentity middleware, ROLE_GROUPS маппинг
-    └── service_test.go            # ShlinkService: slug prefix, фильтрация ссылок
+├── internal/
+│   ├── config/
+│   │   └── config_test.go              # Конфигурация: defaults и overrides
+│   ├── handler/
+│   │   ├── me_test.go                  # GET /api/me
+│   │   ├── roles_test.go               # RolesHandler (white-box)
+│   │   └── shlink_proxy_test.go        # Proxy RBAC (white-box)
+│   ├── middleware/
+│   │   ├── identity_test.go            # ExtractIdentity: разбор заголовков
+│   │   ├── rbac_test.go                # AdminOnly, RequirePermission
+│   │   └── userctx_test.go             # UserFromCtx
+│   └── service/
+│       ├── permissions_cache_test.go   # PermissionsCache (white-box)
+│       └── shlink_service_test.go      # ShlinkService (white-box)
+└── test/                               # Black-box тесты (пакет test_test)
+    ├── admin_parse_test.go             # parsePositiveInt helper
+    ├── audit_sanitize_test.go          # Sanitize чувствительных полей в аудит-логах
+    ├── chi_helpers_test.go             # Chi URL param helper
+    ├── dashboard_exported_test.go      # Dashboard handler (exported API)
+    ├── dashboard_pure_test.go          # Dashboard чистые функции
+    ├── domain_permissions_test.go      # DefaultAdminPermissions, DefaultUserPermissions
+    ├── filter_urls_test.go             # FilterShortURLsByUser + ownedCodes
+    ├── handler_me_test.go              # GET /api/me: сборка ответа, permissions
+    ├── helpers_test.go                 # Общие хелперы тестов
+    ├── permissions_cache_test.go       # PermissionsCache: Set, GetMerged, fallback
+    ├── permissions_test.go             # domain defaults (admin/user)
+    ├── rbac_access_test.go             # Таблица RBAC-матрицы: все комбинации флагов
+    ├── rbac_test.go                    # ExtractIdentity middleware, ROLE_GROUPS маппинг
+    ├── roles_handler_test.go           # ListRoles, GetRole, UpsertRolePermissions
+    ├── service_test.go                 # ShlinkService: slug prefix, фильтрация ссылок
+    └── settings_handler_test.go        # GET/PATCH /api/settings: граничные значения
 ```
 
 ### `permissions_cache_test.go` — кеш разрешений
@@ -614,7 +705,7 @@ unified-backend/
 | `TestEnforceSlugPrefix_FeatureDisabled` | `FEATURE_USER_SLUG_PREFIX=false` → slug не трогается |
 | `TestEnforceSlugPrefix_UserCustomSlugFeatureDisabled` | `FEATURE_USER_CUSTOM_SLUG=false` → user получает ошибку |
 | `TestEnforceSlugPrefix_AdminIgnoresFeatureFlag` | `FEATURE_USER_CUSTOM_SLUG=false` → admin не блокируется |
-| `TestFilterShortURLsByUser` | Пользователь видит только ссылки со своим prefix |
+| `TestFilterShortURLsByUser` | Пользователь видит только ссылки из переданного `ownedCodes` |
 | `TestFilterShortURLsByUser_AdminGetAll` | Admin видит все ссылки |
 
 ### `rbac_test.go` — middleware и RBAC
@@ -630,7 +721,35 @@ unified-backend/
 | `TestExtractIdentity_FieldsPopulated` | Sub, Email, Username, Role, KeycloakRole, Groups корректно распарсены |
 | `TestClientIP_*` | X-Real-IP, X-Forwarded-For, RemoteAddr fallback |
 
-### `permissions_test.go` — domain defaults
+### `rbac_access_test.go` — RBAC-матрица
+
+Таблично-управляемые тесты, проверяющие каждую комбинацию флагов `RolePermissions` против:
+- `FilterShortURLsByUser` + `ownedCodes`
+- `CanModifyShortCodeByPerms(user, isDelete)`
+- `EnforceSlugPrefix`
+
+### `roles_handler_test.go` — RolesHandler
+
+| Тест | Что проверяет |
+|---|---|
+| `TestListRoles` | GET `/api/admin/roles` — возвращает все роли из кеша + маппинги из конфига |
+| `TestGetRole_KnownRole` | GET `/api/admin/roles/{role}` — известная роль возвращает permissions |
+| `TestGetRole_UnknownRole` | Неизвестная роль → fallback `DefaultUserPermissions` |
+| `TestUpsertRolePermissions_CreateNew` | PUT создаёт новую роль, инвалидирует кеш |
+| `TestUpsertRolePermissions_UpdateExisting_CacheInvalidated` | PUT обновляет существующую, кеш перезаписывается |
+| `TestUpsertRolePermissions_RoleFromURLNotBody` | Имя роли берётся из URL-параметра, не из JSON body |
+
+### `settings_handler_test.go` — SettingsHandler
+
+| Тест | Что проверяет |
+|---|---|
+| `TestGetSettings_ReturnsCurrentConfig` | GET возвращает текущие значения cfg |
+| `TestPatchSettings_ShortCodeLength_Clamp` | `shortCodeLength` зажимается в диапазон 3–32 |
+| `TestPatchSettings_AllowCustomSlugs` | `allowCustomSlugs` мутирует `cfg.UserCustomSlugEnabled` |
+| `TestPatchSettings_UserSlugPrefix` | `userSlugPrefix` мутирует `cfg.UserSlugPrefixEnabled` |
+| `TestPatchSettings_UnknownFieldsIgnored` | Неизвестные поля в JSON игнорируются |
+
+### `domain_permissions_test.go` — domain defaults
 
 | Тест | Что проверяет |
 |---|---|
