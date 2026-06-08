@@ -13,6 +13,7 @@
   "dependencies": {
     "@mantine/core": "^9.2.2",
     "@mantine/dates": "^9.2.2",
+    "@mantine/form": "^9.2.2",
     "@mantine/hooks": "^9.2.2",
     "@mantine/notifications": "^9.2.2",
     "@tanstack/react-query": "^5.80.0",
