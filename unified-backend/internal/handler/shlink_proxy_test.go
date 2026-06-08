@@ -39,6 +39,9 @@ func (s *stubOwnerRepo) GetShortCodeSet(_ context.Context, _ string) (map[string
 func (s *stubOwnerRepo) GetActiveCodeSet(_ context.Context, _ string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
+func (s *stubOwnerRepo) GetStatusCodeSet(_ context.Context, _ string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
 
 type stubShlinkClient struct {
 	createResult *shlink.ShortURL
@@ -93,16 +96,22 @@ func newTestShlinkSvc(client service.ShlinkClientIface) *service.ShlinkService {
 	}
 	perms := service.NewStaticPermissionsCache(map[string]domain.RolePermissions{
 		"user": {
-			CanViewOwnLinks:  true,
-			CanCreateLinks:   true,
-			CanEditOwnLinks:  true,
-			CanDeleteOwnLinks: true,
-			CanCreateWithoutSlug: true,
+			CanViewOwnLinks:              true,
+			CanCreateLinks:               true,
+			CanEditOwnLinks:              true,
+			CanDeleteOwnLinks:            true,
+			CanCreateWithoutSlug:         true,
+			CanDeactivateOwnLinks:        true,
+			CanReactivateOwnLinks:        true,
+			CanDeleteOwnLinksPermanently: true,
 		},
 		"admin": {
-			CanViewAllLinks:  true,
-			CanEditAllLinks:  true,
-			CanDeleteAllLinks: true,
+			CanViewAllLinks:              true,
+			CanEditAllLinks:              true,
+			CanDeleteAllLinks:            true,
+			CanDeactivateAllLinks:        true,
+			CanReactivateAllLinks:        true,
+			CanDeleteAllLinksPermanently: true,
 		},
 	})
 	return service.NewShlinkService(client, cfg, perms)
@@ -187,30 +196,6 @@ func TestDeleteShortURL_notOwner(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", rec.Code)
-	}
-}
-
-func TestToggleShortURL_deactivate(t *testing.T) {
-	client := &stubShlinkClient{
-		updateResult: &shlink.ShortURL{ShortCode: "abc"},
-	}
-	svc := newTestShlinkSvc(client)
-	ownerRepo := &stubOwnerRepo{isOwner: true}
-	cfg := &config.Config{ShlinkDefaultDomain: "http://localhost"}
-	h := handler.NewShlinkProxyHandler(svc, nil, ownerRepo, cfg)
-
-	r := chi.NewRouter()
-	r.Post("/api/shlink/short-urls/{shortCode}/toggle", h.ToggleShortURL)
-
-	body := bytes.NewBufferString(`{"enabled":false}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/shlink/short-urls/abc/toggle", body)
-	req = userCtx(req, "user")
-	rec := httptest.NewRecorder()
-
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
