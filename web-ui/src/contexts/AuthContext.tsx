@@ -5,9 +5,6 @@ import { getMe } from '@/api/endpoints/auth'
 import type { MeResponse } from '@/types/api'
 import { AuthContext } from './AuthContextDef'
 
-export { AuthContext } from './AuthContextDef'
-export type { AuthContextValue } from './AuthContextDef'
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: me, isLoading } = useQuery({
     queryKey: ['me'],
