@@ -1,38 +1,28 @@
-import { useState } from 'react'
-import { AppShell, Burger, Group, Text, useMantineColorScheme } from '@mantine/core'
+import { AppShell, Box } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
+import { type ReactNode } from 'react'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 
-export function AppShellWrapper({ children }: { children: React.ReactNode }) {
+export function AppShellWrapper({ children }: { children: ReactNode }) {
   const [opened, { toggle }] = useDisclosure()
 
   return (
     <AppShell
-      header={{ height: 60 }}
-      navbar={{
-        width: 260,
-        breakpoint: 'sm',
-        collapsed: { mobile: !opened },
-      }}
+      header={{ height: 56 }}
+      navbar={{ width: 220, breakpoint: 'sm', collapsed: { mobile: !opened } }}
       padding="md"
     >
       <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between">
-          <Group>
-            <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
-            <Text fw={700} size="lg" c="blue">Shlink BFF</Text>
-          </Group>
-          <Header />
-        </Group>
+        <Header opened={opened} onToggle={toggle} />
       </AppShell.Header>
-
-      <AppShell.Navbar p="md">
-        <Sidebar onNavigate={() => { if (opened) toggle() }} />
+      <AppShell.Navbar>
+        <Sidebar onClose={toggle} />
       </AppShell.Navbar>
-
       <AppShell.Main>
-        {children}
+        <Box maw={1400} mx="auto">
+          {children}
+        </Box>
       </AppShell.Main>
     </AppShell>
   )

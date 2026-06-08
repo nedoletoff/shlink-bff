@@ -1,15 +1,13 @@
 import { Badge } from '@mantine/core'
 
-interface Props {
-  active: boolean | undefined
-  activeLabel?: string
-  inactiveLabel?: string
+const STATUS_MAP: Record<string, { color: string; label: string }> = {
+  active:   { color: 'teal',   label: 'Активна' },
+  inactive: { color: 'gray',   label: 'Неактивна' },
+  pending:  { color: 'yellow', label: 'Ожидает' },
+  disabled: { color: 'red',    label: 'Отключена' },
 }
 
-export function StatusBadge({ active, activeLabel = 'Активна', inactiveLabel = 'Неактивна' }: Props) {
-  return (
-    <Badge color={active ? 'green' : 'red'} variant="light" size="sm">
-      {active ? activeLabel : inactiveLabel}
-    </Badge>
-  )
+export function StatusBadge({ status }: { status: string }) {
+  const { color, label } = STATUS_MAP[status.toLowerCase()] ?? { color: 'gray', label: status }
+  return <Badge color={color} variant="light" size="sm">{label}</Badge>
 }

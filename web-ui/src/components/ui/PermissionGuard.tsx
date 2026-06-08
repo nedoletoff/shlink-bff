@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import type { MeResponse } from '@/types/api'
 
 interface Props {
-  permission: string
+  permission: keyof MeResponse['permissions']
   fallback?: ReactNode
   children: ReactNode
 }

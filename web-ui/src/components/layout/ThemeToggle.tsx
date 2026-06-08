@@ -7,7 +7,7 @@ export function ThemeToggle() {
   return (
     <ActionIcon
       variant="subtle"
-      onClick={() => toggleColorScheme()}
+      onClick={toggleColorScheme}
       aria-label="Переключить тему"
     >
       {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}

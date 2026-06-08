@@ -1,24 +1,19 @@
 import { ActionIcon, Tooltip } from '@mantine/core'
 import { useClipboard } from '@mantine/hooks'
-import { notifications } from '@mantine/notifications'
 import { IconCopy, IconCheck } from '@tabler/icons-react'
 
-interface Props {
-  value: string
-}
-
-export function CopyButton({ value }: Props) {
+export function CopyButton({ value, size = 16 }: { value: string; size?: number }) {
   const clipboard = useClipboard({ timeout: 2000 })
 
-  const handleCopy = () => {
-    clipboard.copy(value)
-    notifications.show({ message: 'Скопировано', color: 'teal', autoClose: 2000 })
-  }
-
   return (
-    <Tooltip label={clipboard.copied ? 'Скопировано' : 'Копировать'}>
-      <ActionIcon variant="subtle" size="sm" onClick={handleCopy}>
-        {clipboard.copied ? <IconCheck size={14} color="teal" /> : <IconCopy size={14} />}
+    <Tooltip label={clipboard.copied ? 'Скопировано!' : 'Скопировать'} withArrow>
+      <ActionIcon
+        variant="subtle"
+        size="sm"
+        onClick={() => clipboard.copy(value)}
+        aria-label="Скопировать"
+      >
+        {clipboard.copied ? <IconCheck size={size} color="teal" /> : <IconCopy size={size} />}
       </ActionIcon>
     </Tooltip>
   )

@@ -1,25 +1,26 @@
-import { Card, Text, Group, ThemeIcon } from '@mantine/core'
+import { Paper, Stack, Text, Group, type PaperProps } from '@mantine/core'
 import type { ReactNode } from 'react'
 
-interface Props {
-  title: string
-  value: string | number
-  icon: ReactNode
-  color?: string
+interface Props extends PaperProps {
+  label: string
+  value: ReactNode
+  icon?: ReactNode
+  delta?: number
 }
 
-export function StatCard({ title, value, icon, color = 'blue' }: Props) {
+export function StatCard({ label, value, icon, delta, ...rest }: Props) {
   return (
-    <Card withBorder radius="md" p="md">
-      <Group justify="space-between" align="flex-start">
-        <div>
-          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>{title}</Text>
-          <Text size="xl" fw={700} mt={4}>{value}</Text>
-        </div>
-        <ThemeIcon size="lg" variant="light" color={color} radius="md">
-          {icon}
-        </ThemeIcon>
+    <Paper withBorder p="md" radius="md" {...rest}>
+      <Group justify="space-between" mb={4}>
+        <Text size="sm" c="dimmed" fw={500}>{label}</Text>
+        {icon}
       </Group>
-    </Card>
+      <Text size="xl" fw={700} style={{ fontVariantNumeric: 'tabular-nums' }}>{value}</Text>
+      {delta !== undefined && (
+        <Text size="xs" c={delta >= 0 ? 'teal' : 'red'} mt={4}>
+          {delta >= 0 ? '+' : ''}{delta}% за период
+        </Text>
+      )}
+    </Paper>
   )
 }
