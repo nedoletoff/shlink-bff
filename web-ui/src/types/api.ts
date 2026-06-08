@@ -1,11 +1,12 @@
 // Контракт GET /api/me — API key НИКОГДА не присутствует
 export interface Permissions {
-  canCreateShortUrl: boolean;
-  canEditOwnLinks:   boolean;
-  canDeleteOwnLinks: boolean;
-  canManageOwnTags:  boolean;
-  canViewAuditLogs:  boolean;
-  canManageUsers:    boolean;
+  canCreateShortUrl:      boolean;
+  canCreateWithCustomSlug: boolean;
+  canEditOwnLinks:        boolean;
+  canDeleteOwnLinks:      boolean;
+  canManageOwnTags:       boolean;
+  canViewAuditLogs:       boolean;
+  canManageUsers:         boolean;
 }
 
 export interface FeatureFlags {
@@ -214,6 +215,27 @@ export interface AdminUser {
 }
 
 // Admin Roles
+export interface RolePermissions {
+  role:                    string;
+  canViewOwnLinks:         boolean;
+  canViewAllLinks:         boolean;
+  canCreateLinks:          boolean;
+  canCreateWithCustomSlug: boolean;
+  canCreateWithoutSlug:    boolean;
+  canEditOwnLinks:         boolean;
+  canEditAllLinks:         boolean;
+  canDeleteOwnLinks:       boolean;
+  canDeleteAllLinks:       boolean;
+  canManageOwnTags:        boolean;
+  canManageAllTags:        boolean;
+  canViewOwnStats:         boolean;
+  canViewAllStats:         boolean;
+  canViewAuditLogs:        boolean;
+  canManageUsers:          boolean;
+  canManageRoles:          boolean;
+  updatedAt:               string;
+}
+
 export interface RoleEntry {
   role:        string;
   permissions: string[];

@@ -29,10 +29,13 @@ function CreateEditModal({
   onSaved: () => void;
   editTarget: ShortURL | null;
 }) {
-  const [longUrl,   setLongUrl]   = useState('');
-  const [title,     setTitle]     = useState('');
-  const [customSlug, setSlug]     = useState('');
-  const [saving,    setSaving]    = useState(false);
+  const { user } = useAuth();
+  const canCustomSlug = user?.permissions.canCreateWithCustomSlug ?? false;
+
+  const [longUrl,    setLongUrl]   = useState('');
+  const [title,      setTitle]     = useState('');
+  const [customSlug, setSlug]      = useState('');
+  const [saving,     setSaving]    = useState(false);
 
   useEffect(() => {
     if (editTarget) {
@@ -58,7 +61,8 @@ function CreateEditModal({
         await api.post('/api/shlink/short-urls', {
           longUrl:    longUrl.trim(),
           title:      title.trim() || undefined,
-          customSlug: customSlug.trim() || undefined,
+          // передаём customSlug только если пользователь имеет право и ввёл значение
+          ...(canCustomSlug && customSlug.trim() ? { customSlug: customSlug.trim() } : {}),
         });
         notifications.show({ message: 'Ссылка создана', color: 'green' });
       }
@@ -93,7 +97,8 @@ function CreateEditModal({
           value={title}
           onChange={e => setTitle(e.currentTarget.value)}
         />
-        {!editTarget && (
+        {/* Поле кастомного слага — только при создании и только если есть право */}
+        {!editTarget && canCustomSlug && (
           <TextInput
             label="Кастомный слаг (опционально)"
             placeholder="my-link"
