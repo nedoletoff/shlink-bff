@@ -22,8 +22,8 @@ export function AdminAuditLogs() {
   const [username, setUsername] = useState('')
   const [action, setAction] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
-  const [dateFrom, setDateFrom] = useState<Date | null>(null)
-  const [dateTo, setDateTo] = useState<Date | null>(null)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['audit-logs', page, username, action, result, dateFrom, dateTo],
@@ -73,14 +73,14 @@ export function AdminAuditLogs() {
         <DateInput
           placeholder="От"
           value={dateFrom}
-          onChange={(v: Date | null) => { setDateFrom(v); setPage(1) }}
+          onChange={(v: string | null) => { setDateFrom(v); setPage(1) }}
           w={140}
           clearable
         />
         <DateInput
           placeholder="До"
           value={dateTo}
-          onChange={(v: Date | null) => { setDateTo(v); setPage(1) }}
+          onChange={(v: string | null) => { setDateTo(v); setPage(1) }}
           w={140}
           clearable
         />

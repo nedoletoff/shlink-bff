@@ -1,13 +1,11 @@
-import { AppShell, Burger, Group, Text } from '@mantine/core'
+import { AppShell, Box } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { Outlet } from 'react-router-dom'
-import { useAuth } from '../../hooks/useAuth'
+import { type ReactNode } from 'react'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 
-export function AppLayout() {
+export function AppLayout({ children }: { children: ReactNode }) {
   const [opened, { toggle }] = useDisclosure()
-  const { me } = useAuth()
 
   return (
     <AppShell
@@ -16,21 +14,15 @@ export function AppLayout() {
       padding="md"
     >
       <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between">
-          <Group>
-            <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
-            <Text fw={700} size="lg">Shlink</Text>
-          </Group>
-          <Header me={me} />
-        </Group>
+        <Header opened={opened} onToggle={toggle} />
       </AppShell.Header>
-
-      <AppShell.Navbar p="xs">
-        <Sidebar me={me} />
+      <AppShell.Navbar>
+        <Sidebar onClose={toggle} />
       </AppShell.Navbar>
-
       <AppShell.Main>
-        <Outlet />
+        <Box maw={1400} mx="auto">
+          {children}
+        </Box>
       </AppShell.Main>
     </AppShell>
   )

@@ -1,17 +1,21 @@
-import { Group, Text, Avatar, Menu, UnstyledButton } from '@mantine/core'
+import { Group, Text, Avatar, Menu, UnstyledButton, Burger } from '@mantine/core'
 import { IconLogout, IconUser } from '@tabler/icons-react'
 import { useAuth } from '@/hooks/useAuth'
-import type { MeResponse } from '@/types/api'
 
 interface Props {
-  me: MeResponse | null
+  opened: boolean
+  onToggle: () => void
 }
 
-export function Header({ me }: Props) {
-  const { isAdmin } = useAuth()
+export function Header({ opened, onToggle }: Props) {
+  const { me, isAdmin } = useAuth()
 
   return (
-    <Group gap="sm">
+    <Group h="100%" px="md" justify="space-between">
+      <Group>
+        <Burger opened={opened} onClick={onToggle} hiddenFrom="sm" size="sm" />
+        <Text fw={700} size="lg">Shlink</Text>
+      </Group>
       {me && (
         <Menu shadow="md" width={180}>
           <Menu.Target>

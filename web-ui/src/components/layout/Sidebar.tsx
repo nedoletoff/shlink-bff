@@ -5,10 +5,9 @@ import {
   IconShield, IconClipboardList, IconSettings,
 } from '@tabler/icons-react'
 import { useAuth } from '@/hooks/useAuth'
-import type { MeResponse } from '@/types/api'
 
 interface Props {
-  me: MeResponse | null
+  onClose: () => void
 }
 
 const userLinks = [
@@ -24,20 +23,25 @@ const adminLinks = [
   { to: '/admin/settings', label: 'Настройки', icon: IconSettings },
 ]
 
-export function Sidebar({ me }: Props) {
+export function Sidebar({ onClose }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
-  const { isAdmin } = useAuth()
+  const { me, isAdmin } = useAuth()
+
+  const handleNav = (to: string) => {
+    navigate(to)
+    onClose()
+  }
 
   return (
-    <Stack gap={4}>
+    <Stack gap={4} p="xs">
       {userLinks.map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
           label={label}
           leftSection={<Icon size={16} />}
           active={location.pathname === to}
-          onClick={() => navigate(to)}
+          onClick={() => handleNav(to)}
         />
       ))}
 
@@ -52,7 +56,7 @@ export function Sidebar({ me }: Props) {
               label={label}
               leftSection={<Icon size={16} />}
               active={location.pathname.startsWith(to)}
-              onClick={() => navigate(to)}
+              onClick={() => handleNav(to)}
             />
           ))}
         </>
