@@ -1,12 +1,8 @@
-import api from '@/api/client'
+import { apiClient } from '../client'
 import type { ServerSettings, PatchSettingsPayload } from '@/types/api'
 
-export async function getSettings(): Promise<ServerSettings> {
-  const { data } = await api.get<ServerSettings>('/api/settings')
-  return data
-}
+export const getSettings = () =>
+  apiClient.get<ServerSettings>('/api/settings').then((r) => r.data)
 
-export async function patchSettings(payload: PatchSettingsPayload): Promise<ServerSettings> {
-  const { data } = await api.patch<ServerSettings>('/api/settings', payload)
-  return data
-}
+export const patchSettings = (payload: PatchSettingsPayload) =>
+  apiClient.patch<ServerSettings>('/api/settings', payload).then((r) => r.data)

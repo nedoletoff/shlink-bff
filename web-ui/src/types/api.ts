@@ -1,4 +1,4 @@
-// ─── Auth ──────────────────────────────────────────────────────────────────
+// ─── Auth ───────────────────────────────────────────────────────────────────
 export interface MeResponse {
   sub: string
   username: string
@@ -22,7 +22,6 @@ export interface ShortURL {
   maxVisits?: number | null
   validSince?: string | null
   validUntil?: string | null
-  isActive?: boolean
 }
 
 export interface ShortURLsResponse {
@@ -48,7 +47,7 @@ export interface CreateShortURLPayload {
   validUntil?: string
 }
 
-export type UpdateShortURLPayload = Omit<CreateShortURLPayload, 'customSlug'>
+export type EditShortURLPayload = Omit<CreateShortURLPayload, 'customSlug'>
 
 // ─── URL Detail ─────────────────────────────────────────────────────────────
 export interface ClickPoint { date: string; clicks: number }

@@ -1,15 +1,11 @@
-import api from '@/api/client'
+import { apiClient } from '../client'
 import type { TagEntry } from '@/types/api'
 
-export async function getTags(): Promise<TagEntry[]> {
-  const { data } = await api.get<TagEntry[]>('/api/shlink/tags')
-  return data
-}
+export const getTags = () =>
+  apiClient.get<{ tags: { data: TagEntry[] } }>('/api/shlink/tags').then((r) => r.data)
 
-export async function renameTag(tagId: string, newName: string) {
-  await api.put(`/api/shlink/tags/${tagId}`, { newName })
-}
+export const renameTag = (tagId: string, newName: string) =>
+  apiClient.put(`/api/shlink/tags/${tagId}`, { name: newName })
 
-export async function deleteTag(tagName: string) {
-  await api.delete(`/api/shlink/tags/${encodeURIComponent(tagName)}`)
-}
+export const deleteTag = (tagName: string) =>
+  apiClient.delete(`/api/shlink/tags/${encodeURIComponent(tagName)}`)

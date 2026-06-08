@@ -1,4 +1,4 @@
-import api from '@/api/client'
+import { apiClient } from '../client'
 import type { AuditLogsResponse } from '@/types/api'
 
 export interface AuditParams {
@@ -11,7 +11,5 @@ export interface AuditParams {
   dateTo?: string
 }
 
-export async function getAuditLogs(params: AuditParams = {}): Promise<AuditLogsResponse> {
-  const { data } = await api.get<AuditLogsResponse>('/api/admin/logs', { params })
-  return data
-}
+export const getAuditLogs = (params: AuditParams) =>
+  apiClient.get<AuditLogsResponse>('/api/admin/logs', { params }).then((r) => r.data)

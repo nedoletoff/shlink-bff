@@ -1,21 +1,14 @@
-import api from '@/api/client'
+import { apiClient } from '../client'
 import type { UserRecord } from '@/types/api'
 
-export async function listUsers(): Promise<UserRecord[]> {
-  const { data } = await api.get<UserRecord[]>('/api/admin/users')
-  return data
-}
+export const getAdminUsers = () =>
+  apiClient.get<UserRecord[]>('/api/admin/users').then((r) => r.data)
 
-export async function getUser(sub: string): Promise<UserRecord> {
-  const { data } = await api.get<UserRecord>(`/api/admin/users/${sub}`)
-  return data
-}
+export const getAdminUser = (sub: string) =>
+  apiClient.get<UserRecord>(`/api/admin/users/${sub}`).then((r) => r.data)
 
-export async function updateUser(sub: string, payload: Partial<Pick<UserRecord, 'role' | 'status' | 'slugPrefix'>>) {
-  const { data } = await api.put<UserRecord>(`/api/admin/users/${sub}`, payload)
-  return data
-}
+export const updateAdminUser = (sub: string, payload: Partial<Pick<UserRecord, 'role' | 'status' | 'slugPrefix'>>) =>
+  apiClient.put<UserRecord>(`/api/admin/users/${sub}`, payload).then((r) => r.data)
 
-export async function updateApiKey(sub: string, apiKey: string) {
-  await api.put(`/api/admin/users/${sub}/apikey`, { apiKey })
-}
+export const updateApiKey = (sub: string, apiKey: string) =>
+  apiClient.put(`/api/admin/users/${sub}/apikey`, { apiKey }).then((r) => r.data)

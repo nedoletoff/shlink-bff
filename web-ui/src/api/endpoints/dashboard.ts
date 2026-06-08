@@ -1,7 +1,5 @@
-import api from '@/api/client'
+import { apiClient } from '../client'
 import type { DashboardResponse } from '@/types/api'
 
-export async function getDashboard(period = 30): Promise<DashboardResponse> {
-  const { data } = await api.get<DashboardResponse>('/api/dashboard', { params: { period } })
-  return data
-}
+export const getDashboard = (period: number) =>
+  apiClient.get<DashboardResponse>('/api/dashboard', { params: { period } }).then((r) => r.data)
