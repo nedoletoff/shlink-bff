@@ -23,13 +23,12 @@ func NewProvisioner(pool *pgxpool.Pool, runner Runner) *Provisioner {
 //
 // Алгоритм:
 //  1. Быстрая проверка: если shlink_api_key != '' → возвращаем существующий ключ.
-//  2. Берём pg_advisory_lock по FNV-1a hash(sub) — исключаем параллельную генерацию.
+//  2. Берём pg_advisory_lock по FNV-1a hash(sub).
 //  3. Re-check после блокировки (double-checked locking).
-//  4. Вызываем runner.GenerateAPIKey.
-//  5. Записываем ключ в БД.
-//  6. Освобождаем lock (defer).
-//
-// Возвращает ключ (новый или существующий).
+//  4. Удаляем старый ключ в shlink по имени (если остался от предыдущего запуска).
+//  5. Генерируем новый ключ через CLI.
+//  6. Записываем ключ в БД.
+//  7. Освобождаем lock.
 func (p *Provisioner) EnsureAPIKey(ctx context.Context, sub, username string) (string, error) {
 	// Шаг 1: быстрая проверка без лока
 	existingKey, err := p.getAPIKey(ctx, sub)
@@ -40,7 +39,7 @@ func (p *Provisioner) EnsureAPIKey(ctx context.Context, sub, username string) (s
 		return existingKey, nil
 	}
 
-	// Шаг 2: advisory lock — lockID детерминирован по sub
+	// Шаг 2: advisory lock
 	lockID := hashSub(sub)
 
 	conn, err := p.pool.Acquire(ctx)
@@ -67,14 +66,21 @@ func (p *Provisioner) EnsureAPIKey(ctx context.Context, sub, username string) (s
 		return recheck, nil
 	}
 
-	// Шаг 4: генерация через CLI
+	// Шаг 4: удалить старый ключ по имени (idempotent — не падает если нет)
+	slog.Info("provisioner: deleting stale api key if exists", "sub", sub, "username", username)
+	if delErr := p.runner.DeleteAPIKey(ctx, username); delErr != nil {
+		// Не фатально — логируем и продолжаем
+		slog.Warn("provisioner: delete stale key failed", "sub", sub, "username", username, "err", delErr)
+	}
+
+	// Шаг 5: генерация через CLI
 	slog.Info("provisioner: generating api key", "sub", sub, "username", username)
 	newKey, err := p.runner.GenerateAPIKey(ctx, username)
 	if err != nil {
 		return "", fmt.Errorf("provisioner: generate key for %q: %w", username, err)
 	}
 
-	// Шаг 5: запись в БД
+	// Шаг 6: запись в БД
 	if _, err = conn.Exec(ctx, `UPDATE users SET shlink_api_key = $1, updated_at = NOW() WHERE sub = $2`, newKey, sub); err != nil {
 		return "", fmt.Errorf("provisioner: store key: %w", err)
 	}
@@ -92,7 +98,6 @@ func (p *Provisioner) getAPIKey(ctx context.Context, sub string) (string, error)
 }
 
 // hashSub возвращает int64 advisory lock ID для sub.
-// FNV-1a — детерминирован, без внешних зависимостей.
 func hashSub(sub string) int64 {
 	const (
 		offset64 = uint64(14695981039346656037)
