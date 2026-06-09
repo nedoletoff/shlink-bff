@@ -18,6 +18,9 @@ func TestDefaultAdminPermissions_AllManagementFlags(t *testing.T) {
 	if !p.CanManageRoles {
 		t.Error("admin: CanManageRoles should be true")
 	}
+	if !p.CanManageSettings {
+		t.Error("admin: CanManageSettings should be true")
+	}
 	if !p.CanViewAllLinks {
 		t.Error("admin: CanViewAllLinks should be true")
 	}
@@ -69,7 +72,7 @@ func TestDefaultAdminPermissions_RoleField(t *testing.T) {
 	}
 }
 
-// ── DefaultUserPermissions ─────────────────────────────────────────────────
+// ── DefaultUserPermissions ───────────────────────────────────────────────
 
 // TestDefaultUserPermissions_BasicFlags — пользователь получает базовые own-флаги.
 func TestDefaultUserPermissions_BasicFlags(t *testing.T) {
@@ -102,6 +105,9 @@ func TestDefaultUserPermissions_NoManagement(t *testing.T) {
 	if p.CanManageRoles {
 		t.Error("user: CanManageRoles should be false")
 	}
+	if p.CanManageSettings {
+		t.Error("user: CanManageSettings should be false")
+	}
 	if p.CanViewAllLinks {
 		t.Error("user: CanViewAllLinks should be false")
 	}
@@ -133,7 +139,6 @@ func TestDefaultUserPermissions_RoleField(t *testing.T) {
 // Если DefaultUserPermissions не выдаёт CanCreateWithCustomSlug — это намеренное ограничение.
 func TestDefaultUserPermissions_CustomSlugBehavior(t *testing.T) {
 	p := domain.DefaultUserPermissions(domain.RoleUser)
-	// Документируем текущее поведение (не prescriptive, а descriptive):
 	t.Logf("DefaultUserPermissions.CanCreateWithCustomSlug = %v", p.CanCreateWithCustomSlug)
 }
 
@@ -155,12 +160,15 @@ func TestRolePermissions_ZeroValue_DenyAll(t *testing.T) {
 	if p.CanManageRoles {
 		t.Error("zero: CanManageRoles should be false")
 	}
+	if p.CanManageSettings {
+		t.Error("zero: CanManageSettings should be false")
+	}
 	if p.CanViewAllLinks {
 		t.Error("zero: CanViewAllLinks should be false")
 	}
 }
 
-// ── Admin is superset of User ──────────────────────────────────────────────
+// ── Admin is superset of User ───────────────────────────────────────────────
 
 // TestAdminIsSuperset — каждый флаг, разрешённый для user, разрешён и для admin.
 func TestAdminIsSuperset(t *testing.T) {
@@ -180,4 +188,5 @@ func TestAdminIsSuperset(t *testing.T) {
 	check("CanViewOwnStats", admin.CanViewOwnStats, user.CanViewOwnStats)
 	check("CanCreateWithCustomSlug", admin.CanCreateWithCustomSlug, user.CanCreateWithCustomSlug)
 	check("CanManageOwnTags", admin.CanManageOwnTags, user.CanManageOwnTags)
+	check("CanManageSettings", admin.CanManageSettings, user.CanManageSettings)
 }

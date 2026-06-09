@@ -31,6 +31,7 @@ func TestDefaultAdminPermissions_AllTrue(t *testing.T) {
 		{"CanViewAuditLogs", p.CanViewAuditLogs},
 		{"CanManageUsers", p.CanManageUsers},
 		{"CanManageRoles", p.CanManageRoles},
+		{"CanManageSettings", p.CanManageSettings},
 	}
 	for _, f := range flags {
 		if !f.v {
@@ -76,6 +77,7 @@ func TestDefaultUserPermissions_MinimalSet(t *testing.T) {
 		{"CanViewAuditLogs", p.CanViewAuditLogs},
 		{"CanManageUsers", p.CanManageUsers},
 		{"CanManageRoles", p.CanManageRoles},
+		{"CanManageSettings", p.CanManageSettings},
 	}
 	for _, f := range mustFalse {
 		if f.v {
