@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"unified-backend/internal/controller"
+	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
@@ -17,27 +19,32 @@ import (
 type URLDetailHandler struct {
 	svc       *service.ShlinkService
 	ownerRepo OwnershipRepo
+	permCtrl  controller.PermChecker
 }
 
-func NewURLDetailHandler(svc *service.ShlinkService, ownerRepo OwnershipRepo) *URLDetailHandler {
-	return &URLDetailHandler{svc: svc, ownerRepo: ownerRepo}
+func NewURLDetailHandler(
+	svc *service.ShlinkService,
+	ownerRepo OwnershipRepo,
+	permCtrl controller.PermChecker,
+) *URLDetailHandler {
+	return &URLDetailHandler{svc: svc, ownerRepo: ownerRepo, permCtrl: permCtrl}
 }
 
 type urlDetailResponse struct {
-	ShortCode    string          `json:"shortCode"`
-	Title        string          `json:"title"`
-	ShortURL     string          `json:"shortUrl"`
-	LongURL      string          `json:"longUrl"`
-	DateCreated  string          `json:"dateCreated"`
-	VisitsTotal  int             `json:"visitsTotal"`
-	ClicksPerDay []ClickPoint    `json:"clicksPerDay"`
-	Devices      deviceBreakdown `json:"devices"`
-	Browsers     []namedCount    `json:"browsers"`
-	OS           []namedCount    `json:"os"`
-	Visits       []visitRow      `json:"visits"`
-	IsActive     bool            `json:"isActive"`
-	DeactivatedAt *string        `json:"deactivatedAt,omitempty"`
-	DeactivatedBy *string        `json:"deactivatedBy,omitempty"`
+	ShortCode     string          `json:"shortCode"`
+	Title         string          `json:"title"`
+	ShortURL      string          `json:"shortUrl"`
+	LongURL       string          `json:"longUrl"`
+	DateCreated   string          `json:"dateCreated"`
+	VisitsTotal   int             `json:"visitsTotal"`
+	ClicksPerDay  []ClickPoint    `json:"clicksPerDay"`
+	Devices       deviceBreakdown `json:"devices"`
+	Browsers      []namedCount    `json:"browsers"`
+	OS            []namedCount    `json:"os"`
+	Visits        []visitRow      `json:"visits"`
+	IsActive      bool            `json:"isActive"`
+	DeactivatedAt *string         `json:"deactivatedAt,omitempty"`
+	DeactivatedBy *string         `json:"deactivatedBy,omitempty"`
 }
 
 type deviceBreakdown struct {
@@ -84,12 +91,12 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	perms := h.svc.Perms(user)
-	if !perms.CanViewAllLinks {
-		if !perms.CanViewOwnLinks {
-			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
-			return
-		}
+	canViewAll, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsViewAll)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if !canViewAll {
 		isOwner, ownerErr := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
 		if ownerErr != nil {
 			slog.Error("url detail: ownership check failed", "shortCode", shortCode, "err", ownerErr)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"unified-backend/internal/controller"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
@@ -21,17 +22,20 @@ type URLLifecycleHandler struct {
 	shlinkSvc *service.ShlinkService
 	ownerRepo OwnershipRepo
 	auditRepo AuditRepo
+	permCtrl  controller.PermChecker
 }
 
 func NewURLLifecycleHandler(
 	svc *service.ShlinkService,
 	ownerRepo OwnershipRepo,
 	auditRepo AuditRepo,
+	permCtrl controller.PermChecker,
 ) *URLLifecycleHandler {
 	return &URLLifecycleHandler{
 		shlinkSvc: svc,
 		ownerRepo: ownerRepo,
 		auditRepo: auditRepo,
+		permCtrl:  permCtrl,
 	}
 }
 
@@ -158,36 +162,53 @@ func (h *URLLifecycleHandler) DeleteURLPermanently(w http.ResponseWriter, r *htt
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// checkDeactivatePermission: short_urls.delete (all) OR own ownership check.
 func (h *URLLifecycleHandler) checkDeactivatePermission(ctx context.Context, user *domain.User, shortCode string) error {
-	p := h.shlinkSvc.Perms(user)
-	if p.CanDeactivateAllLinks {
+	canAll, err := h.permCtrl.Check(ctx, user.ID, domain.PermShortURLsDelete)
+	if err != nil {
+		return errors.New("permission check failed")
+	}
+	if canAll {
 		return nil
 	}
-	if !p.CanDeactivateOwnLinks {
+	// Fallback: пользователь может деактивировать свои ссылки если есть short_urls.update.
+	canOwn, err := h.permCtrl.Check(ctx, user.ID, domain.PermShortURLsUpdate)
+	if err != nil {
+		return errors.New("permission check failed")
+	}
+	if !canOwn {
 		return errors.New("no deactivate permission")
 	}
 	return h.checkOwnership(ctx, user.Sub, shortCode)
 }
 
 func (h *URLLifecycleHandler) checkReactivatePermission(ctx context.Context, user *domain.User, shortCode string) error {
-	p := h.shlinkSvc.Perms(user)
-	if p.CanReactivateAllLinks {
+	canAll, err := h.permCtrl.Check(ctx, user.ID, domain.PermShortURLsDelete)
+	if err != nil {
+		return errors.New("permission check failed")
+	}
+	if canAll {
 		return nil
 	}
-	if !p.CanReactivateOwnLinks {
+	canOwn, err := h.permCtrl.Check(ctx, user.ID, domain.PermShortURLsUpdate)
+	if err != nil {
+		return errors.New("permission check failed")
+	}
+	if !canOwn {
 		return errors.New("no reactivate permission")
 	}
 	return h.checkOwnership(ctx, user.Sub, shortCode)
 }
 
 func (h *URLLifecycleHandler) checkPermanentDeletePermission(ctx context.Context, user *domain.User, shortCode string) error {
-	p := h.shlinkSvc.Perms(user)
-	if p.CanDeleteAllLinksPermanently {
+	canAll, err := h.permCtrl.Check(ctx, user.ID, domain.PermShortURLsDelete)
+	if err != nil {
+		return errors.New("permission check failed")
+	}
+	if canAll {
 		return nil
 	}
-	if !p.CanDeleteOwnLinksPermanently {
-		return errors.New("no permanent delete permission")
-	}
+	// Без short_urls.delete нельзя удалить чужую ссылку навсегда, только свою.
 	return h.checkOwnership(ctx, user.Sub, shortCode)
 }
 
