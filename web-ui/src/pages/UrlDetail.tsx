@@ -91,7 +91,7 @@ export function UrlDetail() {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteLink(shortCode!, ''),
+    mutationFn: () => deleteLink(shortCode!),
     onSuccess: () => {
       notifications.show({ color: 'teal', message: 'Ссылка удалена' })
       navigate('/links')
@@ -234,7 +234,6 @@ export function UrlDetail() {
         )}
       </Paper>
 
-      {/* Edit modal */}
       <Modal opened={editOpened} onClose={() => setEditOpened(false)} title="Редактировать ссылку" size="md">
         <form onSubmit={form.onSubmit((v) => editMutation.mutate(v))}>
           <Stack gap="sm">
@@ -252,14 +251,18 @@ export function UrlDetail() {
                 placeholder="Не ограничен"
                 clearable
                 value={form.values.validSince ? new Date(form.values.validSince) : null}
-                onChange={(d) => form.setFieldValue('validSince', d ? d.toISOString() : undefined)}
+                onChange={(d: Date | null) =>
+                  form.setFieldValue('validSince', d instanceof Date ? d.toISOString() : undefined)
+                }
               />
               <DateTimePicker
                 label="Действителен до"
                 placeholder="Не ограничен"
                 clearable
                 value={form.values.validUntil ? new Date(form.values.validUntil) : null}
-                onChange={(d) => form.setFieldValue('validUntil', d ? d.toISOString() : undefined)}
+                onChange={(d: Date | null) =>
+                  form.setFieldValue('validUntil', d instanceof Date ? d.toISOString() : undefined)
+                }
               />
             </Group>
             <Group justify="flex-end" mt="xs">
@@ -270,7 +273,6 @@ export function UrlDetail() {
         </form>
       </Modal>
 
-      {/* Delete confirm */}
       <ConfirmDialog
         opened={confirmDelete}
         onClose={() => setConfirmDelete(false)}

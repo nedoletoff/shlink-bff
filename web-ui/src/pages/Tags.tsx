@@ -8,6 +8,7 @@ import { useForm } from '@mantine/form'
 import { notifications } from '@mantine/notifications'
 import { IconPlus, IconPencil, IconTrash, IconTags } from '@tabler/icons-react'
 import { getTags, createTag, renameTag, deleteTag } from '@/api/endpoints/tags'
+import type { TagEntry } from '@/types/api'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 
@@ -24,12 +25,10 @@ export function Tags() {
   const [removing, setRemoving] = useState<string | null>(null)
   const [createOpened, setCreateOpened] = useState(false)
 
-  const { data, isLoading } = useQuery({
+  const { data: tags = [], isLoading } = useQuery<TagEntry[]>({
     queryKey: ['tags'],
     queryFn: getTags,
   })
-
-  const tags = data?.tags.data ?? []
 
   const createMutation = useMutation({
     mutationFn: (name: string) => createTag(name),
@@ -41,7 +40,7 @@ export function Tags() {
   })
 
   const renameMutation = useMutation({
-    mutationFn: ({ old, next }: { old: string; next: string }) => renameTag(old, next),
+    mutationFn: ({ old: oldTag, next }: { old: string; next: string }) => renameTag(oldTag, next),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tags'] })
       notifications.show({ color: 'teal', message: 'Тег переименован' })
@@ -98,7 +97,7 @@ export function Tags() {
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {tags.map((t) => (
+              {tags.map((t: TagEntry) => (
                 <Table.Tr key={t.tag}>
                   <Table.Td>
                     <Badge variant="light" color={tagColor(t.tag)}>{t.tag}</Badge>
@@ -132,7 +131,6 @@ export function Tags() {
         </Table.ScrollContainer>
       )}
 
-      {/* Create modal */}
       <Modal opened={createOpened} onClose={() => setCreateOpened(false)} title="Создать тег" size="sm">
         <form onSubmit={createForm.onSubmit((v) => createMutation.mutate(v.name))}>
           <Stack gap="sm">
@@ -145,7 +143,6 @@ export function Tags() {
         </form>
       </Modal>
 
-      {/* Rename modal */}
       <Modal opened={Boolean(renaming)} onClose={() => setRenaming(null)} title="Переименовать тег" size="sm">
         <form onSubmit={renameForm.onSubmit((v) => renameMutation.mutate({ old: renaming!, next: v.name }))}>
           <Stack gap="sm">

@@ -82,14 +82,18 @@ function LinkModal({ opened, onClose, initial }: { opened: boolean; onClose: () 
               placeholder="Не ограничен"
               clearable
               value={form.values.validSince ? new Date(form.values.validSince) : null}
-              onChange={(d: Date | null) => form.setFieldValue('validSince', d ? d.toISOString() : undefined)}
+              onChange={(d: Date | null) =>
+                form.setFieldValue('validSince', d instanceof Date ? d.toISOString() : undefined)
+              }
             />
             <DateTimePicker
               label="Действителен до"
               placeholder="Не ограничен"
               clearable
               value={form.values.validUntil ? new Date(form.values.validUntil) : null}
-              onChange={(d: Date | null) => form.setFieldValue('validUntil', d ? d.toISOString() : undefined)}
+              onChange={(d: Date | null) =>
+                form.setFieldValue('validUntil', d instanceof Date ? d.toISOString() : undefined)
+              }
             />
           </Group>
           <Group justify="flex-end" mt="xs">
@@ -118,7 +122,7 @@ export function ShortUrls() {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteLink(deleting!.shortCode, ''),
+    mutationFn: () => deleteLink(deleting!.shortCode),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
       notifications.show({ color: 'teal', message: 'Ссылка удалена' })
@@ -232,11 +236,7 @@ export function ShortUrls() {
                     <Text size="sm" c="dimmed">{formatDate(link.dateCreated)}</Text>
                   </Table.Td>
                   <Table.Td>
-                    <Badge
-                      size="sm"
-                      variant="dot"
-                      color={link.isActive !== false ? 'teal' : 'gray'}
-                    >
+                    <Badge size="sm" variant="dot" color={link.isActive !== false ? 'teal' : 'gray'}>
                       {link.isActive !== false ? 'Активна' : 'Неактивна'}
                     </Badge>
                   </Table.Td>
