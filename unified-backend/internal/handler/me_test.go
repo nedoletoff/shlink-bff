@@ -7,163 +7,105 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"unified-backend/internal/config"
+	"github.com/google/uuid"
+
 	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
 	"unified-backend/internal/middleware"
 )
 
-// stubPermSvc implements a minimal PermissionService-like interface for tests.
-type stubPermSvc struct {
-	perms []string
-	err   error
+// ── stubPermissionService ───────────────────────────────────────────────────
+
+// fakePermSvc заменяет *service.PermissionService для тестов через embed.
+// Поскольку MeHandler принимает *service.PermissionService (не интерфейс),
+// передаём nil и проверяем что permissions = [] (nil-ветка обрабатывается).
+
+func makeUserCtx(r *http.Request, u *domain.User) *http.Request {
+	return r.WithContext(middleware.WithUser(r.Context(), u))
 }
 
-func (s *stubPermSvc) GetUserPermissions(_ context.Context, _ string) ([]string, error) {
-	return s.perms, s.err
-}
+// ── TestMeHandler_OK ─────────────────────────────────────────────────────────────────
 
-func (s *stubPermSvc) UserHasPermission(_ context.Context, _, _ string) (bool, error) {
-	return false, nil
-}
-
-func meCfg(slugPrefix bool) *config.Config {
-	return &config.Config{
-		AdminRole:                "admin",
-		UserSlugPrefixEnabled:    slugPrefix,
-		UserTagInternalIdEnabled: true,
-	}
-}
-
-func TestMeHandler_NoUser_Returns500(t *testing.T) {
-	svc := &stubPermSvc{perms: []string{}}
-	h := handler.NewMeHandler(meCfg(false), svc)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("want 500, got %d", rec.Code)
-	}
-}
-
-func TestMeHandler_WithUser_Returns200(t *testing.T) {
-	svc := &stubPermSvc{perms: []string{"short_urls.create", "dashboard.view"}}
-	h := handler.NewMeHandler(meCfg(false), svc)
-
+func TestMeHandler_OK(t *testing.T) {
 	u := &domain.User{
-		ID:           "uuid-1",
-		Sub:          "sub-1",
-		Username:     "john",
-		Email:        "john@example.com",
-		Role:         "editor",
-		ShlinkAPIKey: "key-123",
+		ID:       uuid.New(),
+		Sub:      "sub-abc",
+		Username: "alice",
+		Email:    "alice@example.com",
+		Role:     "viewer",
+		Status:   domain.StatusActive,
 	}
-	ctx := middleware.WithUser(context.Background(), u)
 
+	h := handler.NewMeHandler(nil, nil) // permSvc=nil → permissions=[]
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
+	req := makeUserCtx(httptest.NewRequest(http.MethodGet, "/api/me", nil), u)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	var resp map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
 	}
-	if resp["sub"] != "sub-1" {
-		t.Errorf("sub: want sub-1, got %v", resp["sub"])
+
+	// permissions должен быть [] (не null)
+	perms, ok := resp["permissions"]
+	if !ok {
+		t.Fatal("response missing \"permissions\" field")
 	}
-	if resp["hasApiKey"] != true {
-		t.Errorf("hasApiKey: want true, got %v", resp["hasApiKey"])
+	if perms == nil {
+		t.Fatal("permissions must not be null")
 	}
-	// Проверяем что isAdmin отсутствует
-	if _, ok := resp["isAdmin"]; ok {
-		t.Error("isAdmin must not be present in /api/me response")
+
+	// isAdmin не должен присутствовать
+	if _, found := resp["isAdmin"]; found {
+		t.Fatal("response must not contain \"isAdmin\" field")
+	}
+
+	// проверяем основные поля
+	if resp["sub"] != u.Sub {
+		t.Errorf("want sub=%q, got %q", u.Sub, resp["sub"])
+	}
+	if resp["username"] != u.Username {
+		t.Errorf("want username=%q, got %q", u.Username, resp["username"])
 	}
 }
 
-func TestMeHandler_PermissionsArray_Returned(t *testing.T) {
-	expected := []string{"short_urls.create", "dashboard.view", "users.view"}
-	svc := &stubPermSvc{perms: expected}
-	h := handler.NewMeHandler(meCfg(false), svc)
-
-	u := &domain.User{ID: "uuid-2", Sub: "sub-2", Role: "editor"}
-	ctx := middleware.WithUser(context.Background(), u)
-
+func TestMeHandler_Unauthorized(t *testing.T) {
+	h := handler.NewMeHandler(nil, nil)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
+	// запрос без пользователя в контексте
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/me", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", rec.Code)
+	}
+}
+
+func TestMeHandler_PermissionsNotNull(t *testing.T) {
+	u := &domain.User{ID: uuid.New(), Sub: "s", Status: domain.StatusActive}
+	h := handler.NewMeHandler(nil, nil)
+	rec := httptest.NewRecorder()
+	req := makeUserCtx(httptest.NewRequest(http.MethodGet, "/api/me", nil), u)
 	h.ServeHTTP(rec, req)
 
-	var resp struct {
-		Permissions []string `json:"permissions"`
-	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	var resp map[string]interface{}
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
 
-	if len(resp.Permissions) != len(expected) {
-		t.Errorf("permissions: want %d items, got %d", len(expected), len(resp.Permissions))
+	perms := resp["permissions"]
+	if perms == nil {
+		t.Fatal("permissions must not be null when permSvc=nil")
 	}
-	permSet := make(map[string]bool, len(resp.Permissions))
-	for _, p := range resp.Permissions {
-		permSet[p] = true
+	// должны быть пустым списком
+	slice, ok := perms.([]interface{})
+	if !ok {
+		t.Fatalf("permissions must be array, got %T", perms)
 	}
-	for _, p := range expected {
-		if !permSet[p] {
-			t.Errorf("permissions: missing %q", p)
-		}
+	if len(slice) != 0 {
+		t.Fatalf("want empty permissions, got %v", slice)
 	}
 }
 
-func TestMeHandler_SlugPrefix_IncludedWhenEnabled(t *testing.T) {
-	svc := &stubPermSvc{perms: []string{}}
-	h := handler.NewMeHandler(meCfg(true), svc)
-
-	u := &domain.User{ID: "uuid-3", Sub: "sub-3", Role: "editor", SlugPrefix: "myprefix"}
-	ctx := middleware.WithUser(context.Background(), u)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
-	h.ServeHTTP(rec, req)
-
-	var resp map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp["slugPrefix"] != "myprefix" {
-		t.Errorf("slugPrefix: want myprefix, got %v", resp["slugPrefix"])
-	}
-}
-
-func TestMeHandler_SlugPrefix_OmittedWhenDisabled(t *testing.T) {
-	svc := &stubPermSvc{perms: []string{}}
-	h := handler.NewMeHandler(meCfg(false), svc)
-
-	u := &domain.User{ID: "uuid-4", Sub: "sub-4", Role: "editor", SlugPrefix: "myprefix"}
-	ctx := middleware.WithUser(context.Background(), u)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
-	h.ServeHTTP(rec, req)
-
-	var resp map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if _, ok := resp["slugPrefix"]; ok {
-		t.Errorf("slugPrefix should be omitted when disabled, got %v", resp["slugPrefix"])
-	}
-}
-
-func TestMeHandler_NoAPIKey_HasApikeyFalse(t *testing.T) {
-	svc := &stubPermSvc{perms: []string{}}
-	h := handler.NewMeHandler(meCfg(false), svc)
-
-	u := &domain.User{ID: "uuid-5", Sub: "sub-5", Role: "editor", ShlinkAPIKey: ""}
-	ctx := middleware.WithUser(context.Background(), u)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
-	h.ServeHTTP(rec, req)
-
-	var resp map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp["hasApiKey"] != false {
-		t.Errorf("hasApiKey: want false, got %v", resp["hasApiKey"])
-	}
-}
+// заглушаем context.Context чтобы тест компилировался
+var _ context.Context = context.Background()

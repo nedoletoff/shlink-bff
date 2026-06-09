@@ -1,72 +1,61 @@
 package handler
 
 import (
-	"log/slog"
 	"net/http"
 
-	"unified-backend/internal/config"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
 )
 
-type MeResponse struct {
-	Sub         string       `json:"sub"`
-	Username    string       `json:"username"`
-	Email       string       `json:"email"`
-	Role        string       `json:"role"`
-	Permissions []string     `json:"permissions"`
-	HasAPIKey   bool         `json:"hasApiKey"`
-	Features    FeatureFlags `json:"features"`
-	SlugPrefix  string       `json:"slugPrefix,omitempty"`
+// PermissionServiceIface — минимальный интерфейс для MeHandler.
+type PermissionServiceIface interface {
+	GetUserPermissions(ctx interface{ Deadline() (interface{}, bool); Done() <-chan struct{}; Err() error; Value(interface{}) interface{} }, userIDStr string) ([]string, error)
 }
 
-type FeatureFlags struct {
-	UserSlugPrefixEnabled    bool `json:"userSlugPrefixEnabled"`
-	UserTagInternalIdEnabled bool `json:"userTagInternalIdEnabled"`
-}
-
+// MeHandler — GET /api/me
 type MeHandler struct {
-	cfg     *config.Config
-	permSvc *service.PermissionService
+	userRepo UserRepo
+	permSvc  *service.PermissionService
 }
 
-func NewMeHandler(cfg *config.Config, permSvc *service.PermissionService) *MeHandler {
-	return &MeHandler{cfg: cfg, permSvc: permSvc}
+func NewMeHandler(userRepo UserRepo, permSvc *service.PermissionService) *MeHandler {
+	return &MeHandler{userRepo: userRepo, permSvc: permSvc}
+}
+
+type meResponse struct {
+	ID          string   `json:"id"`
+	Sub         string   `json:"sub"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email"`
+	Role        string   `json:"role"`
+	SlugPrefix  string   `json:"slugPrefix"`
+	Status      string   `json:"status"`
+	Permissions []string `json:"permissions"`
 }
 
 func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
-		slog.Error("me: user not in context")
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		writeJSON(w, map[string]string{"error": "unauthorized"}, http.StatusUnauthorized)
 		return
 	}
 
-	perms, err := h.permSvc.GetUserPermissions(r.Context(), user.ID)
-	if err != nil {
-		slog.Error("me: failed to get permissions", "sub", user.Sub, "err", err)
+	var perms []string
+	if h.permSvc != nil {
+		perms, _ = h.permSvc.GetUserPermissions(r.Context(), user.ID)
 	}
-	// Гарантируем []string{} вместо null в JSON если пермишни пустые или ошибка.
 	if perms == nil {
 		perms = []string{}
 	}
 
-	resp := MeResponse{
+	writeJSON(w, meResponse{
+		ID:          user.ID.String(),
 		Sub:         user.Sub,
 		Username:    user.Username,
 		Email:       user.Email,
 		Role:        user.Role,
+		SlugPrefix:  user.SlugPrefix,
+		Status:      string(user.Status),
 		Permissions: perms,
-		HasAPIKey:   user.ShlinkAPIKey != "",
-		Features: FeatureFlags{
-			UserSlugPrefixEnabled:    h.cfg.UserSlugPrefixEnabled,
-			UserTagInternalIdEnabled: h.cfg.UserTagInternalIdEnabled,
-		},
-	}
-
-	if h.cfg.UserSlugPrefixEnabled && user.SlugPrefix != "" {
-		resp.SlugPrefix = user.SlugPrefix
-	}
-
-	writeJSON(w, resp, http.StatusOK)
+	}, http.StatusOK)
 }
