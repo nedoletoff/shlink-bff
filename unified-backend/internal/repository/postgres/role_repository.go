@@ -68,12 +68,12 @@ func (r *RoleRepository) Create(ctx context.Context, name, description string) (
 	return ro, err
 }
 
-// GetPermissions возвращает все разрешения роли.
+// GetPermissions возвращает все разрешения роли через role_permissions_v2.
 func (r *RoleRepository) GetPermissions(ctx context.Context, roleID uuid.UUID) ([]domain.Permission, error) {
 	const q = `
 		SELECT p.id, p.name, COALESCE(p.description, '')
 		FROM permissions p
-		JOIN role_permissions rp ON rp.permission_id = p.id
+		JOIN role_permissions_v2 rp ON rp.permission_id = p.id
 		WHERE rp.role_id = $1
 		ORDER BY p.name`
 	rows, err := r.pool.Query(ctx, q, roleID)
@@ -93,7 +93,7 @@ func (r *RoleRepository) GetPermissions(ctx context.Context, roleID uuid.UUID) (
 	return perms, rows.Err()
 }
 
-// SetPermissions заменяет весь набор разрешений роли (DELETE + INSERT).
+// SetPermissions заменяет весь набор разрешений роли через role_permissions_v2 (DELETE + INSERT в транзакции).
 func (r *RoleRepository) SetPermissions(ctx context.Context, roleID uuid.UUID, permissionIDs []uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -101,14 +101,14 @@ func (r *RoleRepository) SetPermissions(ctx context.Context, roleID uuid.UUID, p
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	_, err = tx.Exec(ctx, `DELETE FROM role_permissions WHERE role_id = $1`, roleID)
+	_, err = tx.Exec(ctx, `DELETE FROM role_permissions_v2 WHERE role_id = $1`, roleID)
 	if err != nil {
 		return err
 	}
 
 	for _, pid := range permissionIDs {
 		_, err = tx.Exec(ctx,
-			`INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			`INSERT INTO role_permissions_v2 (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			roleID, pid,
 		)
 		if err != nil {

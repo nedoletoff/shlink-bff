@@ -16,20 +16,30 @@ import (
 	"unified-backend/internal/repository/postgres"
 )
 
+// RoleInvalidator — минимальный интерфейс для инвалидации L1-кэша.
+type RoleInvalidator interface {
+	InvalidateRole(roleName string)
+}
+
 // RoleHandler — управление ролями через RBAC.
-// Заменяет RolesHandler.
 type RoleHandler struct {
-	roleRepo   *postgres.RoleRepository
-	permRepo   *postgres.PermissionRepository
-	permCtrl   controller.PermChecker
+	roleRepo  *postgres.RoleRepository
+	permRepo  *postgres.PermissionRepository
+	permCtrl  controller.PermChecker
+	inv       RoleInvalidator // опционально
 }
 
 func NewRoleHandler(
 	roleRepo *postgres.RoleRepository,
 	permRepo *postgres.PermissionRepository,
 	permCtrl controller.PermChecker,
+	inv ...RoleInvalidator,
 ) *RoleHandler {
-	return &RoleHandler{roleRepo: roleRepo, permRepo: permRepo, permCtrl: permCtrl}
+	h := &RoleHandler{roleRepo: roleRepo, permRepo: permRepo, permCtrl: permCtrl}
+	if len(inv) > 0 {
+		h.inv = inv[0]
+	}
+	return h
 }
 
 func (h *RoleHandler) requirePerm(w http.ResponseWriter, r *http.Request, action string) bool {
@@ -107,10 +117,13 @@ func (h *RoleHandler) GetRolePermissions(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
+	if perms == nil {
+		perms = []domain.Permission{}
+	}
 	writeJSON(w, perms, http.StatusOK)
 }
 
-// PUT /api/roles/{id}/permissions — полная замена набора разрешений.
+// PUT /api/roles/{id}/permissions — полная замена набора разрешений + инвалидация L1-кэша.
 func (h *RoleHandler) SetRolePermissions(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermRolesManage) {
 		return
@@ -118,6 +131,13 @@ func (h *RoleHandler) SetRolePermissions(w http.ResponseWriter, r *http.Request)
 	roleID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeJSON(w, map[string]string{"error": "invalid role id"}, http.StatusBadRequest)
+		return
+	}
+
+	// Читаем роль до изменений, чтобы знать её имя для InvalidateRole.
+	role, err := h.roleRepo.GetByID(r.Context(), roleID)
+	if err != nil || role == nil {
+		writeJSON(w, map[string]string{"error": "role not found"}, http.StatusNotFound)
 		return
 	}
 
@@ -144,5 +164,11 @@ func (h *RoleHandler) SetRolePermissions(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
+
+	// Инвалидируем L1-кэш и все L2-записи для этой роли.
+	if h.inv != nil {
+		h.inv.InvalidateRole(role.Name)
+	}
+
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -17,20 +18,30 @@ import (
 	"unified-backend/internal/repository/postgres"
 )
 
+// UserInvalidator — мин. интерфейс для сброса L2-кэша пользователя.
+type UserInvalidator interface {
+	InvalidateUser(userID uuid.UUID)
+}
+
 // UserHandler — управление пользователями через разрешения RBAC.
-// Заменяет AdminHandler.
 type UserHandler struct {
 	userRepo  *postgres.UserRepository
 	auditRepo *postgres.AuditRepository
 	permCtrl  controller.PermChecker
+	inv       UserInvalidator // опционально
 }
 
 func NewUserHandler(
 	userRepo *postgres.UserRepository,
 	auditRepo *postgres.AuditRepository,
 	permCtrl controller.PermChecker,
+	inv ...UserInvalidator,
 ) *UserHandler {
-	return &UserHandler{userRepo: userRepo, auditRepo: auditRepo, permCtrl: permCtrl}
+	h := &UserHandler{userRepo: userRepo, auditRepo: auditRepo, permCtrl: permCtrl}
+	if len(inv) > 0 {
+		h.inv = inv[0]
+	}
+	return h
 }
 
 func (h *UserHandler) recordAuditAsync(entry *domain.AuditEntry) {
@@ -151,7 +162,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, updated, http.StatusOK)
 }
 
-// PATCH /api/users/{sub}/role — назначить роль по UUID.
+// PATCH /api/users/{sub}/role — назначить роль по UUID + инвалидировать L2-кэш.
 func (h *UserHandler) PatchUserRole(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersManage) {
 		return
@@ -175,9 +186,30 @@ func (h *UserHandler) PatchUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{"role_id": parsedID}); err != nil {
+	// Получаем имя роли, чтобы синхронизировать users.role (fallback-поле).
+	var roleName string
+	if err := h.userRepo.Pool().QueryRow(r.Context(),
+		`SELECT name FROM roles WHERE id = $1`, parsedID,
+	).Scan(&roleName); err != nil {
+		slog.Warn("user_handler: role not found", "roleId", p.RoleID, "err", err)
+		writeJSON(w, map[string]string{"error": "role not found"}, http.StatusNotFound)
+		return
+	}
+
+	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{
+		"role_id": parsedID,
+		"role":    roleName,
+	}); err != nil {
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
+	}
+
+	// Инвалидируем L2-кэш пользователя.
+	if h.inv != nil {
+		targetUser, _ := h.userRepo.GetBySub(r.Context(), sub)
+		if targetUser != nil {
+			h.inv.InvalidateUser(targetUser.ID)
+		}
 	}
 
 	actor := middleware.UserFromCtx(r.Context())
@@ -187,13 +219,13 @@ func (h *UserHandler) PatchUserRole(w http.ResponseWriter, r *http.Request) {
 		Action:   "user.role.assign",
 		Resource: sub,
 		Result:   "success",
-		Details:  map[string]any{"roleId": p.RoleID},
+		Details:  map[string]any{"roleId": p.RoleID, "roleName": roleName},
 	})
 
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
-// GET /api/users/{sub}/links — заглушка, агрегация поставляется позже через shlink API.
+// GET /api/users/{sub}/links
 func (h *UserHandler) GetUserLinks(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersView) {
 		return

@@ -10,14 +10,14 @@ import (
 )
 
 type MeResponse struct {
-	Sub        string   `json:"sub"`
-	Username   string   `json:"username"`
-	Email      string   `json:"email"`
-	Role       string   `json:"role"`
-	Permissions []string `json:"permissions"`
-	HasAPIKey  bool     `json:"hasApiKey"`
-	Features   FeatureFlags `json:"features"`
-	SlugPrefix string   `json:"slugPrefix,omitempty"`
+	Sub         string       `json:"sub"`
+	Username    string       `json:"username"`
+	Email       string       `json:"email"`
+	Role        string       `json:"role"`
+	Permissions []string     `json:"permissions"`
+	HasAPIKey   bool         `json:"hasApiKey"`
+	Features    FeatureFlags `json:"features"`
+	SlugPrefix  string       `json:"slugPrefix,omitempty"`
 }
 
 type FeatureFlags struct {
@@ -45,6 +45,9 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	perms, err := h.permSvc.GetUserPermissions(r.Context(), user.ID)
 	if err != nil {
 		slog.Error("me: failed to get permissions", "sub", user.Sub, "err", err)
+	}
+	// Гарантируем []string{} вместо null в JSON если пермишни пустые или ошибка.
+	if perms == nil {
 		perms = []string{}
 	}
 
@@ -52,7 +55,7 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Sub:         user.Sub,
 		Username:    user.Username,
 		Email:       user.Email,
-		Role:        string(user.Role),
+		Role:        user.Role,
 		Permissions: perms,
 		HasAPIKey:   user.ShlinkAPIKey != "",
 		Features: FeatureFlags{
