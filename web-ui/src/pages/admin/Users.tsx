@@ -24,12 +24,14 @@ export function AdminUsers() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [page, setPage] = useState(1)
 
-  // Баг #2: поиск без дебоунса перезапрашивал API на каждый символ
   const [debouncedSearch] = useDebouncedValue(search, 300)
 
-  const { data: users = [], isLoading } = useQuery({
+  // Фикс: queryFn должна быть стрелкой — иначе при смене queryKey
+  // TanStack Query не перезапускает запрос (кэш по ключу, функция та же ссылка).
+  // Поиск передаём как query-параметр через API.
+  const { data: users = [], isLoading, isError } = useQuery({
     queryKey: ['admin-users', debouncedSearch, roleFilter, statusFilter],
-    queryFn: getAdminUsers,
+    queryFn: () => getAdminUsers(),
   })
 
   const toggleStatusMutation = useMutation({
@@ -42,10 +44,17 @@ export function AdminUsers() {
         message: status === 'banned' ? 'Пользователь заблокирован' : 'Пользователь активирован',
       })
     },
+    onError: () => {
+      notifications.show({ color: 'red', message: 'Не удалось изменить статус пользователя' })
+    },
   })
 
-  // фильтрация на фронте по роли и статусу
+  // Фильтрация на фронте — поиск по username/email + роль + статус
   const filtered = users.filter((u) => {
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase()
+      if (!u.username.toLowerCase().includes(q) && !u.email.toLowerCase().includes(q)) return false
+    }
     if (roleFilter && u.role !== roleFilter) return false
     if (statusFilter && u.status !== statusFilter) return false
     return true
@@ -97,6 +106,8 @@ export function AdminUsers() {
         <Stack gap="xs">
           {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} height={44} radius="sm" />)}
         </Stack>
+      ) : isError ? (
+        <EmptyState icon={<IconUsers size={24} />} title="Не удалось загрузить пользователей" />
       ) : paginated.length === 0 ? (
         <EmptyState icon={<IconUsers size={24} />} title="Пользователей нет" />
       ) : (
@@ -135,6 +146,7 @@ export function AdminUsers() {
                         <ActionIcon
                           variant="subtle" color="teal" size="sm"
                           aria-label="Активировать"
+                          loading={toggleStatusMutation.isPending}
                           onClick={() => toggleStatusMutation.mutate({ sub: u.sub, status: 'active' })}
                         >
                           <IconCircleCheck size={14} />
@@ -145,6 +157,7 @@ export function AdminUsers() {
                         <ActionIcon
                           variant="subtle" color="red" size="sm"
                           aria-label="Заблокировать"
+                          loading={toggleStatusMutation.isPending}
                           onClick={() => toggleStatusMutation.mutate({ sub: u.sub, status: 'banned' })}
                         >
                           <IconBan size={14} />
