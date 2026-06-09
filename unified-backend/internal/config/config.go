@@ -47,6 +47,23 @@ type Config struct {
 	// По умолчанию — ["*"].
 	CORSAllowedOrigins []string
 
+	// CORSAllowedMethods — список разрешённых HTTP методов (CORS_ALLOWED_METHODS).
+	CORSAllowedMethods []string
+
+	// CORSAllowedHeaders — список разрешённых заголовков (CORS_ALLOWED_HEADERS).
+	CORSAllowedHeaders []string
+
+	// TrustedHeaderSecret — HMAC-секрет для валидации X-Auth-Request-User (TRUSTED_HEADER_SECRET).
+	// Если пустой — проверка не выполняется, логируется предупреждение.
+	TrustedHeaderSecret string
+
+	// DefaultRole — роль для пользователей без групп (DEFAULT_ROLE).
+	// По умолчанию пустая строка (поведение не меняется).
+	DefaultRole string
+
+	// BulkOperationLimit — макс. кол-во элементов в массовых запросах (BULK_OPERATION_LIMIT).
+	BulkOperationLimit int
+
 	// RoleGroups — маппинг keycloak-group (lower-case) → role-name.
 	RoleGroups map[string]string
 
@@ -93,6 +110,11 @@ func Load() *Config {
 		ShlinkAdminAPIKey:        adminAPIKey,
 		ShlinkAPIKey:             adminAPIKey, // alias
 		CORSAllowedOrigins:       parseCORSOrigins(),
+		CORSAllowedMethods:       parseCORSMethods(),
+		CORSAllowedHeaders:       parseCORSHeaders(),
+		TrustedHeaderSecret:      getEnv("TRUSTED_HEADER_SECRET", ""),
+		DefaultRole:              getEnv("DEFAULT_ROLE", ""),
+		BulkOperationLimit:       getInt("BULK_OPERATION_LIMIT", 100),
 		RoleGroups:               parseRoleGroups(),
 		AdminRole:                getEnv("ADMIN_ROLE", "admin"),
 		RoleSource:               parseRoleSource(),
@@ -109,12 +131,17 @@ func Load() *Config {
 	slog.Info("config loaded",
 		"role_source", cfg.RoleSource,
 		"admin_role", cfg.AdminRole,
+		"default_role", cfg.DefaultRole,
 		"slug_prefix_enabled", cfg.UserSlugPrefixEnabled,
 		"user_custom_slug_enabled", cfg.UserCustomSlugEnabled,
 		"shlink_short_id_length", cfg.ShlinkShortIDLength,
 		"shlink_default_domain", cfg.ShlinkDefaultDomain,
 		"shlink_runner_mode", cfg.ShlinkRunnerMode,
 		"cors_origins", cfg.CORSAllowedOrigins,
+		"cors_methods", cfg.CORSAllowedMethods,
+		"cors_headers", cfg.CORSAllowedHeaders,
+		"trusted_header_secret_set", cfg.TrustedHeaderSecret != "",
+		"bulk_operation_limit", cfg.BulkOperationLimit,
 		"shlink_admin_api_key_set", cfg.ShlinkAdminAPIKey != "",
 		"max_visits_default", cfg.MaxVisitsDefault,
 		"link_ttl_default_days", cfg.LinkTtlDefaultDays,
@@ -139,6 +166,44 @@ func parseCORSOrigins() []string {
 		return []string{"*"}
 	}
 	return origins
+}
+
+// parseCORSMethods читает CORS_ALLOWED_METHODS (через запятую).
+// По умолчанию — стандартный набор.
+func parseCORSMethods() []string {
+	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_METHODS"))
+	if raw == "" {
+		return []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	}
+	var methods []string
+	for _, m := range strings.Split(raw, ",") {
+		if s := strings.ToUpper(strings.TrimSpace(m)); s != "" {
+			methods = append(methods, s)
+		}
+	}
+	if len(methods) == 0 {
+		return []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	}
+	return methods
+}
+
+// parseCORSHeaders читает CORS_ALLOWED_HEADERS (через запятую).
+// По умолчанию — минимальный стандартный набор.
+func parseCORSHeaders() []string {
+	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_HEADERS"))
+	if raw == "" {
+		return []string{"Authorization", "Content-Type"}
+	}
+	var headers []string
+	for _, h := range strings.Split(raw, ",") {
+		if s := strings.TrimSpace(h); s != "" {
+			headers = append(headers, s)
+		}
+	}
+	if len(headers) == 0 {
+		return []string{"Authorization", "Content-Type"}
+	}
+	return headers
 }
 
 // parseRoleSource читает ROLE_SOURCE. Допустимые значения: "keycloak", "db".
