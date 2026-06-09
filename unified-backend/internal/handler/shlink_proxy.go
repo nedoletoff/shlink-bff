@@ -51,6 +51,7 @@ type createShortURLRequest struct {
 	LongURL    string   `json:"longUrl"`
 	Title      string   `json:"title"`
 	CustomSlug string   `json:"customSlug"`
+	Domain     string   `json:"domain"`
 	Tags       []string `json:"tags"`
 	MaxVisits  *int     `json:"maxVisits"`
 	ValidSince *string  `json:"validSince"`
@@ -196,6 +197,15 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Проверяем ограничения по домену (allowed_domains пользователя)
+	requestedDomain, _ := payload["domain"].(string)
+	if err := h.shlinkSvc.EnforceDomain(r.Context(), user, requestedDomain); err != nil {
+		slog.Warn("proxy: domain enforcement failed", "sub", user.Sub, "domain", requestedDomain, "err", err)
+		h.recordAudit(r, user, "create_short_url", "denied", map[string]any{"reason": err.Error(), "domain": requestedDomain})
+		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusForbidden)
+		return
+	}
+
 	var customSlug *string
 	if cs, ok := payload["customSlug"].(string); ok && cs != "" {
 		customSlug = &cs
@@ -228,7 +238,7 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 		slog.Error("proxy: failed to save url ownership", "sub", user.Sub, "shortCode", result.ShortCode, "err", err)
 	}
 
-	h.recordAudit(r, user, "create_short_url", "success", map[string]any{"shortCode": result.ShortCode})
+	h.recordAudit(r, user, "create_short_url", "success", map[string]any{"shortCode": result.ShortCode, "domain": requestedDomain})
 	writeJSON(w, result, http.StatusCreated)
 }
 

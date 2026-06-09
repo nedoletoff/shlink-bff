@@ -9,7 +9,12 @@ import (
 
 // PermissionServiceIface — минимальный интерфейс для MeHandler.
 type PermissionServiceIface interface {
-	GetUserPermissions(ctx interface{ Deadline() (interface{}, bool); Done() <-chan struct{}; Err() error; Value(interface{}) interface{} }, userIDStr string) ([]string, error)
+	GetUserPermissions(ctx interface {
+		Deadline() (interface{}, bool)
+		Done() <-chan struct{}
+		Err() error
+		Value(interface{}) interface{}
+	}, userIDStr string) ([]string, error)
 }
 
 // MeHandler — GET /api/me
@@ -40,9 +45,11 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Используем унифицированный сервис (tот же метод, что в user_handler.go)
 	var perms []string
 	if h.permSvc != nil {
-		perms, _ = h.permSvc.GetUserPermissions(r.Context(), user.ID)
+		// GetUserPermissions принимает Sub пользователя
+		perms, _ = h.permSvc.GetUserPermissions(r.Context(), user.Sub)
 	}
 	if perms == nil {
 		perms = []string{}

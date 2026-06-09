@@ -2,6 +2,10 @@ package middleware
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -38,17 +42,37 @@ type Identity struct {
 // ExtractIdentity читает X-Auth-Request-* заголовки и кладёт Identity в контекст.
 //
 // roleGroups — маппинг keycloak-group → role-name (из config.RoleGroups).
+// trustedSecret — HMAC-ключ для валидации заголовка X-Auth-Signature.
+//   - Если trustedSecret != "", проверяем HMAC-SHA256(sub, secret) == X-Auth-Signature.
+//   - Если trustedSecret == "", логируем предупреждение и пропускаем проверку (backward compat).
 //
 // Поле Role в контексте в режиме ROLE_SOURCE=keycloak заполняется прямо здесь.
 // В режиме ROLE_SOURCE=db — здесь кладётся только keycloak_role;
 // финальная роль (из БД) будет установлена в RequireActiveUser после загрузки user.
-func ExtractIdentity(roleGroups map[string]string) func(http.Handler) http.Handler {
+func ExtractIdentity(roleGroups map[string]string, trustedSecret ...string) func(http.Handler) http.Handler {
+	secret := ""
+	if len(trustedSecret) > 0 {
+		secret = trustedSecret[0]
+	}
+	if secret == "" {
+		slog.Warn("identity: TRUSTED_HEADER_SECRET is not set — header trust is unrestricted; set the env var in production")
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sub := r.Header.Get("X-Auth-Request-User")
 			if sub == "" {
 				jsonError(w, "unauthorized", http.StatusUnauthorized)
 				return
+			}
+
+			// Валидация подписи, если секрет задан.
+			if secret != "" {
+				sig := r.Header.Get("X-Auth-Signature")
+				if !validateHMAC(sub, secret, sig) {
+					slog.Warn("identity: invalid X-Auth-Signature", "sub", sub, "ip", ClientIP(r))
+					jsonError(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
 			}
 
 			groups := parseGroups(r.Header.Get("X-Auth-Request-Groups"))
@@ -73,6 +97,23 @@ func ExtractIdentity(roleGroups map[string]string) func(http.Handler) http.Handl
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// validateHMAC проверяет HMAC-SHA256(message, secret) == sig (hex).
+func validateHMAC(message, secret, sig string) bool {
+	if sig == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(message))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	// hmac.Equal через hex-декодирование для constant-time сравнения
+	expectedBytes, err1 := hex.DecodeString(expected)
+	gotBytes, err2 := hex.DecodeString(sig)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return hmac.Equal(expectedBytes, gotBytes)
 }
 
 // IdentityFromCtx извлекает Identity из контекста запроса.
@@ -104,19 +145,22 @@ func rolesFromCtx(ctx context.Context) []string {
 }
 
 // resolveRole определяет основную роль пользователя по его группам Keycloak.
-// Возвращает первое совпадение — используется для провизионирования и хранения в БД.
-func resolveRole(groups []string, roleGroups map[string]string) string {
+// Если ни одна группа не совпала с roleGroups, возвращает defaultRole (если задана).
+func resolveRole(groups []string, roleGroups map[string]string, defaultRole ...string) string {
 	for _, g := range groups {
 		if role, ok := roleGroups[strings.ToLower(strings.TrimSpace(g))]; ok {
 			return role
 		}
 	}
+	if len(defaultRole) > 0 && defaultRole[0] != "" {
+		return defaultRole[0]
+	}
 	return ""
 }
 
 // resolveAllRoles возвращает все уникальные роли пользователя из всех его групп.
-// Порядок — по первому вхождению. Используется для объединения permissions (OR-семантика).
-func resolveAllRoles(groups []string, roleGroups map[string]string) []string {
+// Если ни одна не совпала и задана defaultRole — возвращает её.
+func resolveAllRoles(groups []string, roleGroups map[string]string, defaultRole ...string) []string {
 	seen := make(map[string]struct{}, len(groups))
 	result := make([]string, 0, len(groups))
 	for _, g := range groups {
@@ -126,6 +170,9 @@ func resolveAllRoles(groups []string, roleGroups map[string]string) []string {
 				result = append(result, role)
 			}
 		}
+	}
+	if len(result) == 0 && len(defaultRole) > 0 && defaultRole[0] != "" {
+		return []string{defaultRole[0]}
 	}
 	return result
 }
