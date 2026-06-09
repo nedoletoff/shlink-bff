@@ -35,9 +35,13 @@ type Config struct {
 	ShlinkDefaultDomain string
 
 	// ShlinkAdminAPIKey — глобальный API-ключ администратора shlink.
-	// Используется только для вызовов PATCH /rest/v3/settings.
-	// Читается из SHLINK_ADMIN_API_KEY (обязательный, если нужно применять настройки к shlink).
+	// Используется для вызовов PATCH /rest/v3/settings.
+	// Читается из SHLINK_ADMIN_API_KEY.
 	ShlinkAdminAPIKey string
+
+	// ShlinkAPIKey — алиас ShlinkAdminAPIKey для обратной совместимости.
+	// Deprecated: используйте ShlinkAdminAPIKey.
+	ShlinkAPIKey string
 
 	// CORSAllowedOrigins — список разрешённых origins (CORS_ALLOWED_ORIGINS, через запятую).
 	// По умолчанию — ["*"].
@@ -78,6 +82,7 @@ func MustLoad() *Config {
 func Load() *Config {
 	httpAddr := getEnv("HTTP_ADDR", ":8080")
 	shlinkURL := mustGetEnv("SHLINK_INTERNAL_URL")
+	adminAPIKey := getEnv("SHLINK_ADMIN_API_KEY", "")
 	cfg := &Config{
 		HTTPAddr:                 httpAddr,
 		Port:                     strings.TrimPrefix(httpAddr, ":"),
@@ -85,7 +90,8 @@ func Load() *Config {
 		ShlinkURL:                shlinkURL,
 		ShlinkBaseURL:            shlinkURL,
 		ShlinkDefaultDomain:      getEnv("SHLINK_DEFAULT_DOMAIN", ""),
-		ShlinkAdminAPIKey:        getEnv("SHLINK_ADMIN_API_KEY", ""),
+		ShlinkAdminAPIKey:        adminAPIKey,
+		ShlinkAPIKey:             adminAPIKey, // alias
 		CORSAllowedOrigins:       parseCORSOrigins(),
 		RoleGroups:               parseRoleGroups(),
 		AdminRole:                getEnv("ADMIN_ROLE", "admin"),
