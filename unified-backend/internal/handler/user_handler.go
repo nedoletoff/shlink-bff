@@ -119,8 +119,9 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
 
 	var p struct {
-		Status     *string `json:"status"`
-		SlugPrefix *string `json:"slugPrefix"`
+		Status         *string   `json:"status"`
+		SlugPrefix     *string   `json:"slugPrefix"`
+		AllowedDomains *[]string `json:"allowedDomains"`
 	}
 	if err := json.Unmarshal(bodyBytes, &p); err != nil {
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
@@ -133,6 +134,22 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.SlugPrefix != nil {
 		fields["slug_prefix"] = strings.TrimSpace(*p.SlugPrefix)
+	}
+	if p.AllowedDomains != nil {
+		// Нормализуем: trim spaces для каждого домена, фильтруем пустые
+		cleaned := make([]string, 0, len(*p.AllowedDomains))
+		for _, d := range *p.AllowedDomains {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				cleaned = append(cleaned, d)
+			}
+		}
+		encoded, err := json.Marshal(cleaned)
+		if err != nil {
+			writeJSON(w, map[string]string{"error": "invalid allowedDomains"}, http.StatusBadRequest)
+			return
+		}
+		fields["allowed_domains"] = string(encoded)
 	}
 	if len(fields) == 0 {
 		writeJSON(w, map[string]string{"error": "no fields to update"}, http.StatusBadRequest)

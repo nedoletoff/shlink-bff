@@ -43,17 +43,20 @@ type RoleEntity struct {
 // Role (текстовое поле users.role) сохраняется для совместимости c keycloak-провизионингом
 // и для fallback-пути в PermissionService (когда role_id IS NULL).
 type User struct {
-	ID           uuid.UUID  `db:"id"`
-	Sub          string     `db:"sub"`
-	Username     string     `db:"username"`
-	Email        string     `db:"email"`
-	Role         string     `db:"role"`
-	RoleID       *uuid.UUID `db:"role_id"`
-	ShlinkAPIKey string     `db:"shlink_api_key"`
-	SlugPrefix   string     `db:"slug_prefix"`
-	Status       Status     `db:"status"`
-	CreatedAt    time.Time  `db:"created_at"`
-	UpdatedAt    time.Time  `db:"updated_at"`
+	ID             uuid.UUID  `db:"id"`
+	Sub            string     `db:"sub"`
+	Username       string     `db:"username"`
+	Email          string     `db:"email"`
+	Role           string     `db:"role"`
+	RoleID         *uuid.UUID `db:"role_id"`
+	ShlinkAPIKey   string     `db:"shlink_api_key"`
+	SlugPrefix     string     `db:"slug_prefix"`
+	// AllowedDomains — JSON-массив разрешённых доменов (например '["example.com","short.io"]').
+	// Пустая строка или '[]' означает — ограничений нет.
+	AllowedDomains string     `db:"allowed_domains"`
+	Status         Status     `db:"status"`
+	CreatedAt      time.Time  `db:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at"`
 }
 
 // Константы имён разрешений — используются в хендлерах и сервисах при вызове permCtrl.Check.
@@ -74,6 +77,10 @@ const (
 	PermShortURLsDeleteOwn = "short_urls.delete.own" // удалить свою ссылку
 	PermShortURLsViewOwn   = "short_urls.view.own"   // просматривать свои ссылки
 	PermShortURLsStatsOwn  = "short_urls.stats.own"  // статистика своих ссылок
+
+	// Ограничения по домену и префиксу (информационные константы; хранятся в users, не в permissions)
+	PermShortURLsRestrictDomain = "short_urls.restrict.domain" // ограничение по разрешённым доменам
+	PermShortURLsRestrictPrefix = "short_urls.restrict.prefix" // ограничение по slug-префиксу
 )
 
 // AllPermissions — полный список всех системных разрешений.

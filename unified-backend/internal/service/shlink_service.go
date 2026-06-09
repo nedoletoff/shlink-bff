@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -139,4 +141,30 @@ func (s *ShlinkService) BuildSlug(user *domain.User, slug string) string {
 		return user.SlugPrefix
 	}
 	return strings.Join([]string{user.SlugPrefix, slug}, "-")
+}
+
+// EnforceDomain проверяет, что запрошенный домен входит в список разрешённых для пользователя.
+// Если AllowedDomains пустой или содержит пустой JSON-массив — ограничений нет.
+// Если requestedDomain пустой — проверка не нужна (Shlink использует дефолтный домен).
+func (s *ShlinkService) EnforceDomain(_ context.Context, user *domain.User, requestedDomain string) error {
+	if user == nil || user.AllowedDomains == "" {
+		return nil
+	}
+	if requestedDomain == "" {
+		return nil
+	}
+	var allowed []string
+	if err := json.Unmarshal([]byte(user.AllowedDomains), &allowed); err != nil {
+		// Некорректный JSON в поле — не блокируем, логируем на уровне вызова
+		return nil
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	for _, d := range allowed {
+		if strings.EqualFold(d, requestedDomain) {
+			return nil
+		}
+	}
+	return fmt.Errorf("domain %q is not allowed for this user", requestedDomain)
 }
