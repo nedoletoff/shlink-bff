@@ -43,6 +43,21 @@ func (c *PermissionsCache) Load(ctx context.Context) error {
 	return nil
 }
 
+// Reload сбрасывает кэш и загружает все роли из БД заново.
+func (c *PermissionsCache) Reload(ctx context.Context) error {
+	perms, err := c.repo.GetAll(ctx)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = make(map[string]domain.RolePermissions, len(perms))
+	for _, p := range perms {
+		c.data[p.Role] = p
+	}
+	return nil
+}
+
 // Get возвращает permissions для роли. Если нет — fallback.
 func (c *PermissionsCache) Get(role string) domain.RolePermissions {
 	c.mu.RLock()
@@ -71,6 +86,12 @@ func (c *PermissionsCache) GetMerged(roles []string) domain.RolePermissions {
 		merged.CanEditAllLinks = merged.CanEditAllLinks || p.CanEditAllLinks
 		merged.CanDeleteOwnLinks = merged.CanDeleteOwnLinks || p.CanDeleteOwnLinks
 		merged.CanDeleteAllLinks = merged.CanDeleteAllLinks || p.CanDeleteAllLinks
+		merged.CanDeactivateOwnLinks = merged.CanDeactivateOwnLinks || p.CanDeactivateOwnLinks
+		merged.CanDeactivateAllLinks = merged.CanDeactivateAllLinks || p.CanDeactivateAllLinks
+		merged.CanReactivateOwnLinks = merged.CanReactivateOwnLinks || p.CanReactivateOwnLinks
+		merged.CanReactivateAllLinks = merged.CanReactivateAllLinks || p.CanReactivateAllLinks
+		merged.CanDeleteOwnLinksPermanently = merged.CanDeleteOwnLinksPermanently || p.CanDeleteOwnLinksPermanently
+		merged.CanDeleteAllLinksPermanently = merged.CanDeleteAllLinksPermanently || p.CanDeleteAllLinksPermanently
 		merged.CanManageOwnTags = merged.CanManageOwnTags || p.CanManageOwnTags
 		merged.CanManageAllTags = merged.CanManageAllTags || p.CanManageAllTags
 		merged.CanViewOwnStats = merged.CanViewOwnStats || p.CanViewOwnStats
@@ -78,6 +99,7 @@ func (c *PermissionsCache) GetMerged(roles []string) domain.RolePermissions {
 		merged.CanViewAuditLogs = merged.CanViewAuditLogs || p.CanViewAuditLogs
 		merged.CanManageUsers = merged.CanManageUsers || p.CanManageUsers
 		merged.CanManageRoles = merged.CanManageRoles || p.CanManageRoles
+		merged.CanManageSettings = merged.CanManageSettings || p.CanManageSettings
 	}
 	return merged
 }

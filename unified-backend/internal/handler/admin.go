@@ -29,7 +29,7 @@ func NewAdminHandler(
 	return &AdminHandler{userRepo: userRepo, auditRepo: auditRepo, rolesRepo: rolesRepo}
 }
 
-// recordAuditAsync — записи аудита в горутине с детачнутым контекстом.
+// recordAuditAsync — запись аудита в горутине с детачнутым контекстом.
 func (h *AdminHandler) recordAuditAsync(entry *domain.AuditEntry) {
 	if h.auditRepo == nil || entry == nil {
 		return
@@ -43,6 +43,11 @@ func (h *AdminHandler) recordAuditAsync(entry *domain.AuditEntry) {
 
 // GET /api/admin/users
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromCtx(r.Context())
+	if user == nil {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
 	users, err := h.userRepo.ListAll(r.Context())
 	if err != nil {
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
@@ -118,7 +123,7 @@ func (h *AdminHandler) ListLogs(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
-// parsePositiveInt — небольшой локальный helper
+// parsePositiveInt — небольшой локальный helper.
 func parsePositiveInt(s string) (int, error) {
 	n := 0
 	for _, ch := range s {
@@ -152,7 +157,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+	r.Body = strings.NewReader(string(bodyBytes))
 
 	var p updateUserPayload
 	if err := json.Unmarshal(bodyBytes, &p); err != nil {
@@ -203,138 +208,4 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, updated, http.StatusOK)
-}
-
-type apiKeyPayload struct {
-	APIKey string `json:"apiKey"`
-}
-
-// PUT /api/admin/users/{sub}/apikey
-func (h *AdminHandler) UpdateAPIKey(w http.ResponseWriter, r *http.Request) {
-	sub := chi.URLParam(r, "sub")
-	if sub == "" {
-		writeJSON(w, map[string]string{"error": "sub required"}, http.StatusBadRequest)
-		return
-	}
-	if _, err := h.userRepo.GetBySub(r.Context(), sub); err != nil {
-		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
-		return
-	}
-
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-
-	var p apiKeyPayload
-	if err := json.Unmarshal(bodyBytes, &p); err != nil {
-		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(p.APIKey) == "" {
-		writeJSON(w, map[string]string{"error": "apiKey required"}, http.StatusBadRequest)
-		return
-	}
-
-	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{"shlink_api_key": p.APIKey}); err != nil {
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
-		return
-	}
-
-	actor := middleware.UserFromCtx(r.Context())
-	actorSub2, actorRole2, actorUsername2 := "", "", ""
-	if actor != nil {
-		actorSub2 = actor.Sub
-		actorRole2 = string(actor.Role)
-		actorUsername2 = actor.Username
-	}
-	h.recordAuditAsync(&domain.AuditEntry{
-		UserSub:  actorSub2,
-		Username: actorUsername2,
-		Role:     actorRole2,
-		Action:   "admin.user.apikey.update",
-		Resource: sub,
-		Result:   "success",
-	})
-
-	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
-}
-
-type prefixPayload struct {
-	SlugPrefix string `json:"slugPrefix"`
-}
-
-// PUT /api/admin/users/{sub}/prefix
-func (h *AdminHandler) UpdateSlugPrefix(w http.ResponseWriter, r *http.Request) {
-	sub := chi.URLParam(r, "sub")
-	if sub == "" {
-		writeJSON(w, map[string]string{"error": "sub required"}, http.StatusBadRequest)
-		return
-	}
-	if _, err := h.userRepo.GetBySub(r.Context(), sub); err != nil {
-		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
-		return
-	}
-
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-
-	var p prefixPayload
-	if err := json.Unmarshal(bodyBytes, &p); err != nil {
-		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
-		return
-	}
-
-	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{"slug_prefix": strings.TrimSpace(p.SlugPrefix)}); err != nil {
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
-		return
-	}
-
-	actor := middleware.UserFromCtx(r.Context())
-	actorSub3, actorRole3, actorUsername3 := "", "", ""
-	if actor != nil {
-		actorSub3 = actor.Sub
-		actorRole3 = string(actor.Role)
-		actorUsername3 = actor.Username
-	}
-	h.recordAuditAsync(&domain.AuditEntry{
-		UserSub:  actorSub3,
-		Username: actorUsername3,
-		Role:     actorRole3,
-		Action:   "admin.user.prefix.update",
-		Resource: sub,
-		Result:   "success",
-		Details:  map[string]any{"body": string(bodyBytes)},
-	})
-
-	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
-}
-
-// GET /api/admin/settings
-func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{
-		"oidcEnabled":       true,
-		"proxyAuthEnabled":  true,
-		"shlinkIntegration": true,
-		"auditEnabled":      h.auditRepo != nil,
-	}, http.StatusOK)
-}
-
-// PATCH /api/admin/settings
-func (h *AdminHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
-	bodyBytes, _ := io.ReadAll(r.Body)
-	actor := middleware.UserFromCtx(r.Context())
-	actorSub4, actorRole4, actorUsername4 := "", "", ""
-	if actor != nil {
-		actorSub4 = actor.Sub
-		actorRole4 = string(actor.Role)
-		actorUsername4 = actor.Username
-	}
-	h.recordAuditAsync(&domain.AuditEntry{
-		UserSub:  actorSub4,
-		Username: actorUsername4,
-		Role:     actorRole4,
-		Action:   "admin.settings.patch",
-		Result:   "success",
-		Details:  map[string]any{"body": string(bodyBytes)},
-	})
-	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }

@@ -28,7 +28,7 @@ func main() {
 
 	ctx := context.Background()
 
-	// ── Postgres ────────────────────────────────────────────────────────────────────
+	// ── Postgres ─────────────────────────────────────────────────────────────────
 	db, err := postgres.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("postgres connect", "err", err)
@@ -45,7 +45,7 @@ func main() {
 	ownerRepo    := postgres.NewURLOwnershipRepository(db)
 	settingsRepo := postgres.NewServerSettingsRepository(db)
 
-	// ── DB config: seed on first run, then always apply ────────────────────────────
+	// ── DB config: seed on first run, then always apply ───────────────────────────
 	if err := settingsRepo.SeedFromEnv(ctx, cfg); err != nil {
 		slog.Warn("settings: seed from env failed", "err", err)
 	}
@@ -53,14 +53,14 @@ func main() {
 		slog.Warn("settings: apply from db failed", "err", err)
 	}
 
-	// ── Shlink client ────────────────────────────────────────────────────────────────
+	// ── Shlink client ─────────────────────────────────────────────────────────────
 	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
 	if err := shlinkClient.ValidateVersion(ctx, 3, 5, 3*time.Second); err != nil {
 		slog.Error("shlink version check", "err", err)
 		os.Exit(1)
 	}
 
-	// ── Services ───────────────────────────────────────────────────────────────────
+	// ── Services ──────────────────────────────────────────────────────────────────
 	permsCache := service.NewPermissionsCache(rolesRepo, cfg.AdminRole)
 	if err := permsCache.Load(ctx); err != nil {
 		slog.Error("permissions cache init", "err", err)
@@ -69,7 +69,7 @@ func main() {
 
 	shlinkSvc := service.NewShlinkService(shlinkClient, cfg, permsCache)
 
-	// ── Provisioner ──────────────────────────────────────────────────────────────
+	// ── Provisioner ───────────────────────────────────────────────────────────────
 	var runner shlinkctl.Runner
 	if cfg.ShlinkRunnerMode == "native" {
 		runner = shlinkctl.NewNativeRunner(cfg.ShlinkBin)
@@ -78,7 +78,7 @@ func main() {
 	}
 	provisioner := shlinkctl.NewProvisioner(db, runner)
 
-	// ── Handlers ─────────────────────────────────────────────────────────────────
+	// ── Handlers ──────────────────────────────────────────────────────────────────
 	meH        := handler.NewMeHandler(cfg, permsCache)
 	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo, ownerRepo)
 	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg)
@@ -103,57 +103,58 @@ func main() {
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
+	// Все API-маршруты доступны авторизованным пользователям.
+	// Проверка конкретных permissions выполняется внутри handler'ов.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.ExtractIdentity(cfg.RoleGroups))
 		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, provisioner, cfg))
 
+		// ── Текущий пользователь ──────────────────────────────────────────────────
 		r.Get("/api/me", meH.ServeHTTP)
+
+		// ── Дашборд ───────────────────────────────────────────────────────────────
 		r.Get("/api/dashboard", dashH.GetDashboard)
 
-		// Shlink proxy
+		// ── Shlink proxy ──────────────────────────────────────────────────────────
 		r.Get("/api/shlink/short-urls", proxyH.ListShortURLs)
 		r.Post("/api/shlink/short-urls", proxyH.CreateShortURL)
 		r.Patch("/api/shlink/short-urls/{shortCode}", proxyH.UpdateShortURL)
 		r.Delete("/api/shlink/short-urls/{shortCode}", proxyH.DeleteShortURL)
 
-		// Lifecycle: deactivate / activate / permanent delete
+		// ── Lifecycle ─────────────────────────────────────────────────────────────
 		r.Post("/api/shlink/short-urls/{shortCode}/deactivate", lifecycleH.DeactivateURL)
 		r.Post("/api/shlink/short-urls/{shortCode}/activate", lifecycleH.ActivateURL)
 		r.Delete("/api/shlink/short-urls/{shortCode}/permanent", lifecycleH.DeleteURLPermanently)
 
+		// ── Теги ──────────────────────────────────────────────────────────────────
 		r.Get("/api/shlink/tags", proxyH.ListTags)
+		r.Post("/api/shlink/tags", proxyH.CreateTag)
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
 		r.Delete("/api/shlink/tags/{tagId}", proxyH.DeleteTag)
 
-		// URL detail
+		// ── URL detail ────────────────────────────────────────────────────────────
 		r.Get("/api/urls/{shortCode}/detail", urlDetailH.GetURLDetail)
 
-		// Settings
+		// ── Настройки сервера ─────────────────────────────────────────────────────
+		// GET доступен всем; PATCH проверяет CanManageSettings внутри handler'а.
 		r.Get("/api/settings", settingsH.GetSettings)
 		r.Patch("/api/settings", settingsH.PatchSettings)
 
-		// Admin
-		r.Group(func(r chi.Router) {
-			r.Use(middleware.AdminOnly(cfg.AdminRole, auditRepo))
+		// ── Управление пользователями (проверка CanManageUsers внутри) ────────────
+		r.Get("/api/admin/users", adminH.ListUsers)
+		r.Get("/api/admin/users/{sub}", adminH.GetUser)
+		r.Put("/api/admin/users/{sub}", adminH.UpdateUser)
+		r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
 
-			r.Get("/api/admin/users", adminH.ListUsers)
-			r.Get("/api/admin/users/{sub}", adminH.GetUser)
-			r.Put("/api/admin/users/{sub}", adminH.UpdateUser)
-			r.Put("/api/admin/users/{sub}/apikey", adminH.UpdateAPIKey)
-			r.Put("/api/admin/users/{sub}/prefix", adminH.UpdateSlugPrefix)
-			r.Get("/api/admin/users/{sub}/links", adminH.GetUserLinks)
+		// ── Аудит (проверка CanViewAuditLogs внутри) ──────────────────────────────
+		r.Get("/api/admin/logs", adminH.ListLogs)
 
-			r.Get("/api/admin/logs", adminH.ListLogs)
-			r.Get("/api/admin/audit", adminH.ListLogs)
-
-			r.Get("/api/admin/roles", rolesH.ListRoles)
-			r.Get("/api/admin/roles/{role}", rolesH.GetRole)
-			r.Put("/api/admin/roles/{role}/permissions", rolesH.UpsertRolePermissions)
-			r.Delete("/api/admin/roles/{role}", rolesH.DeleteRole)
-
-			r.Get("/api/admin/settings", adminH.GetSettings)
-			r.Patch("/api/admin/settings", adminH.PatchSettings)
-		})
+		// ── Роли (проверка CanManageRoles внутри) ─────────────────────────────────
+		r.Get("/api/roles", rolesH.ListRoles)
+		r.Post("/api/roles", rolesH.CreateRole)
+		r.Get("/api/roles/{role}", rolesH.GetRole)
+		r.Put("/api/roles/{role}/permissions", rolesH.UpsertRolePermissions)
+		r.Delete("/api/roles/{role}", rolesH.DeleteRole)
 	})
 
 	srv := &http.Server{
