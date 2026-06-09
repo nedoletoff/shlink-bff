@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"unified-backend/internal/config"
+	"unified-backend/internal/controller"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
@@ -25,6 +26,7 @@ type ShlinkProxyHandler struct {
 	auditRepo AuditRepo
 	ownerRepo OwnershipRepo
 	cfg       *config.Config
+	permCtrl  controller.PermChecker
 }
 
 func NewShlinkProxyHandler(
@@ -32,12 +34,14 @@ func NewShlinkProxyHandler(
 	auditRepo AuditRepo,
 	ownerRepo OwnershipRepo,
 	cfg *config.Config,
+	permCtrl controller.PermChecker,
 ) *ShlinkProxyHandler {
 	return &ShlinkProxyHandler{
 		shlinkSvc: svc,
 		auditRepo: auditRepo,
 		ownerRepo: ownerRepo,
 		cfg:       cfg,
+		permCtrl:  permCtrl,
 	}
 }
 
@@ -88,8 +92,18 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
-	p := h.shlinkSvc.Perms(user)
-	if !p.CanViewOwnLinks && !p.CanViewAllLinks {
+
+	canViewAll, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsViewAll)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	canCreate, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsCreate)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if !canViewAll && !canCreate {
 		h.recordAudit(r, user, "list_short_urls", "denied", map[string]any{"reason": "no view permission"})
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
@@ -108,7 +122,7 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !p.CanViewAllLinks {
+	if !canViewAll {
 		ownedCodes, _ := h.ownerRepo.GetShortCodeSet(r.Context(), user.Sub)
 		resp.ShortURLs.Data = h.shlinkSvc.FilterShortURLsByUser(resp.ShortURLs.Data, user, ownedCodes)
 	}
@@ -130,7 +144,7 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 	}
 
 	n := len(resp.ShortURLs.Data)
-	if !p.CanViewAllLinks {
+	if !canViewAll {
 		resp.ShortURLs.Pagination.TotalItems = n
 		resp.ShortURLs.Pagination.ItemsInCurrentPage = n
 		resp.ShortURLs.Pagination.PagesCount = 1
@@ -145,6 +159,17 @@ func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Reques
 func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
+
+	ok, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsCreate)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		h.recordAudit(r, user, "create_short_url", "denied", map[string]any{"reason": "no short_urls.create permission"})
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
@@ -262,19 +287,19 @@ func (h *ShlinkProxyHandler) DeleteShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	p := h.shlinkSvc.Perms(user)
-	if !p.CanDeleteAllLinksPermanently {
-		if !p.CanDeleteOwnLinksPermanently {
+	canDeleteAll, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsDelete)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+
+	if !canDeleteAll {
+		// soft-delete only — проверяем владение
+		isOwner, ownerErr := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
+		if ownerErr != nil || !isOwner {
 			h.recordAudit(r, user, "delete_short_url", "denied",
-				map[string]any{"shortCode": shortCode, "reason": "no permanent delete permission"})
+				map[string]any{"shortCode": shortCode, "reason": "not the owner or no delete permission"})
 			writeJSON(w, map[string]string{"error": "forbidden: use /deactivate for soft delete"}, http.StatusForbidden)
-			return
-		}
-		isOwner, err := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
-		if err != nil || !isOwner {
-			h.recordAudit(r, user, "delete_short_url", "denied",
-				map[string]any{"shortCode": shortCode, "reason": "not the owner"})
-			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 			return
 		}
 	}
@@ -300,14 +325,18 @@ func (h *ShlinkProxyHandler) checkModifyPermission(
 	shortCode string,
 	isDelete bool,
 ) error {
-	canAll, canOwn := h.shlinkSvc.CanModifyShortCodeByPerms(user, isDelete)
+	perm := domain.PermShortURLsUpdate
+	if isDelete {
+		perm = domain.PermShortURLsDelete
+	}
+	canAll, err := h.permCtrl.Check(ctx, user.ID, perm)
+	if err != nil {
+		return errors.New("permission check failed")
+	}
 	if canAll {
 		return nil
 	}
-	if !canOwn {
-		return errors.New("no edit/delete permission for role")
-	}
-
+	// Фаллбэк: проверяем владение
 	isOwner, err := h.ownerRepo.IsOwner(ctx, shortCode, "", user.Sub)
 	if err != nil {
 		slog.Error("proxy: ownership check failed", "sub", user.Sub, "shortCode", shortCode, "err", err)
@@ -327,6 +356,7 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Листинг доступен всем авторизованным (dashboard.view суффициентно).
 	resp, err := h.shlinkSvc.Client().GetTags(r.Context(), user.ShlinkAPIKey)
 	if err != nil {
 		slog.Error("proxy: list tags failed", "sub", user.Sub, "err", err)
@@ -338,7 +368,7 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp, http.StatusOK)
 }
 
-// POST /api/shlink/tags
+// POST /api/shlink/tags — требует short_urls.create
 func (h *ShlinkProxyHandler) CreateTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -346,8 +376,12 @@ func (h *ShlinkProxyHandler) CreateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := h.shlinkSvc.Perms(user)
-	if !p.CanManageOwnTags && !p.CanManageAllTags {
+	ok, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsCreate)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if !ok {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
@@ -369,7 +403,7 @@ func (h *ShlinkProxyHandler) CreateTag(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp, http.StatusCreated)
 }
 
-// PUT /api/shlink/tags/{tagId}
+// PUT /api/shlink/tags/{tagId} — требует short_urls.view_all (rename = видит все теги)
 func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -377,8 +411,12 @@ func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := h.shlinkSvc.Perms(user)
-	if !p.CanManageAllTags {
+	ok, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsViewAll)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if !ok {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
@@ -401,7 +439,7 @@ func (h *ShlinkProxyHandler) RenameTag(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// DELETE /api/shlink/tags/{tagName}
+// DELETE /api/shlink/tags/{tagId} — фикс: chi.URLParam "tagId" (было "tagName"); требует short_urls.delete
 func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -409,25 +447,30 @@ func (h *ShlinkProxyHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := h.shlinkSvc.Perms(user)
-	if !p.CanManageAllTags {
+	ok, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsDelete)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if !ok {
 		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
 
-	tagName := chi.URLParam(r, "tagName")
-	if tagName == "" {
-		writeJSON(w, map[string]string{"error": "tagName required"}, http.StatusBadRequest)
+	// Фикс: было chi.URLParam(r, "tagName") — не работало
+	tagID := chi.URLParam(r, "tagId")
+	if tagID == "" {
+		writeJSON(w, map[string]string{"error": "tagId required"}, http.StatusBadRequest)
 		return
 	}
 
-	if err := h.shlinkSvc.Client().DeleteTags(r.Context(), user.ShlinkAPIKey, []string{tagName}); err != nil {
-		slog.Error("proxy: delete tag failed", "sub", user.Sub, "tag", tagName, "err", err)
+	if err := h.shlinkSvc.Client().DeleteTags(r.Context(), user.ShlinkAPIKey, []string{tagID}); err != nil {
+		slog.Error("proxy: delete tag failed", "sub", user.Sub, "tag", tagID, "err", err)
 		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadGateway)
 		return
 	}
 
-	h.recordAudit(r, user, "delete_tag", "success", map[string]any{"tag": tagName})
+	h.recordAudit(r, user, "delete_tag", "success", map[string]any{"tag": tagID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
