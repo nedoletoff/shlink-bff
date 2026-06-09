@@ -55,7 +55,7 @@ type User struct {
 	UpdatedAt    time.Time  `db:"updated_at"`
 }
 
-// ActionNames — константы имён разрешений.
+// Константы имён разрешений — используются в хендлерах и сервисах при вызове permCtrl.Check.
 const (
 	PermDashboardView    = "dashboard.view"
 	PermShortURLsCreate  = "short_urls.create"
