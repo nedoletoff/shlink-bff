@@ -11,26 +11,6 @@ import (
 	"unified-backend/internal/service"
 )
 
-// AdminOnly разрешает доступ только роли с can_manage_users (или по совпадению с adminRole).
-// Используется для /api/admin/* маршрутов.
-// Сравнение регистронезависимое — "Admin" == "admin".
-func AdminOnly(adminRole string, auditRepo *postgres.AuditRepository) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user := UserFromCtx(r.Context())
-			if user == nil || user.Role == "" {
-				writeForbidden(w, r, user, auditRepo, "no identity")
-				return
-			}
-			if !strings.EqualFold(string(user.Role), adminRole) {
-				writeForbidden(w, r, user, auditRepo, "role not admin")
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 // RequirePermission проверяет конкретный флаг permissions с учётом всех ролей пользователя.
 // Использует OR-семантику: разрешение выдаётся, если хотя бы одна роль его имеет.
 // Роли берутся из CtxKeyRoles (все Keycloak-группы) или fallback на user.Role из БД.
@@ -47,7 +27,6 @@ func RequirePermission(
 				return
 			}
 
-			// Собираем все роли: из контекста (Keycloak) + роль из БД (если не пересекается).
 			roles := effectiveRoles(r.Context(), user.Role)
 			p := perms.GetMerged(roles)
 			if !check(p) {
@@ -60,17 +39,15 @@ func RequirePermission(
 }
 
 // effectiveRoles возвращает объединённый список ролей для проверки permissions.
-// Приоритет: все роли из Keycloak-групп (CtxKeyRoles), дополненные ролью из БД.
+// Приоритет: все роли из Keycloak-групп (СтхКеуРолес), дополненные ролью из БД.
 func effectiveRoles(ctx context.Context, dbRole string) []string {
-	keycloakRoles := rolesFromCtx(ctx) // все роли из групп Keycloak
+	keycloakRoles := rolesFromCtx(ctx)
 	if len(keycloakRoles) == 0 {
-		// Fallback: только роль из БД (ROLE_SOURCE=db или заголовки отсутствуют)
 		if dbRole != "" {
 			return []string{dbRole}
 		}
 		return nil
 	}
-	// Добавляем dbRole если она не входит в keycloakRoles (ROLE_SOURCE=db)
 	seen := make(map[string]struct{}, len(keycloakRoles))
 	for _, r := range keycloakRoles {
 		seen[strings.ToLower(r)] = struct{}{}
@@ -84,7 +61,6 @@ func effectiveRoles(ctx context.Context, dbRole string) []string {
 }
 
 // RequireRole оставлен для обратной совместимости.
-// Сравнение регистронезависимое.
 func RequireRole(role string, auditRepo *postgres.AuditRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,4 +98,9 @@ func writeForbidden(w http.ResponseWriter, r *http.Request, user *domain.User, a
 		defer cancel()
 		auditRepo.Record(ctx, entry)
 	}()
+}
+
+// RolesFromCtx returns effective roles from context and DB role fallback.
+func RolesFromCtx(ctx context.Context, dbRole string) []string {
+	return effectiveRoles(ctx, dbRole)
 }

@@ -14,7 +14,8 @@ import (
 	"unified-backend/internal/service"
 )
 
-// SettingsHandler обрабатывает GET/PATCH /api/settings (и /api/admin/settings).
+// SettingsHandler обрабатывает GET/PATCH /api/settings.
+// Доступен всем авторизованным пользователям; PATCH проверяет canManageSettings.
 type SettingsHandler struct {
 	cfg          *config.Config
 	shlinkSvc    *service.ShlinkService
@@ -45,7 +46,7 @@ type settingsResponse struct {
 	ShlinkContainerName string `json:"shlinkContainerName"`
 }
 
-// GET /api/settings  (и /api/admin/settings)
+// GET /api/settings
 func (h *SettingsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	health, err := h.shlinkSvc.Client().GetHealth(r.Context())
 	connected := err == nil
@@ -88,12 +89,21 @@ type patchSettingsPayload struct {
 	ShlinkContainerName *string `json:"shlinkContainerName"`
 }
 
-// PATCH /api/settings  (и /api/admin/settings)
+// PATCH /api/settings
+// Требует canManageSettings.
 // 1. Сохраняет в server_settings (персистентно).
 // 2. Применяет к live-конфигу (in-memory).
 // 3. Для shortCodeLength — проксирует PATCH /rest/v3/settings в shlink.
 func (h *SettingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
+	if user == nil {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
+	if !h.shlinkSvc.Perms(user).CanManageSettings {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 	if err != nil {
@@ -107,7 +117,6 @@ func (h *SettingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// ── 1. Собираем изменения для БД и применяем к cfg ────────────────────────
 	dbUpdates := make(map[string]string)
 
 	if payload.ShortCodeLength != nil {
@@ -154,7 +163,6 @@ func (h *SettingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 		dbUpdates["shlink_container_name"] = *payload.ShlinkContainerName
 	}
 
-	// ── 2. Персистируем в БД ──────────────────────────────────────────────────
 	if h.settingsRepo != nil && len(dbUpdates) > 0 {
 		updatedBy := ""
 		if user != nil {
@@ -162,11 +170,9 @@ func (h *SettingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 		}
 		if err := h.settingsRepo.SetMany(r.Context(), dbUpdates, updatedBy); err != nil {
 			slog.Error("settings: persist failed", "err", err)
-			// Не фатально — cfg уже обновлён, ответ не прерываем
 		}
 	}
 
-	// ── 3. Применяем shortCodeLength в shlink через PATCH /rest/v3/settings ──
 	if payload.ShortCodeLength != nil {
 		adminKey := h.cfg.ShlinkAdminAPIKey
 		if err := h.shlinkSvc.Client().PatchSettings(

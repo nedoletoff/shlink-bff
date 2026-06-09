@@ -106,8 +106,9 @@ func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 }
 
 // UpdateBySubFields обновляет разрешённые поля пользователя одним атомарным UPDATE.
+// Допустимые поля: role, status, slug_prefix, shlink_api_key, username, email.
 func (r *UserRepository) UpdateBySubFields(ctx context.Context, sub string, fields map[string]any) error {
-	allowed := []string{"role", "status", "slug_prefix", "username", "email"}
+	allowed := []string{"role", "status", "slug_prefix", "shlink_api_key", "username", "email"}
 
 	setClauses := make([]string, 0, len(allowed))
 	args := make([]any, 0, len(allowed)+1)
@@ -130,17 +131,5 @@ func (r *UserRepository) UpdateBySubFields(ctx context.Context, sub string, fiel
 		strings.Join(setClauses, ", "), argIdx,
 	)
 	_, err := r.pool.Exec(ctx, query, args...)
-	return err
-}
-
-func (r *UserRepository) UpdateAPIKey(ctx context.Context, sub, newKey string) error {
-	const q = `UPDATE users SET shlink_api_key = $1, updated_at = NOW() WHERE sub = $2`
-	_, err := r.pool.Exec(ctx, q, newKey, sub)
-	return err
-}
-
-func (r *UserRepository) UpdateSlugPrefix(ctx context.Context, sub, prefix string) error {
-	const q = `UPDATE users SET slug_prefix = $1, updated_at = NOW() WHERE sub = $2`
-	_, err := r.pool.Exec(ctx, q, prefix, sub)
 	return err
 }
