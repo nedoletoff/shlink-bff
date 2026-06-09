@@ -6,7 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Role — открытый тип: любая строка, задаваемая через ROLE_GROUPS в конфиге.
+// Role — открытый тип: любая строка.
+// Константы оставлены для совместимости с кодом, который ещё ссылается на них.
 type Role = string
 
 const (
@@ -22,116 +23,45 @@ const (
 	StatusPending  Status = "pending"
 )
 
+// Permission — атомарное действие, назначаемое роли.
+type Permission struct {
+	ID          uuid.UUID `db:"id"`
+	Name        string    `db:"name"`
+	Description string    `db:"description"`
+}
+
+// RoleEntity — роль пользователя.
+type RoleEntity struct {
+	ID          uuid.UUID    `db:"id"`
+	Name        string       `db:"name"`
+	Description string       `db:"description"`
+	Permissions []Permission `db:"-"`
+}
+
 // User — доменная модель. ShlinkAPIKey НИКОГДА не сериализуется в HTTP-ответы.
 type User struct {
-	ID           uuid.UUID `db:"id"`
-	Sub          string    `db:"sub"`
-	Username     string    `db:"username"`
-	Email        string    `db:"email"`
-	Role         Role      `db:"role"`
-	ShlinkAPIKey string    `db:"shlink_api_key"`
-	SlugPrefix   string    `db:"slug_prefix"`
-	Status       Status    `db:"status"`
-	CreatedAt    time.Time `db:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at"`
+	ID            uuid.UUID  `db:"id"`
+	Sub           string     `db:"sub"`
+	Username      string     `db:"username"`
+	Email         string     `db:"email"`
+	RoleID        *uuid.UUID `db:"role_id"`
+	ShlinkAPIKey  string     `db:"shlink_api_key"`
+	SlugPrefix    string     `db:"slug_prefix"`
+	Status        Status     `db:"status"`
+	CreatedAt     time.Time  `db:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at"`
 }
 
-// RolePermissions — набор флагов для роли, хранится в таблице role_permissions.
-// Загружается при старте и кешируется в PermissionsCache.
-type RolePermissions struct {
-	Role string `db:"role" json:"role"`
-
-	// Просмотр ссылок
-	CanViewOwnLinks bool `db:"can_view_own_links" json:"canViewOwnLinks"`
-	CanViewAllLinks bool `db:"can_view_all_links" json:"canViewAllLinks"`
-
-	// Создание ссылок
-	CanCreateLinks           bool `db:"can_create_links"             json:"canCreateLinks"`
-	CanCreateWithCustomSlug  bool `db:"can_create_with_custom_slug"  json:"canCreateWithCustomSlug"`
-	CanCreateWithoutSlug     bool `db:"can_create_without_slug"      json:"canCreateWithoutSlug"`
-
-	// Редактирование
-	CanEditOwnLinks bool `db:"can_edit_own_links" json:"canEditOwnLinks"`
-	CanEditAllLinks bool `db:"can_edit_all_links" json:"canEditAllLinks"`
-
-	// Удаление (soft — деактивация)
-	CanDeleteOwnLinks bool `db:"can_delete_own_links" json:"canDeleteOwnLinks"`
-	CanDeleteAllLinks bool `db:"can_delete_all_links" json:"canDeleteAllLinks"`
-
-	// Деактивация / реактивация
-	CanDeactivateOwnLinks bool `db:"can_deactivate_own_links" json:"canDeactivateOwnLinks"`
-	CanDeactivateAllLinks bool `db:"can_deactivate_all_links" json:"canDeactivateAllLinks"`
-	CanReactivateOwnLinks bool `db:"can_reactivate_own_links" json:"canReactivateOwnLinks"`
-	CanReactivateAllLinks bool `db:"can_reactivate_all_links" json:"canReactivateAllLinks"`
-
-	// Permanent delete (hard delete — необратимо)
-	CanDeleteOwnLinksPermanently bool `db:"can_delete_own_links_permanently" json:"canDeleteOwnLinksPermanently"`
-	CanDeleteAllLinksPermanently bool `db:"can_delete_all_links_permanently" json:"canDeleteAllLinksPermanently"`
-
-	// Теги
-	CanManageOwnTags bool `db:"can_manage_own_tags" json:"canManageOwnTags"`
-	CanManageAllTags bool `db:"can_manage_all_tags" json:"canManageAllTags"`
-
-	// Статистика
-	CanViewOwnStats bool `db:"can_view_own_stats" json:"canViewOwnStats"`
-	CanViewAllStats bool `db:"can_view_all_stats" json:"canViewAllStats"`
-
-	// Управление
-	CanViewAuditLogs  bool `db:"can_view_audit_logs"  json:"canViewAuditLogs"`
-	CanManageUsers    bool `db:"can_manage_users"     json:"canManageUsers"`
-	CanManageRoles    bool `db:"can_manage_roles"     json:"canManageRoles"`
-	CanManageSettings bool `db:"can_manage_settings"  json:"canManageSettings"`
-
-	UpdatedAt time.Time `db:"updated_at" json:"updatedAt"`
-}
-
-// DefaultAdminPermissions — полные права для fallback если БД недоступна.
-func DefaultAdminPermissions(role string) RolePermissions {
-	return RolePermissions{
-		Role:                         role,
-		CanViewOwnLinks:              true,
-		CanViewAllLinks:              true,
-		CanCreateLinks:               true,
-		CanCreateWithCustomSlug:      true,
-		CanCreateWithoutSlug:         true,
-		CanEditOwnLinks:              true,
-		CanEditAllLinks:              true,
-		CanDeleteOwnLinks:            true,
-		CanDeleteAllLinks:            true,
-		CanDeactivateOwnLinks:        true,
-		CanDeactivateAllLinks:        true,
-		CanReactivateOwnLinks:        true,
-		CanReactivateAllLinks:        true,
-		CanDeleteOwnLinksPermanently: true,
-		CanDeleteAllLinksPermanently: true,
-		CanManageOwnTags:             true,
-		CanManageAllTags:             true,
-		CanViewOwnStats:              true,
-		CanViewAllStats:              true,
-		CanViewAuditLogs:             true,
-		CanManageUsers:               true,
-		CanManageRoles:               true,
-		CanManageSettings:            true,
-	}
-}
-
-// DefaultUserPermissions — минимальные права для fallback.
-func DefaultUserPermissions(role string) RolePermissions {
-	return RolePermissions{
-		Role:                         role,
-		CanViewOwnLinks:              true,
-		CanCreateLinks:               true,
-		CanCreateWithCustomSlug:      true,
-		CanCreateWithoutSlug:         true,
-		CanEditOwnLinks:              true,
-		CanDeleteOwnLinks:            true,
-		CanDeactivateOwnLinks:        true,
-		CanDeactivateAllLinks:        false,
-		CanReactivateOwnLinks:        true,
-		CanReactivateAllLinks:        false,
-		CanDeleteOwnLinksPermanently: false,
-		CanDeleteAllLinksPermanently: false,
-		CanManageOwnTags:             true,
-		CanViewOwnStats:              true,
-	}
-}
+// ActionNames — константы имён разрешений.
+const (
+	PermDashboardView    = "dashboard.view"
+	PermShortURLsCreate  = "short_urls.create"
+	PermShortURLsUpdate  = "short_urls.update"
+	PermShortURLsDelete  = "short_urls.delete"
+	PermShortURLsViewAll = "short_urls.view_all"
+	PermUsersView        = "users.view"
+	PermUsersManage      = "users.manage"
+	PermRolesView        = "roles.view"
+	PermRolesManage      = "roles.manage"
+	PermSystemConfig     = "system.config"
+)
