@@ -11,8 +11,9 @@ import (
 type Role = string
 
 const (
-	RoleAdmin Role = "admin"
-	RoleUser  Role = "user"
+	RoleAdmin    Role = "admin"
+	RoleUser     Role = "user"
+	RoleStandard Role = "standard" // новая: роль по умолчанию (DEFAULT_ROLE)
 )
 
 type Status string
@@ -58,13 +59,38 @@ type User struct {
 // Константы имён разрешений — используются в хендлерах и сервисах при вызове permCtrl.Check.
 const (
 	PermDashboardView    = "dashboard.view"
-	PermShortURLsCreate  = "short_urls.create"
+	PermShortURLsCreate  = "short_urls.create"      // создать любую ссылку (admin/manager)
 	PermShortURLsUpdate  = "short_urls.update"
-	PermShortURLsDelete  = "short_urls.delete"
+	PermShortURLsDelete  = "short_urls.delete"      // удалить чужую ссылку (global)
 	PermShortURLsViewAll = "short_urls.view_all"
 	PermUsersView        = "users.view"
 	PermUsersManage      = "users.manage"
 	PermRolesView        = "roles.view"
 	PermRolesManage      = "roles.manage"
 	PermSystemConfig     = "system.config"
+
+	// Права роли standard — действия с владельческими объектами
+	PermShortURLsCreateOwn = "short_urls.create.own" // создать ссылку (владелец)
+	PermShortURLsDeleteOwn = "short_urls.delete.own" // удалить свою ссылку
+	PermShortURLsViewOwn   = "short_urls.view.own"   // просматривать свои ссылки
+	PermShortURLsStatsOwn  = "short_urls.stats.own"  // статистика своих ссылок
 )
+
+// AllPermissions — полный список всех системных разрешений.
+// Используется GET /api/permissions.
+var AllPermissions = []string{
+	PermDashboardView,
+	PermShortURLsCreate,
+	PermShortURLsUpdate,
+	PermShortURLsDelete,
+	PermShortURLsViewAll,
+	PermShortURLsCreateOwn,
+	PermShortURLsDeleteOwn,
+	PermShortURLsViewOwn,
+	PermShortURLsStatsOwn,
+	PermUsersView,
+	PermUsersManage,
+	PermRolesView,
+	PermRolesManage,
+	PermSystemConfig,
+}
