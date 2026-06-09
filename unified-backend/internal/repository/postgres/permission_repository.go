@@ -3,12 +3,10 @@ package postgres
 import (
 	"context"
 	"errors"
+	"unified-backend/internal/domain"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"unified-backend/internal/domain"
 )
 
 type PermissionRepository struct {

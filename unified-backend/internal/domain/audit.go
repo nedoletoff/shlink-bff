@@ -16,9 +16,9 @@ type AuditEntry struct {
 	CreatedAt time.Time
 }
 
-// Аудит-события для жизненного цикла ссылок.
 const (
 	ActionShortURLDeactivated        = "short_url_deactivated"
 	ActionShortURLActivated          = "short_url_activated"
 	ActionShortURLDeletedPermanently = "short_url_deleted_permanently"
 )
+

@@ -5,14 +5,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const defaultCacheTTL = 5 * time.Minute
 
-// cacheEntry — запись кэша для одного пользователя
 type cacheEntry struct {
-	perms  []string
+	perms     []string
 	expiresAt time.Time
 }
 
@@ -27,7 +27,6 @@ type PermissionService struct {
 
 type Option func(*PermissionService)
 
-// WithCacheTTL переопределяет TTL кэша (по умолчанию 5 минут).
 func WithCacheTTL(ttl time.Duration) Option {
 	return func(s *PermissionService) { s.ttl = ttl }
 }
@@ -52,9 +51,20 @@ func (s *PermissionService) GetUserPermissions(ctx context.Context, userSub stri
 	return s.loadAndCache(ctx, userSub)
 }
 
-// UserHasPermission проверяет наличие разрешения у пользователя.
-func (s *PermissionService) UserHasPermission(ctx context.Context, userSub, action string) (bool, error) {
-	perms, err := s.GetUserPermissions(ctx, userSub)
+// UserHasPermission проверяет наличие разрешения у пользователя по userID.
+func (s *PermissionService) UserHasPermission(ctx context.Context, userID uuid.UUID, action string) (bool, error) {
+	// сначала получаем sub по userID
+	var sub string
+	err := s.db.QueryRow(ctx, `SELECT sub FROM users WHERE id = $1`, userID).Scan(&sub)
+	if err != nil {
+		return false, err
+	}
+	return s.UserHasPermissionBySub(ctx, sub, action)
+}
+
+// UserHasPermissionBySub проверяет наличие разрешения по subject.
+func (s *PermissionService) UserHasPermissionBySub(ctx context.Context, sub string, action string) (bool, error) {
+	perms, err := s.GetUserPermissions(ctx, sub)
 	if err != nil {
 		return false, err
 	}
@@ -67,14 +77,27 @@ func (s *PermissionService) UserHasPermission(ctx context.Context, userSub, acti
 }
 
 // InvalidateUser сбрасывает кэш конкретного пользователя.
-// Вызывается при PATCH /users/:sub/role.
-func (s *PermissionService) InvalidateUser(userSub string) {
+func (s *PermissionService) InvalidateUser(userID uuid.UUID) {
+	var sub string
+	err := s.db.QueryRow(context.Background(), `SELECT sub FROM users WHERE id = $1`, userID).Scan(&sub)
+	if err != nil {
+		// если не нашли – просто возвращаемся
+		return
+	}
 	s.mu.Lock()
-	delete(s.cache, userSub)
+	delete(s.cache, sub)
 	s.mu.Unlock()
 }
 
-// InvalidateAll очищает весь кэш (например, при изменении разрешений роли).
+// InvalidateRole сбрасывает кэш всех пользователей, имеющих указанную роль.
+// Для простоты сбрасываем весь кэш.
+func (s *PermissionService) InvalidateRole(roleName string) {
+	s.mu.Lock()
+	s.cache = make(map[string]cacheEntry)
+	s.mu.Unlock()
+}
+
+// InvalidateAll очищает весь кэш.
 func (s *PermissionService) InvalidateAll() {
 	s.mu.Lock()
 	s.cache = make(map[string]cacheEntry)
@@ -82,6 +105,7 @@ func (s *PermissionService) InvalidateAll() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+
 func (s *PermissionService) fromCache(sub string) ([]string, bool) {
 	s.mu.RLock()
 	e, ok := s.cache[sub]
@@ -130,3 +154,4 @@ func (s *PermissionService) loadAndCache(ctx context.Context, sub string) ([]str
 
 	return perms, nil
 }
+

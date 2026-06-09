@@ -8,113 +8,61 @@ import (
 	"strings"
 )
 
-// defaultRoleGroups — маппинг по умолчанию, если ROLE_GROUPS не задан.
 const defaultRoleGroups = "shlink-admins=admin,admin=admin"
 
-// RoleSource определяет, откуда берётся роль пользователя при каждом запросе.
 type RoleSource string
 
 const (
-	// RoleSourceKeycloak — роль читается из X-Auth-Request-Groups на каждый запрос.
 	RoleSourceKeycloak RoleSource = "keycloak"
-
-	// RoleSourceDB — роль читается из БД (users.role).
-	RoleSourceDB RoleSource = "db"
+	RoleSourceDB       RoleSource = "db"
 )
 
 type Config struct {
-	// HTTPAddr — адрес для прослушивания (например ":8080").
-	HTTPAddr string
-	// Port — только номер порта, извлекается из HTTPAddr. Используется в http.Server.Addr.
-	Port string
-
-	DatabaseURL         string
-	ShlinkURL           string
-	// ShlinkBaseURL — алиас ShlinkURL для обратной совместимости.
-	ShlinkBaseURL       string
-	ShlinkDefaultDomain string
-
-	// ShlinkAdminAPIKey — глобальный API-ключ администратора shlink.
-	// Используется для вызовов PATCH /rest/v3/settings.
-	// Читается из SHLINK_ADMIN_API_KEY.
-	ShlinkAdminAPIKey string
-
-	// ShlinkAPIKey — алиас ShlinkAdminAPIKey для обратной совместимости.
-	// Deprecated: используйте ShlinkAdminAPIKey.
-	ShlinkAPIKey string
-
-	// CORSAllowedOrigins — список разрешённых origins (CORS_ALLOWED_ORIGINS, через запятую).
-	// По умолчанию — ["*"].
-	CORSAllowedOrigins []string
-
-	// CORSAllowedMethods — список разрешённых HTTP методов (CORS_ALLOWED_METHODS).
-	CORSAllowedMethods []string
-
-	// CORSAllowedHeaders — список разрешённых заголовков (CORS_ALLOWED_HEADERS).
-	CORSAllowedHeaders []string
-
-	// TrustedHeaderSecret — HMAC-секрет для валидации X-Auth-Request-User (TRUSTED_HEADER_SECRET).
-	// Если пустой — проверка не выполняется, логируется предупреждение.
-	TrustedHeaderSecret string
-
-	// DefaultRole — роль для пользователей без групп (DEFAULT_ROLE).
-	// По умолчанию пустая строка (поведение не меняется).
-	DefaultRole string
-
-	// BulkOperationLimit — макс. кол-во элементов в массовых запросах (BULK_OPERATION_LIMIT).
-	BulkOperationLimit int
-
-	// RoleGroups — маппинг keycloak-group (lower-case) → role-name.
-	RoleGroups map[string]string
-
-	// AdminRole — имя роли, считающейся администраторской.
-	AdminRole string
-
-	// RoleSource — источник истины для роли пользователя.
-	RoleSource RoleSource
-
-	// Feature flags
+	HTTPAddr                 string
+	Port                     string
+	DatabaseURL              string
+	ShlinkInternalURL        string
+	ShlinkDefaultDomain      string
+	ShlinkAdminAPIKey        string
+	CORSAllowedOrigins       []string
+	CORSAllowedMethods       []string
+	CORSAllowedHeaders       []string
+	TrustedHeaderSecret      string
+	DefaultRole              string
+	RoleGroups               map[string]string
+	AdminRole                string
+	RoleSource               RoleSource
 	UserSlugPrefixEnabled    bool
 	UserTagInternalIdEnabled bool
 	UserCustomSlugEnabled    bool
-
-	// SHLINK_SHORT_ID_LENGTH=int (default: 0 = не передаём, shlink использует свой дефолт)
-	ShlinkShortIDLength int
-
-	// CLI provisioner
-	ShlinkRunnerMode    string
-	ShlinkContainerName string
-	ShlinkBin           string
-
-	// Ограничения по умолчанию для новых ссылок (0 = без ограничений).
-	MaxVisitsDefault   int
-	LinkTtlDefaultDays int
+	ShlinkShortIDLength      int
+	ShlinkRunnerMode         string
+	ShlinkContainerName      string
+	ShlinkBin                string
+	MaxVisitsDefault         int
+	LinkTtlDefaultDays       int
+	BulkOperationLimit       int
 }
 
-// MustLoad загружает конфиг и завершает процесс при отсутствии обязательных переменных.
 func MustLoad() *Config {
 	return Load()
 }
 
 func Load() *Config {
 	httpAddr := getEnv("HTTP_ADDR", ":8080")
-	shlinkURL := mustGetEnv("SHLINK_INTERNAL_URL")
-	adminAPIKey := getEnv("SHLINK_ADMIN_API_KEY", "")
+
 	cfg := &Config{
 		HTTPAddr:                 httpAddr,
 		Port:                     strings.TrimPrefix(httpAddr, ":"),
 		DatabaseURL:              resolveDatabaseURL(),
-		ShlinkURL:                shlinkURL,
-		ShlinkBaseURL:            shlinkURL,
+		ShlinkInternalURL:        mustGetEnv("SHLINK_INTERNAL_URL"),
 		ShlinkDefaultDomain:      getEnv("SHLINK_DEFAULT_DOMAIN", ""),
-		ShlinkAdminAPIKey:        adminAPIKey,
-		ShlinkAPIKey:             adminAPIKey, // alias
+		ShlinkAdminAPIKey:        getEnv("SHLINK_ADMIN_API_KEY", ""),
 		CORSAllowedOrigins:       parseCORSOrigins(),
 		CORSAllowedMethods:       parseCORSMethods(),
 		CORSAllowedHeaders:       parseCORSHeaders(),
 		TrustedHeaderSecret:      getEnv("TRUSTED_HEADER_SECRET", ""),
 		DefaultRole:              getEnv("DEFAULT_ROLE", ""),
-		BulkOperationLimit:       getInt("BULK_OPERATION_LIMIT", 100),
 		RoleGroups:               parseRoleGroups(),
 		AdminRole:                getEnv("ADMIN_ROLE", "admin"),
 		RoleSource:               parseRoleSource(),
@@ -127,38 +75,29 @@ func Load() *Config {
 		ShlinkBin:                getEnv("SHLINK_BIN", "shlink"),
 		MaxVisitsDefault:         getInt("MAX_VISITS_DEFAULT", 0),
 		LinkTtlDefaultDays:       getInt("LINK_TTL_DEFAULT_DAYS", 0),
+		BulkOperationLimit:       getInt("BULK_OPERATION_LIMIT", 100),
 	}
-	slog.Info("config loaded",
+
+	slog.Info(
+		"config loaded",
+		"http_addr", cfg.HTTPAddr,
+		"database_url", maskDSN(cfg.DatabaseURL),
+		"shlink_internal_url", cfg.ShlinkInternalURL,
+		"shlink_admin_api_key_set", cfg.ShlinkAdminAPIKey != "",
 		"role_source", cfg.RoleSource,
 		"admin_role", cfg.AdminRole,
-		"default_role", cfg.DefaultRole,
-		"slug_prefix_enabled", cfg.UserSlugPrefixEnabled,
-		"user_custom_slug_enabled", cfg.UserCustomSlugEnabled,
-		"shlink_short_id_length", cfg.ShlinkShortIDLength,
-		"shlink_default_domain", cfg.ShlinkDefaultDomain,
-		"shlink_runner_mode", cfg.ShlinkRunnerMode,
-		"cors_origins", cfg.CORSAllowedOrigins,
-		"cors_methods", cfg.CORSAllowedMethods,
-		"cors_headers", cfg.CORSAllowedHeaders,
-		"trusted_header_secret_set", cfg.TrustedHeaderSecret != "",
-		"bulk_operation_limit", cfg.BulkOperationLimit,
-		"shlink_admin_api_key_set", cfg.ShlinkAdminAPIKey != "",
-		"max_visits_default", cfg.MaxVisitsDefault,
-		"link_ttl_default_days", cfg.LinkTtlDefaultDays,
 	)
 	return cfg
 }
 
-// parseCORSOrigins читает CORS_ALLOWED_ORIGINS (через запятую).
-// По умолчанию возвращает ["*"].
 func parseCORSOrigins() []string {
 	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
 	if raw == "" {
 		return []string{"*"}
 	}
 	var origins []string
-	for _, o := range strings.Split(raw, ",") {
-		if s := strings.TrimSpace(o); s != "" {
+	for part := range strings.SplitSeq(raw, ",") {
+		if s := strings.TrimSpace(part); s != "" {
 			origins = append(origins, s)
 		}
 	}
@@ -168,16 +107,14 @@ func parseCORSOrigins() []string {
 	return origins
 }
 
-// parseCORSMethods читает CORS_ALLOWED_METHODS (через запятую).
-// По умолчанию — стандартный набор.
 func parseCORSMethods() []string {
 	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_METHODS"))
 	if raw == "" {
 		return []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
 	}
 	var methods []string
-	for _, m := range strings.Split(raw, ",") {
-		if s := strings.ToUpper(strings.TrimSpace(m)); s != "" {
+	for part := range strings.SplitSeq(raw, ",") {
+		if s := strings.ToUpper(strings.TrimSpace(part)); s != "" {
 			methods = append(methods, s)
 		}
 	}
@@ -187,16 +124,14 @@ func parseCORSMethods() []string {
 	return methods
 }
 
-// parseCORSHeaders читает CORS_ALLOWED_HEADERS (через запятую).
-// По умолчанию — минимальный стандартный набор.
 func parseCORSHeaders() []string {
 	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_HEADERS"))
 	if raw == "" {
 		return []string{"Authorization", "Content-Type"}
 	}
 	var headers []string
-	for _, h := range strings.Split(raw, ",") {
-		if s := strings.TrimSpace(h); s != "" {
+	for part := range strings.SplitSeq(raw, ",") {
+		if s := strings.TrimSpace(part); s != "" {
 			headers = append(headers, s)
 		}
 	}
@@ -206,76 +141,62 @@ func parseCORSHeaders() []string {
 	return headers
 }
 
-// parseRoleSource читает ROLE_SOURCE. Допустимые значения: "keycloak", "db".
 func parseRoleSource() RoleSource {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("ROLE_SOURCE")))
 	switch RoleSource(v) {
 	case RoleSourceDB:
-		slog.Info("config: ROLE_SOURCE=db — role authority is the database")
 		return RoleSourceDB
 	case RoleSourceKeycloak, "":
 		if v != "" && v != string(RoleSourceKeycloak) {
-			slog.Warn("config: unknown ROLE_SOURCE value, defaulting to keycloak", "value", v)
+			slog.Warn("unknown ROLE_SOURCE, fallback to keycloak", "value", v)
 		}
 		return RoleSourceKeycloak
 	default:
-		slog.Warn("config: unknown ROLE_SOURCE value, defaulting to keycloak", "value", v)
 		return RoleSourceKeycloak
 	}
 }
 
-// resolveDatabaseURL строит DSN (приоритет по убыванию):
-//  1. DATABASE_URL — если задан целиком.
-//  2. DB_HOST + DB_PORT + DB_USER + DB_PASSWORD + DB_NAME + DB_SSLMODE.
 func resolveDatabaseURL() string {
 	if url := strings.TrimSpace(os.Getenv("DATABASE_URL")); url != "" {
 		return url
 	}
-
 	host := getEnv("DB_HOST", "localhost")
 	port := getEnv("DB_PORT", "5432")
 	user := mustGetEnv("DB_USER")
 	password := mustGetEnv("DB_PASSWORD")
 	dbName := mustGetEnv("DB_NAME")
 	sslMode := getEnv("DB_SSLMODE", "disable")
-
-	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		user, password, host, port, dbName, sslMode,
-	)
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", user, password, host, port, dbName, sslMode)
 }
 
-// parseRoleGroups читает ROLE_GROUPS (приоритет) или ADMIN_GROUPS (обратная совместимость).
 func parseRoleGroups() map[string]string {
 	if raw := strings.TrimSpace(os.Getenv("ROLE_GROUPS")); raw != "" {
 		return parseExplicitRoleGroups(raw)
 	}
-
 	adminRole := getEnv("ADMIN_ROLE", "admin")
 	if raw := strings.TrimSpace(os.Getenv("ADMIN_GROUPS")); raw != "" {
 		m := make(map[string]string)
-		for _, g := range strings.Split(raw, ",") {
+		for g := range strings.SplitSeq(raw, ",") {
 			if t := strings.ToLower(strings.TrimSpace(g)); t != "" {
 				m[t] = adminRole
 			}
 		}
-		slog.Warn("config: ADMIN_GROUPS is deprecated, use ROLE_GROUPS instead")
+		slog.Warn("ADMIN_GROUPS is deprecated, use ROLE_GROUPS")
 		return m
 	}
-
 	return parseExplicitRoleGroups(defaultRoleGroups)
 }
 
 func parseExplicitRoleGroups(raw string) map[string]string {
 	m := make(map[string]string)
-	for _, entry := range strings.Split(raw, ",") {
+	for entry := range strings.SplitSeq(raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
 		idx := strings.IndexByte(entry, '=')
 		if idx < 0 {
-			slog.Warn("config: ROLE_GROUPS entry missing '=', skipping", "entry", entry)
+			slog.Warn("invalid ROLE_GROUPS entry, missing '='", "entry", entry)
 			continue
 		}
 		group := strings.ToLower(strings.TrimSpace(entry[:idx]))
@@ -287,25 +208,19 @@ func parseExplicitRoleGroups(raw string) map[string]string {
 	return m
 }
 
-// ParseAdminGroups оставлен для обратной совместимости с тестами.
-// Deprecated: используйте parseRoleGroups.
-func ParseAdminGroups(raw string) map[string]struct{} {
-	if strings.TrimSpace(raw) == "" {
-		raw = "shlink-admins,admin"
-	}
-	m := make(map[string]struct{})
-	for _, g := range strings.Split(raw, ",") {
-		if t := strings.ToLower(strings.TrimSpace(g)); t != "" {
-			m[t] = struct{}{}
+func maskDSN(dsn string) string {
+	if i := strings.Index(dsn, "@"); i > 0 {
+		if j := strings.LastIndex(dsn[:i], ":"); j > 0 {
+			return dsn[:j+1] + "***" + dsn[i:]
 		}
 	}
-	return m
+	return dsn
 }
 
 func mustGetEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		slog.Error("required env variable is missing", "key", key)
+		slog.Error("required env missing", "key", key)
 		os.Exit(1)
 	}
 	return v
@@ -341,3 +256,4 @@ func getInt(key string, fallback int) int {
 	}
 	return n
 }
+
