@@ -21,7 +21,7 @@ import (
 	"unified-backend/internal/shlink"
 )
 
-// ── Stubs ─────────────────────────────────────────────────────────────────────────────────
+// ── Stubs ───────────────────────────────────────────────────────────────────────────────────────
 
 type stubOwnerRepo struct {
 	isOwner    bool
@@ -81,6 +81,9 @@ func (s *stubShlinkClient) DeleteShortURL(_ context.Context, _, _ string) error 
 func (s *stubShlinkClient) GetTags(_ context.Context, _ string) (*shlink.TagsWithStatsResponse, error) {
 	return nil, nil
 }
+func (s *stubShlinkClient) CreateTag(_ context.Context, _ string, _ io.Reader) (*shlink.TagsWithStatsResponse, error) {
+	return nil, nil
+}
 func (s *stubShlinkClient) RenameTag(_ context.Context, _ string, _ io.Reader) error { return nil }
 func (s *stubShlinkClient) DeleteTags(_ context.Context, _ string, _ []string) error  { return nil }
 func (s *stubShlinkClient) GetNonOrphanVisits(_ context.Context, _, _, _ string, _ int) (*shlink.VisitsResponse, error) {
@@ -94,7 +97,7 @@ func (s *stubShlinkClient) ValidateVersion(_ context.Context, _ int, _ int, _ ti
 	return nil
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────────────────────
 
 func newTestShlinkSvc(client service.ShlinkClientIface) *service.ShlinkService {
 	cfg := &config.Config{
@@ -134,7 +137,7 @@ func userCtx(r *http.Request, role string) *http.Request {
 	return r.WithContext(middleware.WithUser(r.Context(), u))
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────────────────
+// ── Tests ───────────────────────────────────────────────────────────────────────────────────────
 
 func TestCreateShortURL_success(t *testing.T) {
 	client := &stubShlinkClient{
