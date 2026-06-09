@@ -2,7 +2,6 @@ package handler_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,40 +12,36 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"unified-backend/internal/config"
-	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
-	"unified-backend/internal/middleware"
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
 )
 
-// ── Stubs ───────────────────────────────────────────────────────────────────────────────────────
+// ── stubs ───────────────────────────────────────────────────────────────────────────────────
 
 type stubOwnerRepo struct {
 	isOwner    bool
 	ownerError error
 }
 
-func (s *stubOwnerRepo) Save(_ context.Context, _, _, _, _ string) error { return nil }
-func (s *stubOwnerRepo) IsOwner(_ context.Context, _, _, _ string) (bool, error) {
-	return s.isOwner, s.ownerError
-}
-func (s *stubOwnerRepo) HardDelete(_ context.Context, _, _ string) error        { return nil }
-func (s *stubOwnerRepo) SetActive(_ context.Context, _, _ string, _ bool) error { return nil }
-func (s *stubOwnerRepo) GetShortCodeSet(_ context.Context, _ string) (map[string]struct{}, error) {
+func (s *stubOwnerRepo) Save(_ interface{}, _, _, _, _ string) error            { return nil }
+func (s *stubOwnerRepo) IsOwner(_ interface{}, _, _, _ string) (bool, error)   { return s.isOwner, s.ownerError }
+func (s *stubOwnerRepo) HardDelete(_ interface{}, _, _ string) error           { return nil }
+func (s *stubOwnerRepo) SetActive(_ interface{}, _, _ string, _ bool) error    { return nil }
+func (s *stubOwnerRepo) GetShortCodeSet(_ interface{}, _ string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
-func (s *stubOwnerRepo) GetActiveCodeSet(_ context.Context, _ string) (map[string]struct{}, error) {
+func (s *stubOwnerRepo) GetActiveCodeSet(_ interface{}, _ string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
-func (s *stubOwnerRepo) GetStatusCodeSet(_ context.Context, _ string) (map[string]bool, error) {
+func (s *stubOwnerRepo) GetStatusCodeSet(_ interface{}, _ string) (map[string]bool, error) {
 	return map[string]bool{}, nil
 }
-func (s *stubOwnerRepo) Deactivate(_ context.Context, _, _, _ string) error { return nil }
-func (s *stubOwnerRepo) Activate(_ context.Context, _, _ string) error      { return nil }
-func (s *stubOwnerRepo) SoftDelete(_ context.Context, _, _, _ string) error { return nil }
-func (s *stubOwnerRepo) GetOwnership(_ context.Context, _, _ string) (*postgres.URLOwnershipRecord, error) {
+func (s *stubOwnerRepo) Deactivate(_ interface{}, _, _, _ string) error { return nil }
+func (s *stubOwnerRepo) Activate(_ interface{}, _, _ string) error      { return nil }
+func (s *stubOwnerRepo) SoftDelete(_ interface{}, _, _, _ string) error { return nil }
+func (s *stubOwnerRepo) GetOwnership(_ interface{}, _, _ string) (*postgres.URLOwnershipRecord, error) {
 	return nil, nil
 }
 
@@ -60,97 +55,76 @@ type stubShlinkClient struct {
 	listError    error
 }
 
-func (s *stubShlinkClient) GetShortURLs(_ context.Context, _, _ string) (*shlink.ShortURLsResponse, error) {
+func (s *stubShlinkClient) GetShortURLs(_ interface{}, _, _ string) (*shlink.ShortURLsResponse, error) {
 	return s.listResult, s.listError
 }
-func (s *stubShlinkClient) GetShortURL(_ context.Context, _, _ string) (*shlink.ShortURL, error) {
+func (s *stubShlinkClient) GetShortURL(_ interface{}, _, _ string) (*shlink.ShortURL, error) {
 	return s.createResult, s.createError
 }
-func (s *stubShlinkClient) GetShortURLVisits(_ context.Context, _, _, _, _ string, _ int) (*shlink.VisitsResponse, error) {
+func (s *stubShlinkClient) GetShortURLVisits(_ interface{}, _, _, _, _ string, _ int) (*shlink.VisitsResponse, error) {
 	return nil, nil
 }
-func (s *stubShlinkClient) CreateShortURL(_ context.Context, _ string, _ io.Reader) (*shlink.ShortURL, error) {
+func (s *stubShlinkClient) CreateShortURL(_ interface{}, _ string, _ io.Reader) (*shlink.ShortURL, error) {
 	return s.createResult, s.createError
 }
-func (s *stubShlinkClient) UpdateShortURL(_ context.Context, _, _ string, _ io.Reader) (*shlink.ShortURL, error) {
+func (s *stubShlinkClient) UpdateShortURL(_ interface{}, _, _ string, _ io.Reader) (*shlink.ShortURL, error) {
 	return s.updateResult, s.updateError
 }
-func (s *stubShlinkClient) DeleteShortURL(_ context.Context, _, _ string) error {
-	return s.deleteError
-}
-func (s *stubShlinkClient) GetTags(_ context.Context, _ string) (*shlink.TagsWithStatsResponse, error) {
+func (s *stubShlinkClient) DeleteShortURL(_ interface{}, _, _ string) error { return s.deleteError }
+func (s *stubShlinkClient) GetTags(_ interface{}, _ string) (*shlink.TagsWithStatsResponse, error) {
 	return nil, nil
 }
-func (s *stubShlinkClient) CreateTag(_ context.Context, _ string, _ io.Reader) (*shlink.TagsWithStatsResponse, error) {
+func (s *stubShlinkClient) CreateTag(_ interface{}, _ string, _ io.Reader) (*shlink.TagsWithStatsResponse, error) {
 	return nil, nil
 }
-func (s *stubShlinkClient) RenameTag(_ context.Context, _ string, _ io.Reader) error { return nil }
-func (s *stubShlinkClient) DeleteTags(_ context.Context, _ string, _ []string) error  { return nil }
-func (s *stubShlinkClient) GetNonOrphanVisits(_ context.Context, _, _, _ string, _ int) (*shlink.VisitsResponse, error) {
+func (s *stubShlinkClient) RenameTag(_ interface{}, _ string, _ io.Reader) error { return nil }
+func (s *stubShlinkClient) DeleteTags(_ interface{}, _ string, _ []string) error  { return nil }
+func (s *stubShlinkClient) GetNonOrphanVisits(_ interface{}, _, _, _ string, _ int) (*shlink.VisitsResponse, error) {
 	return nil, nil
 }
-func (s *stubShlinkClient) PatchSettings(_ context.Context, _ string, _ int) error { return nil }
-func (s *stubShlinkClient) GetHealth(_ context.Context) (*shlink.HealthResponse, error) {
+func (s *stubShlinkClient) PatchSettings(_ interface{}, _ string, _ int) error { return nil }
+func (s *stubShlinkClient) GetHealth(_ interface{}) (*shlink.HealthResponse, error) {
 	return &shlink.HealthResponse{Status: "pass", Version: "3.0.0"}, nil
 }
-func (s *stubShlinkClient) ValidateVersion(_ context.Context, _ int, _ int, _ time.Duration) error {
+func (s *stubShlinkClient) ValidateVersion(_ interface{}, _ int, _ int, _ time.Duration) error {
 	return nil
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────────────────────
+// permCtrl stub — реализует handler.PermChecker
+type allowAllPerm struct{}
+
+func (allowAllPerm) Check(_ interface{}, _ string, _ string) (bool, error) { return true, nil }
+
+type denyAllPerm struct{}
+
+func (denyAllPerm) Check(_ interface{}, _ string, _ string) (bool, error) { return false, nil }
+
+// ── Хелпер ───────────────────────────────────────────────────────────────────────────────────
 
 func newTestShlinkSvc(client service.ShlinkClientIface) *service.ShlinkService {
 	cfg := &config.Config{
-		AdminRole:           "admin",
 		ShlinkDefaultDomain: "http://localhost",
 	}
-	perms := service.NewStaticPermissionsCache(map[string]domain.RolePermissions{
-		"user": {
-			CanViewOwnLinks:              true,
-			CanCreateLinks:               true,
-			CanEditOwnLinks:              true,
-			CanDeleteOwnLinks:            true,
-			CanCreateWithoutSlug:         true,
-			CanDeactivateOwnLinks:        true,
-			CanReactivateOwnLinks:        true,
-			CanDeleteOwnLinksPermanently: true,
-		},
-		"admin": {
-			CanViewAllLinks:              true,
-			CanEditAllLinks:              true,
-			CanDeleteAllLinks:            true,
-			CanDeactivateAllLinks:        true,
-			CanReactivateAllLinks:        true,
-			CanDeleteAllLinksPermanently: true,
-		},
-	})
-	return service.NewShlinkService(client, cfg, perms)
+	return service.NewShlinkService(client, cfg)
 }
 
-func userCtx(r *http.Request, role string) *http.Request {
-	u := &domain.User{
-		Sub:          "sub-123",
-		Username:     "testuser",
-		Role:         domain.Role(role),
-		ShlinkAPIKey: "test-api-key",
-	}
-	return r.WithContext(middleware.WithUser(r.Context(), u))
+func newProxyHandler(svc *service.ShlinkService, ownerRepo handler.URLOwnershipIface, perm handler.PermChecker) *handler.ShlinkProxyHandler {
+	cfg := &config.Config{ShlinkDefaultDomain: "http://localhost"}
+	return handler.NewShlinkProxyHandler(svc, nil, ownerRepo, cfg, perm)
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────────────────────────
+// ── Тесты ─────────────────────────────────────────────────────────────────────────────────────
 
-func TestCreateShortURL_success(t *testing.T) {
+func TestCreateShortURL_Success(t *testing.T) {
 	client := &stubShlinkClient{
 		createResult: &shlink.ShortURL{ShortCode: "abc", ShortURL: "http://s.test/abc"},
 	}
 	svc := newTestShlinkSvc(client)
-	ownerRepo := &stubOwnerRepo{isOwner: true}
-	cfg := &config.Config{ShlinkDefaultDomain: "http://localhost"}
-	h := handler.NewShlinkProxyHandler(svc, nil, ownerRepo, cfg)
+	h := newProxyHandler(svc, &stubOwnerRepo{isOwner: true}, allowAllPerm{})
 
 	body := bytes.NewBufferString(`{"longUrl":"https://example.com"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/shlink/short-urls", body)
-	req = userCtx(req, "user")
+	req = userCtx(req)
 	rec := httptest.NewRecorder()
 
 	h.CreateShortURL(rec, req)
@@ -167,18 +141,33 @@ func TestCreateShortURL_success(t *testing.T) {
 	}
 }
 
-func TestDeleteShortURL_ownerSuccess(t *testing.T) {
+func TestCreateShortURL_Forbidden(t *testing.T) {
+	client := &stubShlinkClient{}
+	svc := newTestShlinkSvc(client)
+	h := newProxyHandler(svc, &stubOwnerRepo{}, denyAllPerm{})
+
+	body := bytes.NewBufferString(`{"longUrl":"https://example.com"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/shlink/short-urls", body)
+	req = userCtx(req)
+	rec := httptest.NewRecorder()
+
+	h.CreateShortURL(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+}
+
+func TestDeleteShortURL_OwnerSuccess(t *testing.T) {
 	client := &stubShlinkClient{deleteError: nil}
 	svc := newTestShlinkSvc(client)
-	ownerRepo := &stubOwnerRepo{isOwner: true}
-	cfg := &config.Config{ShlinkDefaultDomain: "http://localhost"}
-	h := handler.NewShlinkProxyHandler(svc, nil, ownerRepo, cfg)
+	h := newProxyHandler(svc, &stubOwnerRepo{isOwner: true}, allowAllPerm{})
 
 	r := chi.NewRouter()
 	r.Delete("/api/shlink/short-urls/{shortCode}", h.DeleteShortURL)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/shlink/short-urls/abc", nil)
-	req = userCtx(req, "user")
+	req = userCtx(req)
 	rec := httptest.NewRecorder()
 
 	r.ServeHTTP(rec, req)
@@ -188,18 +177,16 @@ func TestDeleteShortURL_ownerSuccess(t *testing.T) {
 	}
 }
 
-func TestDeleteShortURL_notOwner(t *testing.T) {
+func TestDeleteShortURL_NotOwner(t *testing.T) {
 	client := &stubShlinkClient{}
 	svc := newTestShlinkSvc(client)
-	ownerRepo := &stubOwnerRepo{isOwner: false}
-	cfg := &config.Config{ShlinkDefaultDomain: "http://localhost"}
-	h := handler.NewShlinkProxyHandler(svc, nil, ownerRepo, cfg)
+	h := newProxyHandler(svc, &stubOwnerRepo{isOwner: false}, allowAllPerm{})
 
 	r := chi.NewRouter()
 	r.Delete("/api/shlink/short-urls/{shortCode}", h.DeleteShortURL)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/shlink/short-urls/abc", nil)
-	req = userCtx(req, "user")
+	req = userCtx(req)
 	rec := httptest.NewRecorder()
 
 	r.ServeHTTP(rec, req)
@@ -209,7 +196,7 @@ func TestDeleteShortURL_notOwner(t *testing.T) {
 	}
 }
 
-func TestListShortURLs_filtersByOwnership(t *testing.T) {
+func TestListShortURLs_OK(t *testing.T) {
 	client := &stubShlinkClient{
 		listResult: &shlink.ShortURLsResponse{},
 	}
@@ -217,12 +204,10 @@ func TestListShortURLs_filtersByOwnership(t *testing.T) {
 		{ShortCode: "abc"}, {ShortCode: "xyz"},
 	}
 	svc := newTestShlinkSvc(client)
-	ownerRepo := &stubOwnerRepo{isOwner: true}
-	cfg := &config.Config{ShlinkDefaultDomain: "http://localhost"}
-	h := handler.NewShlinkProxyHandler(svc, nil, ownerRepo, cfg)
+	h := newProxyHandler(svc, &stubOwnerRepo{isOwner: true}, allowAllPerm{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/shlink/short-urls", nil)
-	req = userCtx(req, "user")
+	req = userCtx(req)
 	rec := httptest.NewRecorder()
 
 	h.ListShortURLs(rec, req)
