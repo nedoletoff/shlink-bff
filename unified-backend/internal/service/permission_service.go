@@ -5,125 +5,102 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const permCacheTTL = 5 * time.Minute
+const defaultCacheTTL = 5 * time.Minute
 
-// --- L1: пермишни по имени роли ------------------------------------------
-
-type roleCacheEntry struct {
-	perms    []string
-	expireAt time.Time
+// cacheEntry — запись кэша для одного пользователя
+type cacheEntry struct {
+	perms  []string
+	expiresAt time.Time
 }
 
-func (e roleCacheEntry) valid() bool { return time.Now().Before(e.expireAt) }
-
-// --- L2: имя роли по userID -----------------------------------------------
-
-type userRoleCacheEntry struct {
-	roleName string
-	expireAt time.Time
-}
-
-func (e userRoleCacheEntry) valid() bool { return time.Now().Before(e.expireAt) }
-
-// PermissionService — проверка разрешений через JOIN users → roles → role_permissions → permissions.
-//
-// Кэш двухуровневый:
-//   - L1 (rolePermCache): пермишни роли, общий для всех пользователей с той же ролью. TTL 5 мин.
-//   - L2 (userRoleCache): имя роли по userID. TTL 5 мин. Не подвержен запросу в БД если оба валидны.
-//
-// Fallback: если users.role_id IS NULL — опрашиваем roles.name по users.role (строковое поле).
+// PermissionService работает с RBAC-таблицами permissions / roles / role_permissions_v2.
 type PermissionService struct {
-	pool *pgxpool.Pool
+	db  *pgxpool.Pool
+	ttl time.Duration
 
-	// L1
-	rolePermMu    sync.RWMutex
-	rolePermCache map[string]roleCacheEntry
-
-	// L2
-	userRoleMu    sync.RWMutex
-	userRoleCache map[uuid.UUID]userRoleCacheEntry
+	mu    sync.RWMutex
+	cache map[string]cacheEntry // key = userSub
 }
 
-func NewPermissionService(pool *pgxpool.Pool) *PermissionService {
-	return &PermissionService{
-		pool:          pool,
-		rolePermCache: make(map[string]roleCacheEntry),
-		userRoleCache: make(map[uuid.UUID]userRoleCacheEntry),
+type Option func(*PermissionService)
+
+// WithCacheTTL переопределяет TTL кэша (по умолчанию 5 минут).
+func WithCacheTTL(ttl time.Duration) Option {
+	return func(s *PermissionService) { s.ttl = ttl }
+}
+
+func NewPermissionService(db *pgxpool.Pool, opts ...Option) *PermissionService {
+	s := &PermissionService{
+		db:    db,
+		ttl:   defaultCacheTTL,
+		cache: make(map[string]cacheEntry),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
-// GetUserPermissions возвращает пермишни пользователя через двухуровневый кэш.
-func (s *PermissionService) GetUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error) {
-	// Шаг 1: определить имя роли (L2)
-	roleName, err := s.resolveRoleName(ctx, userID)
+// GetUserPermissions возвращает список имён разрешений пользователя (из кэша или БД).
+func (s *PermissionService) GetUserPermissions(ctx context.Context, userSub string) ([]string, error) {
+	if perms, ok := s.fromCache(userSub); ok {
+		return perms, nil
+	}
+	return s.loadAndCache(ctx, userSub)
+}
+
+// UserHasPermission проверяет наличие разрешения у пользователя.
+func (s *PermissionService) UserHasPermission(ctx context.Context, userSub, action string) (bool, error) {
+	perms, err := s.GetUserPermissions(ctx, userSub)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	if roleName == "" {
-		// Пользователь ещё не провизионирован полностью — возвращаем пустой список.
-		return nil, nil
+	for _, p := range perms {
+		if p == action {
+			return true, nil
+		}
 	}
-
-	// Шаг 2: пермишни роли (L1)
-	return s.resolveRolePerms(ctx, roleName)
+	return false, nil
 }
 
-// resolveRoleName — определяет имя роли пользователя (L2 + БД-fallback).
-func (s *PermissionService) resolveRoleName(ctx context.Context, userID uuid.UUID) (string, error) {
-	// L2 hit
-	s.userRoleMu.RLock()
-	entry, ok := s.userRoleCache[userID]
-	s.userRoleMu.RUnlock()
-	if ok && entry.valid() {
-		return entry.roleName, nil
-	}
-
-	// Опрашиваем БД: сначала через role_id JOIN, если NULL — fallback по users.role.
-	const q = `
-		SELECT COALESCE(
-			(SELECT r.name FROM roles r WHERE r.id = u.role_id),
-			u.role
-		)
-		FROM users u
-		WHERE u.id = $1`
-
-	var roleName string
-	if err := s.pool.QueryRow(ctx, q, userID).Scan(&roleName); err != nil {
-		return "", err
-	}
-
-	s.userRoleMu.Lock()
-	s.userRoleCache[userID] = userRoleCacheEntry{
-		roleName: roleName,
-		expireAt: time.Now().Add(permCacheTTL),
-	}
-	s.userRoleMu.Unlock()
-
-	return roleName, nil
+// InvalidateUser сбрасывает кэш конкретного пользователя.
+// Вызывается при PATCH /users/:sub/role.
+func (s *PermissionService) InvalidateUser(userSub string) {
+	s.mu.Lock()
+	delete(s.cache, userSub)
+	s.mu.Unlock()
 }
 
-// resolveRolePerms — пермишни роли (L1 + БД-fallback).
-func (s *PermissionService) resolveRolePerms(ctx context.Context, roleName string) ([]string, error) {
-	// L1 hit
-	s.rolePermMu.RLock()
-	entry, ok := s.rolePermCache[roleName]
-	s.rolePermMu.RUnlock()
-	if ok && entry.valid() {
-		return entry.perms, nil
-	}
+// InvalidateAll очищает весь кэш (например, при изменении разрешений роли).
+func (s *PermissionService) InvalidateAll() {
+	s.mu.Lock()
+	s.cache = make(map[string]cacheEntry)
+	s.mu.Unlock()
+}
 
-	const q = `
+// ──────────────────────────────────────────────────────────────────────────────
+func (s *PermissionService) fromCache(sub string) ([]string, bool) {
+	s.mu.RLock()
+	e, ok := s.cache[sub]
+	s.mu.RUnlock()
+	if !ok || time.Now().After(e.expiresAt) {
+		return nil, false
+	}
+	return e.perms, true
+}
+
+func (s *PermissionService) loadAndCache(ctx context.Context, sub string) ([]string, error) {
+	rows, err := s.db.Query(ctx, `
 		SELECT p.name
-		FROM permissions p
-		JOIN role_permissions_v2 rp ON rp.permission_id = p.id
-		JOIN roles r               ON r.id = rp.role_id
-		WHERE r.name = $1`
-
-	rows, err := s.pool.Query(ctx, q, roleName)
+		FROM   users u
+		JOIN   roles             r  ON r.id  = u.role_id
+		JOIN   role_permissions_v2 rp ON rp.role_id = r.id
+		JOIN   permissions       p  ON p.id  = rp.permission_id
+		WHERE  u.sub = $1
+	`, sub)
 	if err != nil {
 		return nil, err
 	}
@@ -140,52 +117,16 @@ func (s *PermissionService) resolveRolePerms(ctx context.Context, roleName strin
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	s.rolePermMu.Lock()
-	s.rolePermCache[roleName] = roleCacheEntry{
-		perms:    perms,
-		expireAt: time.Now().Add(permCacheTTL),
+	if perms == nil {
+		perms = []string{}
 	}
-	s.rolePermMu.Unlock()
+
+	s.mu.Lock()
+	s.cache[sub] = cacheEntry{
+		perms:     perms,
+		expiresAt: time.Now().Add(s.ttl),
+	}
+	s.mu.Unlock()
 
 	return perms, nil
-}
-
-// UserHasPermission проверяет, есть ли у пользователя конкретное разрешение.
-func (s *PermissionService) UserHasPermission(ctx context.Context, userID uuid.UUID, action string) (bool, error) {
-	perms, err := s.GetUserPermissions(ctx, userID)
-	if err != nil {
-		return false, err
-	}
-	for _, p := range perms {
-		if p == action {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// InvalidateUser сбрасывает L2-запись пользователя.
-// Вызывай при смене role_id пользователя (PATCH /users/:id/role).
-func (s *PermissionService) InvalidateUser(userID uuid.UUID) {
-	s.userRoleMu.Lock()
-	delete(s.userRoleCache, userID)
-	s.userRoleMu.Unlock()
-}
-
-// InvalidateRole сбрасывает L1-запись роли + все L2-записи для этой роли.
-// Вызывай при изменении разрешений роли (PUT /roles/:id/permissions).
-func (s *PermissionService) InvalidateRole(roleName string) {
-	s.rolePermMu.Lock()
-	delete(s.rolePermCache, roleName)
-	s.rolePermMu.Unlock()
-
-	// Сбрасываем L2 для всех пользователей с той же ролью, чтобы они перечитали пермишни.
-	s.userRoleMu.Lock()
-	for id, e := range s.userRoleCache {
-		if e.roleName == roleName {
-			delete(s.userRoleCache, id)
-		}
-	}
-	s.userRoleMu.Unlock()
 }
