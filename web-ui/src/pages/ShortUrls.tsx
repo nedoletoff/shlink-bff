@@ -81,18 +81,18 @@ function LinkModal({ opened, onClose, initial }: { opened: boolean; onClose: () 
               label="Действителен с"
               placeholder="Не ограничен"
               clearable
-              value={form.values.validSince ? new Date(form.values.validSince) : null}
-              onChange={(d: Date | null) =>
-                form.setFieldValue('validSince', d instanceof Date ? d.toISOString() : undefined)
+              value={form.values.validSince ?? null}
+              onChange={(v: string | null) =>
+                form.setFieldValue('validSince', v ?? undefined)
               }
             />
             <DateTimePicker
               label="Действителен до"
               placeholder="Не ограничен"
               clearable
-              value={form.values.validUntil ? new Date(form.values.validUntil) : null}
-              onChange={(d: Date | null) =>
-                form.setFieldValue('validUntil', d instanceof Date ? d.toISOString() : undefined)
+              value={form.values.validUntil ?? null}
+              onChange={(v: string | null) =>
+                form.setFieldValue('validUntil', v ?? undefined)
               }
             />
           </Group>
