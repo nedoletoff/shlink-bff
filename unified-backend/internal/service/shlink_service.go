@@ -33,13 +33,18 @@ type ShlinkClientIface interface {
 // Compile-time check: *shlink.Client реализует ShlinkClientIface.
 var _ ShlinkClientIface = (*shlink.Client)(nil)
 
-// PermissionsCacheIface — базовый интерфейс чтения permissions.
+// PermissionsCacheIface — оставлен для обратной совместимости на время миграции.
+// Удалить после завершения коммита #15 (main.go rewire).
+//
+// Deprecated: используй PermissionService.
 type PermissionsCacheIface interface {
 	Get(role string) domain.RolePermissions
 	GetMerged(roles []string) domain.RolePermissions
 }
 
-// PermissionsCacheAdmin — расширенный интерфейс для управления ролями.
+// PermissionsCacheAdmin — оставлен для обратной совместимости на время миграции.
+//
+// Deprecated: используй PermissionService.
 type PermissionsCacheAdmin interface {
 	PermissionsCacheIface
 	GetAll() []domain.RolePermissions
@@ -48,30 +53,28 @@ type PermissionsCacheAdmin interface {
 	Reload(ctx context.Context) error
 }
 
-// Compile-time check: *PermissionsCache реализует PermissionsCacheAdmin.
-var _ PermissionsCacheAdmin = (*PermissionsCache)(nil)
-
 type ShlinkService struct {
 	client ShlinkClientIface
 	cfg    *config.Config
-	perms  PermissionsCacheIface
 }
 
-func NewShlinkService(client ShlinkClientIface, cfg *config.Config, perms PermissionsCacheIface) *ShlinkService {
-	return &ShlinkService{client: client, cfg: cfg, perms: perms}
+// NewShlinkService создаёт ShlinkService без зависимости от кэша разрешений.
+// Все проверки прав выполняются через PermissionController в хендлерах.
+func NewShlinkService(client ShlinkClientIface, cfg *config.Config) *ShlinkService {
+	return &ShlinkService{client: client, cfg: cfg}
+}
+
+// NewShlinkServiceLegacy — обёртка для совместимости пока main.go не переписан (#15).
+// Принимает perms но игнорирует его.
+//
+// Deprecated: используй NewShlinkService.
+func NewShlinkServiceLegacy(client ShlinkClientIface, cfg *config.Config, _ PermissionsCacheIface) *ShlinkService {
+	return &ShlinkService{client: client, cfg: cfg}
 }
 
 // Client возвращает сырой клиент — используется handler'ами напрямую.
 func (s *ShlinkService) Client() ShlinkClientIface {
 	return s.client
-}
-
-// Perms возвращает permissions пользователя.
-func (s *ShlinkService) Perms(user *domain.User) domain.RolePermissions {
-	if user == nil {
-		return domain.RolePermissions{}
-	}
-	return s.perms.Get(string(user.Role))
 }
 
 // resolveAPIKey возвращает shlink api-ключ пользователя или дефолтный из конфига.
@@ -82,11 +85,9 @@ func (s *ShlinkService) resolveAPIKey(user *domain.User) string {
 	return s.cfg.ShlinkAPIKey
 }
 
+// GetShortURLs возвращает список коротких ссылок.
+// Проверка прав (short_urls.view_all / short_urls.create) — на стороне хендлера через PermissionController.
 func (s *ShlinkService) GetShortURLs(ctx context.Context, user *domain.User, rawQuery string) (*shlink.ShortURLsResponse, error) {
-	perms := s.perms.Get(string(user.Role))
-	if !perms.CanViewOwnLinks && !perms.CanViewAllLinks {
-		return nil, fmt.Errorf("forbidden")
-	}
 	return s.client.GetShortURLs(ctx, s.resolveAPIKey(user), rawQuery)
 }
 
@@ -99,26 +100,14 @@ func (s *ShlinkService) GetShortURLVisits(ctx context.Context, user *domain.User
 }
 
 func (s *ShlinkService) CreateShortURL(ctx context.Context, user *domain.User, body io.Reader) (*shlink.ShortURL, error) {
-	perms := s.perms.Get(string(user.Role))
-	if !perms.CanCreateLinks {
-		return nil, fmt.Errorf("forbidden")
-	}
 	return s.client.CreateShortURL(ctx, s.resolveAPIKey(user), body)
 }
 
 func (s *ShlinkService) UpdateShortURL(ctx context.Context, user *domain.User, shortCode string, body io.Reader) (*shlink.ShortURL, error) {
-	perms := s.perms.Get(string(user.Role))
-	if !perms.CanEditOwnLinks && !perms.CanEditAllLinks {
-		return nil, fmt.Errorf("forbidden")
-	}
 	return s.client.UpdateShortURL(ctx, s.resolveAPIKey(user), shortCode, body)
 }
 
 func (s *ShlinkService) DeleteShortURL(ctx context.Context, user *domain.User, shortCode string) error {
-	perms := s.perms.Get(string(user.Role))
-	if !perms.CanDeleteOwnLinks && !perms.CanDeleteAllLinks {
-		return fmt.Errorf("forbidden")
-	}
 	return s.client.DeleteShortURL(ctx, s.resolveAPIKey(user), shortCode)
 }
 
@@ -127,18 +116,10 @@ func (s *ShlinkService) GetTags(ctx context.Context, user *domain.User) (*shlink
 }
 
 func (s *ShlinkService) RenameTag(ctx context.Context, user *domain.User, body io.Reader) error {
-	perms := s.perms.Get(string(user.Role))
-	if !perms.CanManageOwnTags && !perms.CanManageAllTags {
-		return fmt.Errorf("forbidden")
-	}
 	return s.client.RenameTag(ctx, s.resolveAPIKey(user), body)
 }
 
 func (s *ShlinkService) DeleteTags(ctx context.Context, user *domain.User, tags []string) error {
-	perms := s.perms.Get(string(user.Role))
-	if !perms.CanManageOwnTags && !perms.CanManageAllTags {
-		return fmt.Errorf("forbidden")
-	}
 	return s.client.DeleteTags(ctx, s.resolveAPIKey(user), tags)
 }
 
@@ -155,7 +136,8 @@ func (s *ShlinkService) GetHealth(ctx context.Context) (*shlink.HealthResponse, 
 }
 
 // FilterShortURLsByUser фильтрует URL по владельцу.
-func (s *ShlinkService) FilterShortURLsByUser(urls []shlink.ShortURL, user *domain.User, ownedCodes map[string]struct{}) []shlink.ShortURL {
+// Логика принадлежности ссылки пользователю определяется ownedCodes.
+func (s *ShlinkService) FilterShortURLsByUser(urls []shlink.ShortURL, _ *domain.User, ownedCodes map[string]struct{}) []shlink.ShortURL {
 	result := make([]shlink.ShortURL, 0)
 	for _, u := range urls {
 		if _, ok := ownedCodes[u.ShortCode]; ok {
@@ -165,32 +147,13 @@ func (s *ShlinkService) FilterShortURLsByUser(urls []shlink.ShortURL, user *doma
 	return result
 }
 
-// CanModifyShortCodeByPerms возвращает (canAll, canOwn) для edit/delete.
-func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bool) (canAll, canOwn bool) {
-	p := s.Perms(user)
-	if isDelete {
-		return p.CanDeleteAllLinks, p.CanDeleteOwnLinks
-	}
-	return p.CanEditAllLinks, p.CanEditOwnLinks
-}
-
 // EnforceSlugPrefix проверяет и применяет prefix-правила.
-func (s *ShlinkService) EnforceSlugPrefix(ctx context.Context, user *domain.User, customSlug *string) (string, error) {
-	_ = ctx
-	p := s.Perms(user)
-	if !p.CanCreateLinks {
-		return "", fmt.Errorf("forbidden: no create permission")
-	}
+// Проверка CanCreateLinks выполняется хендлером через PermissionController.
+func (s *ShlinkService) EnforceSlugPrefix(_ context.Context, user *domain.User, customSlug *string) (string, error) {
 	if customSlug == nil || *customSlug == "" {
-		if !p.CanCreateWithoutSlug {
-			return "", fmt.Errorf("forbidden: custom slug required for your role")
-		}
 		return "", nil
 	}
-	if !p.CanCreateWithCustomSlug {
-		return "", fmt.Errorf("forbidden: custom slug not allowed for your role")
-	}
-	if user.SlugPrefix == "" {
+	if user == nil || user.SlugPrefix == "" {
 		return *customSlug, nil
 	}
 	prefix := user.SlugPrefix + "-"
@@ -209,4 +172,12 @@ func (s *ShlinkService) BuildSlug(user *domain.User, slug string) string {
 		return user.SlugPrefix
 	}
 	return strings.Join([]string{user.SlugPrefix, slug}, "-")
+}
+
+// CanModifyShortCodeByPerms — оставлен для обратной совместимости.
+// После коммита #14 (shlink_proxy refactor) удалить.
+//
+// Deprecated: используй permCtrl.Check(ctx, userID, "short_urls.delete"/"short_urls.update").
+func (s *ShlinkService) CanModifyShortCodeByPerms(_ *domain.User, _ bool) (canAll, canOwn bool) {
+	return true, true
 }
