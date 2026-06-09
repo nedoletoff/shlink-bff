@@ -9,16 +9,20 @@ import (
 )
 
 // Runner — абстракция над запуском shlink CLI.
-// Позволяет переключаться между docker exec и нативным вызовом без изменения бизнес-логики.
 type Runner interface {
 	// GenerateAPIKey вызывает `shlink api-key:generate --name <name>`
 	// и возвращает сгенерированный ключ (UUID).
 	GenerateAPIKey(ctx context.Context, name string) (string, error)
+
+	// DeleteAPIKey вызывает `shlink api-key:delete --name <name>`.
+	// Если ключа нет — не возвращает ошибку (idempotent).
+	DeleteAPIKey(ctx context.Context, name string) error
 }
 
-// DockerRunner — запускает shlink через `docker exec <container> shlink ...`
+// ─── DockerRunner ─────────────────────────────────────────────────────────────
+
 type DockerRunner struct {
-	ContainerName string // например "shlink-api"
+	ContainerName string
 }
 
 func NewDockerRunner(containerName string) *DockerRunner {
@@ -33,9 +37,18 @@ func (r *DockerRunner) GenerateAPIKey(ctx context.Context, name string) (string,
 	return parseKeyFromOutput(cmd)
 }
 
-// NativeRunner — запускает shlink напрямую (продовый режим, shlink в PATH).
+func (r *DockerRunner) DeleteAPIKey(ctx context.Context, name string) error {
+	cmd := exec.CommandContext(ctx,
+		"docker", "exec", r.ContainerName,
+		"shlink", "api-key:delete", "--name", name, "--no-interaction",
+	)
+	return runIgnoreNotFound(cmd)
+}
+
+// ─── NativeRunner ─────────────────────────────────────────────────────────────
+
 type NativeRunner struct {
-	ShlinkBin string // путь до бинаря, например "/usr/local/bin/shlink"
+	ShlinkBin string
 }
 
 func NewNativeRunner(shlinkBin string) *NativeRunner {
@@ -50,6 +63,13 @@ func (r *NativeRunner) GenerateAPIKey(ctx context.Context, name string) (string,
 	cmd := exec.CommandContext(ctx, r.ShlinkBin, "api-key:generate", "--name", name)
 	return parseKeyFromOutput(cmd)
 }
+
+func (r *NativeRunner) DeleteAPIKey(ctx context.Context, name string) error {
+	cmd := exec.CommandContext(ctx, r.ShlinkBin, "api-key:delete", "--name", name, "--no-interaction")
+	return runIgnoreNotFound(cmd)
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
 // parseKeyFromOutput запускает команду и извлекает UUID из stdout.
 // shlink выводит строку вида:
@@ -72,7 +92,24 @@ func parseKeyFromOutput(cmd *exec.Cmd) (string, error) {
 	return key, nil
 }
 
-// extractUUID ищет первый UUID-like токен в строке.
+// runIgnoreNotFound запускает команду и игнорирует ошибку «ключ не найден».
+func runIgnoreNotFound(cmd *exec.Cmd) error {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		combined := stdout.String() + stderr.String()
+		// shlink печатает что-то вроде "No API key was found" или "not found" — пропускаем
+		if strings.Contains(strings.ToLower(combined), "not found") ||
+			strings.Contains(strings.ToLower(combined), "no api key") {
+			return nil
+		}
+		return fmt.Errorf("shlink cli error: %w; stderr: %s", err, stderr.String())
+	}
+	return nil
+}
+
 func extractUUID(s string) string {
 	for _, token := range strings.Fields(s) {
 		token = strings.Trim(token, `"'.,`)
