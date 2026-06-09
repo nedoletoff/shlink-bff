@@ -82,7 +82,6 @@ func validateCreateShortURLPayload(req *createShortURLRequest) error {
 }
 
 // GET /api/shlink/short-urls
-// Поддерживает query param ?status=active|inactive|all (default: active).
 func (h *ShlinkProxyHandler) ListShortURLs(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -156,7 +155,6 @@ func (h *ShlinkProxyHandler) CreateShortURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Декодируем для валидации; payload остаётся как map для slug enforcement.
 	var req createShortURLRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
@@ -338,6 +336,37 @@ func (h *ShlinkProxyHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 
 	h.recordAudit(r, user, "list_tags", "success", nil)
 	writeJSON(w, resp, http.StatusOK)
+}
+
+// POST /api/shlink/tags
+func (h *ShlinkProxyHandler) CreateTag(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromCtx(r.Context())
+	if user == nil {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
+
+	p := h.shlinkSvc.Perms(user)
+	if !p.CanManageOwnTags && !p.CanManageAllTags {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.shlinkSvc.Client().CreateTag(r.Context(), user.ShlinkAPIKey, bytes.NewReader(bodyBytes))
+	if err != nil {
+		slog.Error("proxy: create tag failed", "sub", user.Sub, "err", err)
+		writeJSON(w, map[string]string{"error": err.Error()}, http.StatusBadGateway)
+		return
+	}
+
+	h.recordAudit(r, user, "create_tag", "success", nil)
+	writeJSON(w, resp, http.StatusCreated)
 }
 
 // PUT /api/shlink/tags/{tagId}

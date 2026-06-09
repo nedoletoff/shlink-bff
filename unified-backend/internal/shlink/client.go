@@ -163,7 +163,6 @@ func (c *Client) CreateShortURLWithConfig(ctx context.Context, apiKey string, bo
 		return c.CreateShortURL(ctx, apiKey, body)
 	}
 
-	// Декодируем входящий JSON, добавляем поле, кодируем обратно.
 	var payload map[string]json.RawMessage
 	if err := json.NewDecoder(body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("shlink_client: failed to decode create request body: %w", err)
@@ -195,6 +194,12 @@ func (c *Client) DeleteShortURL(ctx context.Context, apiKey, shortCode string) e
 func (c *Client) GetTags(ctx context.Context, apiKey string) (*TagsWithStatsResponse, error) {
 	url := c.baseURL + "/rest/v3/tags?withStats=true"
 	return doRequest[TagsWithStatsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
+}
+
+// CreateTag — POST /rest/v3/tags создаёт новый тег. body: {"tags": ["newTag"]}
+func (c *Client) CreateTag(ctx context.Context, apiKey string, body io.Reader) (*TagsWithStatsResponse, error) {
+	url := c.baseURL + "/rest/v3/tags"
+	return doRequest[TagsWithStatsResponse](ctx, c, http.MethodPost, url, apiKey, body)
 }
 
 // RenameTag uses PUT /rest/v3/tags with body {"oldName": "...", "newName": "..."}

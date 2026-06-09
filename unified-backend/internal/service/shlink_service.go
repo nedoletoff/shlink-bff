@@ -21,13 +21,13 @@ type ShlinkClientIface interface {
 	UpdateShortURL(ctx context.Context, apiKey, shortCode string, body io.Reader) (*shlink.ShortURL, error)
 	DeleteShortURL(ctx context.Context, apiKey, shortCode string) error
 	GetTags(ctx context.Context, apiKey string) (*shlink.TagsWithStatsResponse, error)
+	CreateTag(ctx context.Context, apiKey string, body io.Reader) (*shlink.TagsWithStatsResponse, error)
 	RenameTag(ctx context.Context, apiKey string, body io.Reader) error
 	DeleteTags(ctx context.Context, apiKey string, tags []string) error
 	GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endDate string, itemsPerPage int) (*shlink.VisitsResponse, error)
 	PatchSettings(ctx context.Context, adminAPIKey string, shortCodeLength int) error
 	GetHealth(ctx context.Context) (*shlink.HealthResponse, error)
 	ValidateVersion(ctx context.Context, minMajor int, attempts int, delay time.Duration) error
-	CreateTag(ctx context.Context, apiKey string, body io.Reader) (*shlink.TagsWithStatsResponse, error)
 }
 
 // Compile-time check: *shlink.Client реализует ShlinkClientIface.
@@ -39,7 +39,7 @@ type PermissionsCacheIface interface {
 	GetMerged(roles []string) domain.RolePermissions
 }
 
-// PermissionsCacheAdmin — расширенный интерфейс для хендлеров управления ролями.
+// PermissionsCacheAdmin — расширенный интерфейс для управления ролями.
 type PermissionsCacheAdmin interface {
 	PermissionsCacheIface
 	GetAll() []domain.RolePermissions
@@ -59,6 +59,19 @@ type ShlinkService struct {
 
 func NewShlinkService(client ShlinkClientIface, cfg *config.Config, perms PermissionsCacheIface) *ShlinkService {
 	return &ShlinkService{client: client, cfg: cfg, perms: perms}
+}
+
+// Client возвращает сырой клиент — используется handler'ами напрямую.
+func (s *ShlinkService) Client() ShlinkClientIface {
+	return s.client
+}
+
+// Perms возвращает permissions пользователя.
+func (s *ShlinkService) Perms(user *domain.User) domain.RolePermissions {
+	if user == nil {
+		return domain.RolePermissions{}
+	}
+	return s.perms.Get(string(user.Role))
 }
 
 // resolveAPIKey возвращает shlink api-ключ пользователя или дефолтный из конфига.
@@ -113,14 +126,6 @@ func (s *ShlinkService) GetTags(ctx context.Context, user *domain.User) (*shlink
 	return s.client.GetTags(ctx, s.resolveAPIKey(user))
 }
 
-func (s *ShlinkService) CreateTag(ctx context.Context, user *domain.User, body io.Reader) (*shlink.TagsWithStatsResponse, error) {
-	perms := s.perms.Get(string(user.Role))
-	if !perms.CanManageOwnTags && !perms.CanManageAllTags {
-		return nil, fmt.Errorf("forbidden")
-	}
-	return s.client.CreateTag(ctx, s.resolveAPIKey(user), body)
-}
-
 func (s *ShlinkService) RenameTag(ctx context.Context, user *domain.User, body io.Reader) error {
 	perms := s.perms.Get(string(user.Role))
 	if !perms.CanManageOwnTags && !perms.CanManageAllTags {
@@ -147,6 +152,52 @@ func (s *ShlinkService) PatchSettings(ctx context.Context, shortCodeLength int) 
 
 func (s *ShlinkService) GetHealth(ctx context.Context) (*shlink.HealthResponse, error) {
 	return s.client.GetHealth(ctx)
+}
+
+// FilterShortURLsByUser фильтрует URL по владельцу.
+func (s *ShlinkService) FilterShortURLsByUser(urls []shlink.ShortURL, user *domain.User, ownedCodes map[string]struct{}) []shlink.ShortURL {
+	result := make([]shlink.ShortURL, 0)
+	for _, u := range urls {
+		if _, ok := ownedCodes[u.ShortCode]; ok {
+			result = append(result, u)
+		}
+	}
+	return result
+}
+
+// CanModifyShortCodeByPerms возвращает (canAll, canOwn) для edit/delete.
+func (s *ShlinkService) CanModifyShortCodeByPerms(user *domain.User, isDelete bool) (canAll, canOwn bool) {
+	p := s.Perms(user)
+	if isDelete {
+		return p.CanDeleteAllLinks, p.CanDeleteOwnLinks
+	}
+	return p.CanEditAllLinks, p.CanEditOwnLinks
+}
+
+// EnforceSlugPrefix проверяет и применяет prefix-правила.
+func (s *ShlinkService) EnforceSlugPrefix(ctx context.Context, user *domain.User, customSlug *string) (string, error) {
+	_ = ctx
+	p := s.Perms(user)
+	if !p.CanCreateLinks {
+		return "", fmt.Errorf("forbidden: no create permission")
+	}
+	if customSlug == nil || *customSlug == "" {
+		if !p.CanCreateWithoutSlug {
+			return "", fmt.Errorf("forbidden: custom slug required for your role")
+		}
+		return "", nil
+	}
+	if !p.CanCreateWithCustomSlug {
+		return "", fmt.Errorf("forbidden: custom slug not allowed for your role")
+	}
+	if user.SlugPrefix == "" {
+		return *customSlug, nil
+	}
+	prefix := user.SlugPrefix + "-"
+	if strings.HasPrefix(*customSlug, prefix) {
+		return *customSlug, nil
+	}
+	return prefix + *customSlug, nil
 }
 
 // BuildSlug формирует slug с учётом prefix пользователя.

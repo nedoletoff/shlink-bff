@@ -29,7 +29,6 @@ func NewAdminHandler(
 	return &AdminHandler{userRepo: userRepo, auditRepo: auditRepo, rolesRepo: rolesRepo}
 }
 
-// recordAuditAsync — запись аудита в горутине с детачнутым контекстом.
 func (h *AdminHandler) recordAuditAsync(entry *domain.AuditEntry) {
 	if h.auditRepo == nil || entry == nil {
 		return
@@ -123,7 +122,6 @@ func (h *AdminHandler) ListLogs(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
-// parsePositiveInt — небольшой локальный helper.
 func parsePositiveInt(s string) (int, error) {
 	n := 0
 	for _, ch := range s {
@@ -157,7 +155,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = strings.NewReader(string(bodyBytes))
+	r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
 
 	var p updateUserPayload
 	if err := json.Unmarshal(bodyBytes, &p); err != nil {
