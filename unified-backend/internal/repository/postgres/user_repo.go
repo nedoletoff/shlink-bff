@@ -23,14 +23,14 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 
 func (r *UserRepository) GetBySub(ctx context.Context, sub string) (*domain.User, error) {
 	const q = `
-		SELECT id, sub, username, email, role, shlink_api_key,
+		SELECT id, sub, username, email, role, role_id, shlink_api_key,
 		       COALESCE(slug_prefix, ''), status, created_at, updated_at
 		FROM users WHERE sub = $1`
 
 	u := &domain.User{}
 	err := r.pool.QueryRow(ctx, q, sub).Scan(
 		&u.ID, &u.Sub, &u.Username, &u.Email,
-		&u.Role, &u.ShlinkAPIKey, &u.SlugPrefix,
+		&u.Role, &u.RoleID, &u.ShlinkAPIKey, &u.SlugPrefix,
 		&u.Status, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -41,14 +41,14 @@ func (r *UserRepository) GetBySub(ctx context.Context, sub string) (*domain.User
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	const q = `
-		SELECT id, sub, username, email, role, shlink_api_key,
+		SELECT id, sub, username, email, role, role_id, shlink_api_key,
 		       COALESCE(slug_prefix, ''), status, created_at, updated_at
 		FROM users WHERE id = $1`
 
 	u := &domain.User{}
 	err := r.pool.QueryRow(ctx, q, id).Scan(
 		&u.ID, &u.Sub, &u.Username, &u.Email,
-		&u.Role, &u.ShlinkAPIKey, &u.SlugPrefix,
+		&u.Role, &u.RoleID, &u.ShlinkAPIKey, &u.SlugPrefix,
 		&u.Status, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -59,7 +59,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Use
 
 func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 	const q = `
-		SELECT id, sub, username, email, role, shlink_api_key,
+		SELECT id, sub, username, email, role, role_id, shlink_api_key,
 		       COALESCE(slug_prefix, ''), status, created_at, updated_at
 		FROM users ORDER BY created_at DESC`
 
@@ -74,7 +74,7 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 		u := &domain.User{}
 		if err := rows.Scan(
 			&u.ID, &u.Sub, &u.Username, &u.Email,
-			&u.Role, &u.ShlinkAPIKey, &u.SlugPrefix,
+			&u.Role, &u.RoleID, &u.ShlinkAPIKey, &u.SlugPrefix,
 			&u.Status, &u.CreatedAt, &u.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -86,8 +86,6 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 
 // Upsert вставляет нового пользователя.
 // При конфликте по sub обновляет ТОЛЬКО username и email — роль никогда не трогает.
-// Логика обновления роли полностью вынесена в middleware/active_user.go
-// и зависит от cfg.RoleSource.
 func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 	const q = `
 		INSERT INTO users (sub, username, email, role, shlink_api_key, status)
@@ -96,8 +94,6 @@ func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 			username   = EXCLUDED.username,
 			email      = EXCLUDED.email,
 			updated_at = NOW()
-		-- role намеренно НЕ обновляется здесь;
-		-- обновление роли выполняется явно через UpdateBySubFields в active_user.go
 		`
 	_, err := r.pool.Exec(ctx, q,
 		u.Sub, u.Username, u.Email, u.Role, u.ShlinkAPIKey, u.Status,
@@ -105,10 +101,24 @@ func (r *UserRepository) Upsert(ctx context.Context, u *domain.User) error {
 	return err
 }
 
+// GetRoleIDByName возвращает UUID роли по имени.
+func (r *UserRepository) GetRoleIDByName(ctx context.Context, roleName string) (*uuid.UUID, error) {
+	const q = `SELECT id FROM roles WHERE name = $1 LIMIT 1`
+	var id uuid.UUID
+	err := r.pool.QueryRow(ctx, q, roleName).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
 // UpdateBySubFields обновляет разрешённые поля пользователя одним атомарным UPDATE.
-// Допустимые поля: role, status, slug_prefix, shlink_api_key, username, email.
+// Допустимые поля: role, role_id, status, slug_prefix, shlink_api_key, username, email.
 func (r *UserRepository) UpdateBySubFields(ctx context.Context, sub string, fields map[string]any) error {
-	allowed := []string{"role", "status", "slug_prefix", "shlink_api_key", "username", "email"}
+	allowed := []string{"role", "role_id", "status", "slug_prefix", "shlink_api_key", "username", "email"}
 
 	setClauses := make([]string, 0, len(allowed))
 	args := make([]any, 0, len(allowed)+1)
