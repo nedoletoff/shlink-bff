@@ -30,7 +30,7 @@ SELECT role,
     can_delete_own_links_permanently, can_delete_all_links_permanently,
     can_manage_own_tags, can_manage_all_tags,
     can_view_own_stats, can_view_all_stats,
-    can_view_audit_logs, can_manage_users, can_manage_roles,
+    can_view_audit_logs, can_manage_users, can_manage_roles, can_manage_settings,
     updated_at
 FROM role_permissions
 `
@@ -57,7 +57,7 @@ func (r *RolePermissionsRepository) GetAll(ctx context.Context) ([]domain.RolePe
 			&p.CanDeleteOwnLinksPermanently, &p.CanDeleteAllLinksPermanently,
 			&p.CanManageOwnTags, &p.CanManageAllTags,
 			&p.CanViewOwnStats, &p.CanViewAllStats,
-			&p.CanViewAuditLogs, &p.CanManageUsers, &p.CanManageRoles,
+			&p.CanViewAuditLogs, &p.CanManageUsers, &p.CanManageRoles, &p.CanManageSettings,
 			&p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("role_permissions scan: %w", err)
@@ -84,7 +84,7 @@ func (r *RolePermissionsRepository) GetByRole(ctx context.Context, role string) 
 		&p.CanDeleteOwnLinksPermanently, &p.CanDeleteAllLinksPermanently,
 		&p.CanManageOwnTags, &p.CanManageAllTags,
 		&p.CanViewOwnStats, &p.CanViewAllStats,
-		&p.CanViewAuditLogs, &p.CanManageUsers, &p.CanManageRoles,
+		&p.CanViewAuditLogs, &p.CanManageUsers, &p.CanManageRoles, &p.CanManageSettings,
 		&p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -110,12 +110,12 @@ INSERT INTO role_permissions (
     can_delete_own_links_permanently, can_delete_all_links_permanently,
     can_manage_own_tags, can_manage_all_tags,
     can_view_own_stats, can_view_all_stats,
-    can_view_audit_logs, can_manage_users, can_manage_roles,
+    can_view_audit_logs, can_manage_users, can_manage_roles, can_manage_settings,
     updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16,
-    $17, $18, $19, $20, $21, $22, $23, NOW()
+    $17, $18, $19, $20, $21, $22, $23, $24, NOW()
 )
 ON CONFLICT (role) DO UPDATE SET
     can_view_own_links                = EXCLUDED.can_view_own_links,
@@ -140,6 +140,7 @@ ON CONFLICT (role) DO UPDATE SET
     can_view_audit_logs               = EXCLUDED.can_view_audit_logs,
     can_manage_users                  = EXCLUDED.can_manage_users,
     can_manage_roles                  = EXCLUDED.can_manage_roles,
+    can_manage_settings               = EXCLUDED.can_manage_settings,
     updated_at                        = NOW()
 `,
 		p.Role,
@@ -152,7 +153,7 @@ ON CONFLICT (role) DO UPDATE SET
 		p.CanDeleteOwnLinksPermanently, p.CanDeleteAllLinksPermanently,
 		p.CanManageOwnTags, p.CanManageAllTags,
 		p.CanViewOwnStats, p.CanViewAllStats,
-		p.CanViewAuditLogs, p.CanManageUsers, p.CanManageRoles,
+		p.CanViewAuditLogs, p.CanManageUsers, p.CanManageRoles, p.CanManageSettings,
 	)
 	if err != nil {
 		return fmt.Errorf("role_permissions Upsert: %w", err)

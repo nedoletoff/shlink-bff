@@ -6,11 +6,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
+	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
 )
 
@@ -48,8 +50,25 @@ type rolesListResponse struct {
 	Mappings []roleMapping `json:"mappings"`
 }
 
-// GET /api/admin/roles
+func (h *RolesHandler) requireManageRoles(w http.ResponseWriter, r *http.Request) *domain.User {
+	user := middleware.UserFromCtx(r.Context())
+	if user == nil {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return nil
+	}
+	roles := middleware.RolesFromCtx(r.Context(), string(user.Role))
+	if !h.cache.GetMerged(roles).CanManageRoles {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+		return nil
+	}
+	return user
+}
+
+// GET /api/roles
 func (h *RolesHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	if h.requireManageRoles(w, r) == nil {
+		return
+	}
 	perms := h.cache.GetAll()
 
 	roles := make([]roleEntry, 0, len(perms))
@@ -70,8 +89,11 @@ func (h *RolesHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rolesListResponse{Roles: roles, Mappings: mappings}, http.StatusOK)
 }
 
-// GET /api/admin/roles/{role}
+// GET /api/roles/{role}
 func (h *RolesHandler) GetRole(w http.ResponseWriter, r *http.Request) {
+	if h.requireManageRoles(w, r) == nil {
+		return
+	}
 	role := chi.URLParam(r, "role")
 	p := h.cache.Get(role)
 	if p.Role == "" {
@@ -80,10 +102,47 @@ func (h *RolesHandler) GetRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p, http.StatusOK)
 }
 
-// PUT /api/admin/roles/{role}/permissions
+// POST /api/roles
+func (h *RolesHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
+	if h.requireManageRoles(w, r) == nil {
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "bad request"}, http.StatusBadRequest)
+		return
+	}
+
+	var p domain.RolePermissions
+	if err := json.Unmarshal(body, &p); err != nil {
+		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(p.Role) == "" {
+		writeJSON(w, map[string]string{"error": "role name required"}, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.permsRepo.Upsert(r.Context(), &p); err != nil {
+		slog.Error("roles: create failed", "role", p.Role, "err", err)
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+
+	h.cache.Reload(r.Context())
+	writeJSON(w, p, http.StatusCreated)
+}
+
+// PUT /api/roles/{role}/permissions
 func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Request) {
+	if h.requireManageRoles(w, r) == nil {
+		return
+	}
+
 	role := chi.URLParam(r, "role")
-	if role == "" {
+	if strings.TrimSpace(role) == "" {
 		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
 		return
 	}
@@ -107,22 +166,19 @@ func (h *RolesHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	h.cache.Set(p)
-	slog.Info("roles: permissions updated", "role", role)
+	h.cache.Reload(r.Context())
 	writeJSON(w, p, http.StatusOK)
 }
 
-// DELETE /api/admin/roles/{role}
+// DELETE /api/roles/{role}
 func (h *RolesHandler) DeleteRole(w http.ResponseWriter, r *http.Request) {
-	role := chi.URLParam(r, "role")
-	if role == "" {
-		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
+	if h.requireManageRoles(w, r) == nil {
 		return
 	}
 
-	// Не даём удалить встроенные роли.
-	if role == h.cfg.AdminRole || role == "user" {
-		writeJSON(w, map[string]string{"error": "cannot delete built-in role"}, http.StatusBadRequest)
+	role := chi.URLParam(r, "role")
+	if strings.TrimSpace(role) == "" {
+		writeJSON(w, map[string]string{"error": "role required"}, http.StatusBadRequest)
 		return
 	}
 
@@ -132,29 +188,45 @@ func (h *RolesHandler) DeleteRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.cache.Delete(role)
-	slog.Info("roles: role deleted", "role", role)
+	h.cache.Reload(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // permToStringSlice переводит флаги RolePermissions в список строк.
+// Порядок соответствует группировке в domain.RolePermissions.
 func permToStringSlice(p domain.RolePermissions) []string {
 	var out []string
-	if p.CanViewOwnLinks         { out = append(out, "canViewOwnLinks") }
-	if p.CanViewAllLinks         { out = append(out, "canViewAllLinks") }
-	if p.CanCreateLinks          { out = append(out, "canCreateLinks") }
-	if p.CanCreateWithCustomSlug { out = append(out, "canCreateWithCustomSlug") }
-	if p.CanCreateWithoutSlug    { out = append(out, "canCreateWithoutSlug") }
-	if p.CanEditOwnLinks         { out = append(out, "canEditOwnLinks") }
-	if p.CanEditAllLinks         { out = append(out, "canEditAllLinks") }
-	if p.CanDeleteOwnLinks       { out = append(out, "canDeleteOwnLinks") }
-	if p.CanDeleteAllLinks       { out = append(out, "canDeleteAllLinks") }
-	if p.CanManageOwnTags        { out = append(out, "canManageOwnTags") }
-	if p.CanManageAllTags        { out = append(out, "canManageAllTags") }
-	if p.CanViewOwnStats         { out = append(out, "canViewOwnStats") }
-	if p.CanViewAllStats         { out = append(out, "canViewAllStats") }
-	if p.CanViewAuditLogs        { out = append(out, "canViewAuditLogs") }
-	if p.CanManageUsers          { out = append(out, "canManageUsers") }
-	if p.CanManageRoles          { out = append(out, "canManageRoles") }
+	// Просмотр ссылок
+	if p.CanViewOwnLinks          { out = append(out, "canViewOwnLinks") }
+	if p.CanViewAllLinks          { out = append(out, "canViewAllLinks") }
+	// Создание
+	if p.CanCreateLinks           { out = append(out, "canCreateLinks") }
+	if p.CanCreateWithCustomSlug  { out = append(out, "canCreateWithCustomSlug") }
+	if p.CanCreateWithoutSlug     { out = append(out, "canCreateWithoutSlug") }
+	// Редактирование
+	if p.CanEditOwnLinks          { out = append(out, "canEditOwnLinks") }
+	if p.CanEditAllLinks          { out = append(out, "canEditAllLinks") }
+	// Удаление (soft)
+	if p.CanDeleteOwnLinks        { out = append(out, "canDeleteOwnLinks") }
+	if p.CanDeleteAllLinks        { out = append(out, "canDeleteAllLinks") }
+	// Деактивация / реактивация
+	if p.CanDeactivateOwnLinks    { out = append(out, "canDeactivateOwnLinks") }
+	if p.CanDeactivateAllLinks    { out = append(out, "canDeactivateAllLinks") }
+	if p.CanReactivateOwnLinks    { out = append(out, "canReactivateOwnLinks") }
+	if p.CanReactivateAllLinks    { out = append(out, "canReactivateAllLinks") }
+	// Permanent delete
+	if p.CanDeleteOwnLinksPermanently { out = append(out, "canDeleteOwnLinksPermanently") }
+	if p.CanDeleteAllLinksPermanently { out = append(out, "canDeleteAllLinksPermanently") }
+	// Теги
+	if p.CanManageOwnTags         { out = append(out, "canManageOwnTags") }
+	if p.CanManageAllTags         { out = append(out, "canManageAllTags") }
+	// Статистика
+	if p.CanViewOwnStats          { out = append(out, "canViewOwnStats") }
+	if p.CanViewAllStats          { out = append(out, "canViewAllStats") }
+	// Управление
+	if p.CanViewAuditLogs         { out = append(out, "canViewAuditLogs") }
+	if p.CanManageUsers           { out = append(out, "canManageUsers") }
+	if p.CanManageRoles           { out = append(out, "canManageRoles") }
+	if p.CanManageSettings        { out = append(out, "canManageSettings") }
 	return out
 }

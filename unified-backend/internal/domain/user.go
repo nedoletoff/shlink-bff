@@ -77,9 +77,10 @@ type RolePermissions struct {
 	CanViewAllStats bool `db:"can_view_all_stats" json:"canViewAllStats"`
 
 	// Управление
-	CanViewAuditLogs bool `db:"can_view_audit_logs" json:"canViewAuditLogs"`
-	CanManageUsers   bool `db:"can_manage_users"   json:"canManageUsers"`
-	CanManageRoles   bool `db:"can_manage_roles"   json:"canManageRoles"`
+	CanViewAuditLogs  bool `db:"can_view_audit_logs"  json:"canViewAuditLogs"`
+	CanManageUsers    bool `db:"can_manage_users"     json:"canManageUsers"`
+	CanManageRoles    bool `db:"can_manage_roles"     json:"canManageRoles"`
+	CanManageSettings bool `db:"can_manage_settings"  json:"canManageSettings"`
 
 	UpdatedAt time.Time `db:"updated_at" json:"updatedAt"`
 }
@@ -110,6 +111,7 @@ func DefaultAdminPermissions(role string) RolePermissions {
 		CanViewAuditLogs:             true,
 		CanManageUsers:               true,
 		CanManageRoles:               true,
+		CanManageSettings:            true,
 	}
 }
 
