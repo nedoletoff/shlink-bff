@@ -10,14 +10,14 @@ import (
 )
 
 type MeResponse struct {
-	Sub         string          `json:"sub"`
-	Username    string          `json:"username"`
-	Email       string          `json:"email"`
-	Role        string          `json:"role"`
-	Permissions map[string]bool `json:"permissions"`
-	HasAPIKey   bool            `json:"hasApiKey"`
-	Features    FeatureFlags    `json:"features"`
-	SlugPrefix  string          `json:"slugPrefix,omitempty"`
+	Sub        string   `json:"sub"`
+	Username   string   `json:"username"`
+	Email      string   `json:"email"`
+	Role       string   `json:"role"`
+	Permissions []string `json:"permissions"`
+	HasAPIKey  bool     `json:"hasApiKey"`
+	Features   FeatureFlags `json:"features"`
+	SlugPrefix string   `json:"slugPrefix,omitempty"`
 }
 
 type FeatureFlags struct {
@@ -26,12 +26,12 @@ type FeatureFlags struct {
 }
 
 type MeHandler struct {
-	cfg   *config.Config
-	perms *service.PermissionsCache
+	cfg     *config.Config
+	permSvc *service.PermissionService
 }
 
-func NewMeHandler(cfg *config.Config, perms *service.PermissionsCache) *MeHandler {
-	return &MeHandler{cfg: cfg, perms: perms}
+func NewMeHandler(cfg *config.Config, permSvc *service.PermissionService) *MeHandler {
+	return &MeHandler{cfg: cfg, permSvc: permSvc}
 }
 
 func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,23 +42,19 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := h.perms.Get(user.Role)
+	perms, err := h.permSvc.GetUserPermissions(r.Context(), user.ID)
+	if err != nil {
+		slog.Error("me: failed to get permissions", "sub", user.Sub, "err", err)
+		perms = []string{}
+	}
 
 	resp := MeResponse{
-		Sub:      user.Sub,
-		Username: user.Username,
-		Email:    user.Email,
-		Role:     string(user.Role),
-		Permissions: map[string]bool{
-			"canCreateShortUrl":      p.CanCreateLinks,
-			"canCreateWithCustomSlug": p.CanCreateWithCustomSlug,
-			"canEditOwnLinks":        p.CanEditOwnLinks,
-			"canDeleteOwnLinks":      p.CanDeleteOwnLinks,
-			"canManageOwnTags":       p.CanManageOwnTags,
-			"canViewAuditLogs":       p.CanViewAuditLogs,
-			"canManageUsers":         p.CanManageUsers,
-		},
-		HasAPIKey: user.ShlinkAPIKey != "",
+		Sub:         user.Sub,
+		Username:    user.Username,
+		Email:       user.Email,
+		Role:        string(user.Role),
+		Permissions: perms,
+		HasAPIKey:   user.ShlinkAPIKey != "",
 		Features: FeatureFlags{
 			UserSlugPrefixEnabled:    h.cfg.UserSlugPrefixEnabled,
 			UserTagInternalIdEnabled: h.cfg.UserTagInternalIdEnabled,

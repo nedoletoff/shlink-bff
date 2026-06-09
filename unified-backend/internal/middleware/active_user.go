@@ -12,22 +12,10 @@ import (
 	"unified-backend/internal/shlinkctl"
 )
 
-// RequireActiveUser — middleware провизионирования и авторизации.
-//
-// Логика зависит от cfg.RoleSource:
-//
-// ROLE_SOURCE=keycloak (default):
-//   - Роль берётся из Keycloak-групп (CtxKeyKeycloakRole) при каждом запросе.
-//   - Роль в БД ОБНОВЛЯЕТСЯ до текущей Keycloak-роли если изменилась.
-//   - Keycloak — единственный источник истины.
-//
-// ROLE_SOURCE=db:
-//   - Первый визит: роль берётся из Keycloak и записывается в БД (провизионирование).
-//   - Последующие запросы: роль берётся из users.role (БД), Keycloak НЕ влияет.
-//   - Смена роли — только через admin API (PUT /api/admin/users/{sub}).
-//
-// После разрешения пользователя provisioner.EnsureAPIKey выдаёт shlink API-ключ
-// при первом логине (идемпотентно). Ошибка генерации не блокирует запрос.
+// RequireActiveUser — middleware аутентификации и провизионирования.
+// Проверяет только подлинность токена (через ExtractIdentity выше в цепочке)
+// и статус пользователя (active/disabled). Проверка прав — исключительно через
+// PermissionController в хендлерах или Authorize middleware.
 func RequireActiveUser(
 	userRepo *postgres.UserRepository,
 	auditRepo *postgres.AuditRepository,
@@ -71,14 +59,15 @@ func RequireActiveUser(
 				return
 			}
 
+			// Единственная проверка авторизации здесь — статус active/disabled.
+			// Все остальные проверки прав — через PermissionController.
 			if user.Status == domain.StatusDisabled {
 				slog.Warn("active_user: disabled user", "sub", user.Sub)
 				writeErrJSON(w, http.StatusForbidden, "forbidden", "account is disabled")
 				return
 			}
 
-			// Выдаём shlink API-ключ при первом логине (идемпотентно).
-			// Не блокируем запрос при ошибке — пользователь видит 502 только на proxy-запросах.
+			// Провизионируем shlink API-ключ при первом логине (идемпотентно).
 			if user.ShlinkAPIKey == "" {
 				key, provErr := provisioner.EnsureAPIKey(ctx, user.Sub, user.Username)
 				if provErr != nil {
@@ -89,8 +78,6 @@ func RequireActiveUser(
 				}
 			}
 
-			// Кладём пользователя в контекст через WithUser (userctx.go),
-			// и обновляем CtxKeyRole для обратной совместимости с IdentityFromCtx.
 			ctx = WithUser(ctx, user)
 			ctx = context.WithValue(ctx, CtxKeyRole, user.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -169,7 +156,7 @@ func handleRoleSourceDB(
 		return newUser, nil
 	}
 
-	// Повторный визит — роль из БД, Keycloak не меняет её.
+	// Повторный визит — роль из БД, Keycloak не влияет.
 	fields := map[string]any{}
 	if user.Username != idnt.Username {
 		fields["username"] = idnt.Username

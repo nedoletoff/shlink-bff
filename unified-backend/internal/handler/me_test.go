@@ -11,14 +11,20 @@ import (
 	"unified-backend/internal/domain"
 	"unified-backend/internal/handler"
 	"unified-backend/internal/middleware"
-	"unified-backend/internal/service"
 )
 
-func newMeCache(perms ...domain.RolePermissions) *service.PermissionsCache {
-	repo := &stubRolesRepo{data: perms}
-	c := service.NewPermissionsCache(repo, "admin")
-	_ = c.Load(context.Background())
-	return c
+// stubPermSvc implements a minimal PermissionService-like interface for tests.
+type stubPermSvc struct {
+	perms []string
+	err   error
+}
+
+func (s *stubPermSvc) GetUserPermissions(_ context.Context, _ string) ([]string, error) {
+	return s.perms, s.err
+}
+
+func (s *stubPermSvc) UserHasPermission(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
 }
 
 func meCfg(slugPrefix bool) *config.Config {
@@ -30,7 +36,8 @@ func meCfg(slugPrefix bool) *config.Config {
 }
 
 func TestMeHandler_NoUser_Returns500(t *testing.T) {
-	h := handler.NewMeHandler(meCfg(false), newMeCache())
+	svc := &stubPermSvc{perms: []string{}}
+	h := handler.NewMeHandler(meCfg(false), svc)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	h.ServeHTTP(rec, req)
@@ -40,14 +47,11 @@ func TestMeHandler_NoUser_Returns500(t *testing.T) {
 }
 
 func TestMeHandler_WithUser_Returns200(t *testing.T) {
-	cache := newMeCache(domain.RolePermissions{
-		Role:           "editor",
-		CanCreateLinks: true,
-		CanEditOwnLinks: true,
-	})
-	h := handler.NewMeHandler(meCfg(false), cache)
+	svc := &stubPermSvc{perms: []string{"short_urls.create", "dashboard.view"}}
+	h := handler.NewMeHandler(meCfg(false), svc)
 
 	u := &domain.User{
+		ID:           "uuid-1",
 		Sub:          "sub-1",
 		Username:     "john",
 		Email:        "john@example.com",
@@ -70,23 +74,51 @@ func TestMeHandler_WithUser_Returns200(t *testing.T) {
 	if resp["sub"] != "sub-1" {
 		t.Errorf("sub: want sub-1, got %v", resp["sub"])
 	}
-	if resp["username"] != "john" {
-		t.Errorf("username: want john, got %v", resp["username"])
-	}
 	if resp["hasApiKey"] != true {
 		t.Errorf("hasApiKey: want true, got %v", resp["hasApiKey"])
+	}
+	// Проверяем что isAdmin отсутствует
+	if _, ok := resp["isAdmin"]; ok {
+		t.Error("isAdmin must not be present in /api/me response")
+	}
+}
+
+func TestMeHandler_PermissionsArray_Returned(t *testing.T) {
+	expected := []string{"short_urls.create", "dashboard.view", "users.view"}
+	svc := &stubPermSvc{perms: expected}
+	h := handler.NewMeHandler(meCfg(false), svc)
+
+	u := &domain.User{ID: "uuid-2", Sub: "sub-2", Role: "editor"}
+	ctx := middleware.WithUser(context.Background(), u)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
+	h.ServeHTTP(rec, req)
+
+	var resp struct {
+		Permissions []string `json:"permissions"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	if len(resp.Permissions) != len(expected) {
+		t.Errorf("permissions: want %d items, got %d", len(expected), len(resp.Permissions))
+	}
+	permSet := make(map[string]bool, len(resp.Permissions))
+	for _, p := range resp.Permissions {
+		permSet[p] = true
+	}
+	for _, p := range expected {
+		if !permSet[p] {
+			t.Errorf("permissions: missing %q", p)
+		}
 	}
 }
 
 func TestMeHandler_SlugPrefix_IncludedWhenEnabled(t *testing.T) {
-	cache := newMeCache(domain.RolePermissions{Role: "editor"})
-	h := handler.NewMeHandler(meCfg(true), cache)
+	svc := &stubPermSvc{perms: []string{}}
+	h := handler.NewMeHandler(meCfg(true), svc)
 
-	u := &domain.User{
-		Sub:        "sub-2",
-		Role:       "editor",
-		SlugPrefix: "myprefix",
-	}
+	u := &domain.User{ID: "uuid-3", Sub: "sub-3", Role: "editor", SlugPrefix: "myprefix"}
 	ctx := middleware.WithUser(context.Background(), u)
 
 	rec := httptest.NewRecorder()
@@ -101,14 +133,10 @@ func TestMeHandler_SlugPrefix_IncludedWhenEnabled(t *testing.T) {
 }
 
 func TestMeHandler_SlugPrefix_OmittedWhenDisabled(t *testing.T) {
-	cache := newMeCache(domain.RolePermissions{Role: "editor"})
-	h := handler.NewMeHandler(meCfg(false), cache)
+	svc := &stubPermSvc{perms: []string{}}
+	h := handler.NewMeHandler(meCfg(false), svc)
 
-	u := &domain.User{
-		Sub:        "sub-3",
-		Role:       "editor",
-		SlugPrefix: "myprefix",
-	}
+	u := &domain.User{ID: "uuid-4", Sub: "sub-4", Role: "editor", SlugPrefix: "myprefix"}
 	ctx := middleware.WithUser(context.Background(), u)
 
 	rec := httptest.NewRecorder()
@@ -123,10 +151,10 @@ func TestMeHandler_SlugPrefix_OmittedWhenDisabled(t *testing.T) {
 }
 
 func TestMeHandler_NoAPIKey_HasApikeyFalse(t *testing.T) {
-	cache := newMeCache(domain.RolePermissions{Role: "editor"})
-	h := handler.NewMeHandler(meCfg(false), cache)
+	svc := &stubPermSvc{perms: []string{}}
+	h := handler.NewMeHandler(meCfg(false), svc)
 
-	u := &domain.User{Sub: "sub-4", Role: "editor", ShlinkAPIKey: ""}
+	u := &domain.User{ID: "uuid-5", Sub: "sub-5", Role: "editor", ShlinkAPIKey: ""}
 	ctx := middleware.WithUser(context.Background(), u)
 
 	rec := httptest.NewRecorder()
@@ -137,43 +165,5 @@ func TestMeHandler_NoAPIKey_HasApikeyFalse(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["hasApiKey"] != false {
 		t.Errorf("hasApiKey: want false, got %v", resp["hasApiKey"])
-	}
-}
-
-func TestMeHandler_PermissionsMap_ContainsExpectedKeys(t *testing.T) {
-	cache := newMeCache(domain.RolePermissions{
-		Role:             "editor",
-		CanCreateLinks:   true,
-		CanManageUsers:   false,
-		CanViewAuditLogs: false,
-	})
-	h := handler.NewMeHandler(meCfg(false), cache)
-
-	u := &domain.User{Sub: "sub-5", Role: "editor"}
-	ctx := middleware.WithUser(context.Background(), u)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil).WithContext(ctx)
-	h.ServeHTTP(rec, req)
-
-	var resp struct {
-		Permissions map[string]bool `json:"permissions"`
-	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-
-	expectedKeys := []string{
-		"canCreateShortUrl", "canEditOwnLinks", "canDeleteOwnLinks",
-		"canManageOwnTags", "canViewAuditLogs", "canManageUsers",
-	}
-	for _, k := range expectedKeys {
-		if _, ok := resp.Permissions[k]; !ok {
-			t.Errorf("permissions map missing key: %s", k)
-		}
-	}
-	if !resp.Permissions["canCreateShortUrl"] {
-		t.Error("canCreateShortUrl should be true for editor")
-	}
-	if resp.Permissions["canManageUsers"] {
-		t.Error("canManageUsers should be false for editor")
 	}
 }
