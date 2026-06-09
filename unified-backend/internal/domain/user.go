@@ -39,17 +39,20 @@ type RoleEntity struct {
 }
 
 // User — доменная модель. ShlinkAPIKey НИКОГДА не сериализуется в HTTP-ответы.
+// Role (текстовое поле users.role) сохраняется для совместимости c keycloak-провизионингом
+// и для fallback-пути в PermissionService (когда role_id IS NULL).
 type User struct {
-	ID            uuid.UUID  `db:"id"`
-	Sub           string     `db:"sub"`
-	Username      string     `db:"username"`
-	Email         string     `db:"email"`
-	RoleID        *uuid.UUID `db:"role_id"`
-	ShlinkAPIKey  string     `db:"shlink_api_key"`
-	SlugPrefix    string     `db:"slug_prefix"`
-	Status        Status     `db:"status"`
-	CreatedAt     time.Time  `db:"created_at"`
-	UpdatedAt     time.Time  `db:"updated_at"`
+	ID           uuid.UUID  `db:"id"`
+	Sub          string     `db:"sub"`
+	Username     string     `db:"username"`
+	Email        string     `db:"email"`
+	Role         string     `db:"role"`
+	RoleID       *uuid.UUID `db:"role_id"`
+	ShlinkAPIKey string     `db:"shlink_api_key"`
+	SlugPrefix   string     `db:"slug_prefix"`
+	Status       Status     `db:"status"`
+	CreatedAt    time.Time  `db:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at"`
 }
 
 // ActionNames — константы имён разрешений.
