@@ -8,11 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	"github.com/go-chi/chi/v5"
-	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
-
 	"unified-backend/internal/config"
 	"unified-backend/internal/controller"
 	"unified-backend/internal/handler"
@@ -22,14 +17,17 @@ import (
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
 	"unified-backend/internal/shlinkctl"
+
+	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 )
 
 func main() {
 	cfg := config.MustLoad()
-
 	ctx := context.Background()
 
-	// ── Postgres ────────────────────────────────────────────────────────────────────────────────
+	// ── Postgres ──────────────────────────────────────────────────────────────
 	db, err := postgres.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("postgres connect", "err", err)
@@ -40,12 +38,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	userRepo     := postgres.NewUserRepository(db)
-	auditRepo    := postgres.NewAuditRepository(db)
-	ownerRepo    := postgres.NewURLOwnershipRepository(db)
+	// ── Репозитории ──────────────────────────────────────────────────────────
+	userRepo := postgres.NewUserRepository(db)
+	auditRepo := postgres.NewAuditRepository(db)
+	ownerRepo := postgres.NewURLOwnershipRepository(db)
 	settingsRepo := postgres.NewServerSettingsRepository(db)
+	roleRepo := postgres.NewRoleRepository(db)
+	permRepo := postgres.NewPermissionRepository(db)
 
-	// ── DB config: seed on first run, then always apply ───────────────────────────────────────
+	// ── Настройки из БД ─────────────────────────────────────────────────────
 	if err := settingsRepo.SeedFromEnv(ctx, cfg); err != nil {
 		slog.Warn("settings: seed from env failed", "err", err)
 	}
@@ -53,19 +54,19 @@ func main() {
 		slog.Warn("settings: apply from db failed", "err", err)
 	}
 
-	// ── Shlink client ────────────────────────────────────────────────────────────────────────────────────
-	shlinkClient := shlink.NewClient(cfg.ShlinkBaseURL)
+	// ── Shlink клиент ───────────────────────────────────────────────────────
+	shlinkClient := shlink.NewClient(cfg.ShlinkInternalURL)
 	if err := shlinkClient.ValidateVersion(ctx, 3, 5, 3*time.Second); err != nil {
 		slog.Error("shlink version check", "err", err)
 		os.Exit(1)
 	}
 
-	// ── Services ──────────────────────────────────────────────────────────────────────────────────────
+	// ── Сервисы и контроллеры ────────────────────────────────────────────────
 	shlinkSvc := service.NewShlinkService(shlinkClient, cfg)
-	permSvc   := service.NewPermissionService(db)
-	permCtrl  := controller.NewPermissionController(permSvc)
+	permSvc := service.NewPermissionService(db)
+	permCtrl := controller.NewPermissionController(permSvc)
 
-	// ── Provisioner ─────────────────────────────────────────────────────────────────────────────────────
+	// ── Провижинер API-ключей ────────────────────────────────────────────────
 	var runner shlinkctl.Runner
 	if cfg.ShlinkRunnerMode == "native" {
 		runner = shlinkctl.NewNativeRunner(cfg.ShlinkBin)
@@ -74,19 +75,18 @@ func main() {
 	}
 	provisioner := shlinkctl.NewProvisioner(db, runner)
 
-	// ── Handlers ──────────────────────────────────────────────────────────────────────────────────────
-	meH        := handler.NewMeHandler(cfg, permSvc)
-	dashH      := handler.NewDashboardHandler(shlinkSvc, userRepo, ownerRepo)
-	proxyH     := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg, permCtrl)
-	userH      := handler.NewUserHandler(userRepo, auditRepo, permCtrl, permSvc)
-	rolesH     := handler.NewRoleHandler(permCtrl)
+	// ── Хендлеры ────────────────────────────────────────────────────────────
+	meH := handler.NewMeHandler(permSvc)
+	dashH := handler.NewDashboardHandler(shlinkSvc, ownerRepo, permCtrl)
+	proxyH := handler.NewShlinkProxyHandler(shlinkSvc, auditRepo, ownerRepo, cfg, permCtrl)
+	userH := handler.NewUserHandler(userRepo, auditRepo, permCtrl, permSvc)
+	rolesH := handler.NewRoleHandler(roleRepo, permRepo, permCtrl, permSvc)
 	urlDetailH := handler.NewURLDetailHandler(shlinkSvc, ownerRepo, permCtrl)
-	systemH    := handler.NewSystemHandler(cfg, shlinkSvc, settingsRepo, permCtrl)
+	systemH := handler.NewSystemHandler(cfg, shlinkSvc, settingsRepo, permCtrl)
 	lifecycleH := handler.NewURLLifecycleHandler(shlinkSvc, ownerRepo, auditRepo, permCtrl)
-	permsH     := handler.NewPermissionsHandler()
-	bulkH      := handler.NewBulkHandler(shlinkSvc, ownerRepo, permCtrl, cfg)
+	permsH := handler.NewPermissionsHandler()
 
-	// ── Router ──────────────────────────────────────────────────────────────────────────────────────
+	// ── Роутер ──────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
@@ -101,67 +101,63 @@ func main() {
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
-	// Все API-маршруты доступны авторизованным пользователям.
-	// Проверка конкретных permissions выполняется внутри handler'ов через permCtrl.
+	// Все API-маршруты проходят через аутентификацию и провизионирование
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.ExtractIdentity(cfg.RoleGroups, cfg.TrustedHeaderSecret, cfg.DefaultRole))
-		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, provisioner, cfg))
+		r.Use(middleware.RequireActiveUser(userRepo, auditRepo, provisioner, cfg, permSvc))
 
-		// ── Текущий пользователь ────────────────────────────────────────────────
+		// ── Текущий пользователь ────────────────────────────────────────────
 		r.Get("/api/me", meH.ServeHTTP)
 
-		// ── Дашборд ─────────────────────────────────────────────────────────────────────────────────
-		r.Get("/api/dashboard", dashH.GetDashboard)
+		// ── Дашборд ─────────────────────────────────────────────────────────
+		r.Get("/api/dashboard", dashH.ServeHTTP)
 
-		// ── Shlink proxy ──────────────────────────────────────────────────────────────────────────
+		// ── Shlink proxy ───────────────────────────────────────────────────
 		r.Get("/api/shlink/short-urls", proxyH.ListShortURLs)
 		r.Post("/api/shlink/short-urls", proxyH.CreateShortURL)
 		r.Patch("/api/shlink/short-urls/{shortCode}", proxyH.UpdateShortURL)
 		r.Delete("/api/shlink/short-urls/{shortCode}", proxyH.DeleteShortURL)
 
-		// ── Lifecycle ──────────────────────────────────────────────────────────────────────────
+		// ── Lifecycle (деактивация, активация, полное удаление) ─────────────
 		r.Post("/api/shlink/short-urls/{shortCode}/deactivate", lifecycleH.DeactivateURL)
 		r.Post("/api/shlink/short-urls/{shortCode}/activate", lifecycleH.ActivateURL)
 		r.Delete("/api/shlink/short-urls/{shortCode}/permanent", lifecycleH.DeleteURLPermanently)
 
-		// ── Теги ──────────────────────────────────────────────────────────────────────────────────
+		// ── Теги ───────────────────────────────────────────────────────────
 		r.Get("/api/shlink/tags", proxyH.ListTags)
 		r.Post("/api/shlink/tags", proxyH.CreateTag)
 		r.Put("/api/shlink/tags/{tagId}", proxyH.RenameTag)
 		r.Delete("/api/shlink/tags/{tagId}", proxyH.DeleteTag)
 
-		// ── URL detail ────────────────────────────────────────────────────────────────────────────────
+		// ── Детали ссылки (статистика) ─────────────────────────────────────
 		r.Get("/api/urls/{shortCode}/detail", urlDetailH.GetURLDetail)
 
-		// ── Настройки сервера (system.config) ────────────────────────────────────────────
+		// ── Системные настройки ────────────────────────────────────────────
 		r.Get("/api/settings", systemH.GetSettings)
 		r.Patch("/api/settings", systemH.PatchSettings)
 
-		// ── Управление пользователями (users.*) ──────────────────────────────────────
+		// ── Управление пользователями ──────────────────────────────────────
 		r.Get("/api/users", userH.ListUsers)
 		r.Get("/api/users/{sub}", userH.GetUser)
 		r.Put("/api/users/{sub}", userH.UpdateUser)
 		r.Patch("/api/users/{sub}/role", userH.PatchUserRole)
 		r.Get("/api/users/{sub}/links", userH.GetUserLinks)
 
-		// ── Аудит (users.view) ──────────────────────────────────────────────────────────────────────────
+		// ── Аудит ──────────────────────────────────────────────────────────
 		r.Get("/api/audit", userH.ListAudit)
 
-		// ── Роли (roles.*) ─────────────────────────────────────────────────────────────────────────────────
+		// ── Роли и разрешения ──────────────────────────────────────────────
 		r.Get("/api/roles", rolesH.ListRoles)
 		r.Post("/api/roles", rolesH.CreateRole)
 		r.Get("/api/roles/{role}", rolesH.GetRole)
 		r.Put("/api/roles/{role}/permissions", rolesH.UpsertRolePermissions)
 		r.Delete("/api/roles/{role}", rolesH.DeleteRole)
 
-		// ── Permissions registry ────────────────────────────────────────────────────────────────────
+		// ── Реестр разрешений (для UI) ─────────────────────────────────────
 		r.Get("/api/permissions", permsH.ListPermissions)
-
-		// ── Bulk operations ────────────────────────────────────────────────────────────────────────
-		r.Post("/api/shlink/short-urls/bulk", bulkH.BulkCreate)
-		r.Put("/api/shlink/short-urls/bulk/status", bulkH.BulkSetStatus)
 	})
 
+	// ── HTTP сервер ─────────────────────────────────────────────────────────
 	srv := &http.Server{
 		Addr:         cfg.HTTPAddr,
 		Handler:      r,
@@ -188,6 +184,6 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("graceful shutdown failed", "err", err)
 	}
-	_ = provisioner
 	slog.Info("server stopped")
 }
+

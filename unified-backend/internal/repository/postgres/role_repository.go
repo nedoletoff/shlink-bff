@@ -3,12 +3,11 @@ package postgres
 import (
 	"context"
 	"errors"
+	"unified-backend/internal/domain"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"unified-backend/internal/domain"
 )
 
 type RoleRepository struct {
@@ -107,7 +106,8 @@ func (r *RoleRepository) SetPermissions(ctx context.Context, roleID uuid.UUID, p
 	}
 
 	for _, pid := range permissionIDs {
-		_, err = tx.Exec(ctx,
+		_, err = tx.Exec(
+			ctx,
 			`INSERT INTO role_permissions_v2 (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			roleID, pid,
 		)
@@ -116,4 +116,8 @@ func (r *RoleRepository) SetPermissions(ctx context.Context, roleID uuid.UUID, p
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func (r *RoleRepository) Pool() *pgxpool.Pool {
+	return r.pool
 }

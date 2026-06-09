@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-
 	"unified-backend/internal/domain"
 )
 
@@ -16,3 +15,4 @@ func UserFromCtx(ctx context.Context) *domain.User {
 	u, _ := ctx.Value(ctxUserKey{}).(*domain.User)
 	return u
 }
+

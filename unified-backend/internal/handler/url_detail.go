@@ -6,14 +6,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/go-chi/chi/v5"
-
 	"unified-backend/internal/controller"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/service"
 	"unified-backend/internal/shlink"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type URLDetailHandler struct {
@@ -43,6 +42,9 @@ type urlDetailResponse struct {
 	OS            []namedCount    `json:"os"`
 	Visits        []visitRow      `json:"visits"`
 	IsActive      bool            `json:"isActive"`
+	ValidSince    *string         `json:"validSince,omitempty"`
+	ValidUntil    *string         `json:"validUntil,omitempty"`
+	MaxVisits     int             `json:"maxVisits"`
 	DeactivatedAt *string         `json:"deactivatedAt,omitempty"`
 	DeactivatedBy *string         `json:"deactivatedBy,omitempty"`
 }
@@ -62,7 +64,7 @@ type visitRow struct {
 	Device  string  `json:"device"`
 }
 
-// GET /api/urls/{shortCode}/detail
+// GetURLDetail – GET /api/urls/{shortCode}/detail
 func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) {
 	shortCode := chi.URLParam(r, "shortCode")
 	if shortCode == "" {
@@ -72,63 +74,70 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil || user.ShlinkAPIKey == "" {
-		writeJSON(w, map[string]string{"error": "user or API key missing"}, http.StatusUnauthorized)
+		writeJSON(w, map[string]string{"error": "unauthorized"}, http.StatusUnauthorized)
 		return
 	}
 
-	query := r.URL.Query()
-	period := 30
-	if ps := query.Get("period"); ps != "" {
-		if n, err := strconv.Atoi(ps); err == nil && n > 0 && n <= 365 {
-			period = n
-		}
-	}
+	// Проверка прав на просмотр статистики
+	canViewAll, _ := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsViewStatsAll)
+	canViewOwn, _ := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsViewStatsOwn)
 
-	info, err := h.svc.Client().GetShortURL(r.Context(), user.ShlinkAPIKey, shortCode)
-	if err != nil {
-		slog.Warn("url detail: get short url failed", "shortCode", shortCode, "err", err)
-		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
-		return
-	}
-
-	canViewAll, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermShortURLsViewAll)
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+	if !canViewAll && !canViewOwn {
+		writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 		return
 	}
 	if !canViewAll {
-		isOwner, ownerErr := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
-		if ownerErr != nil {
-			slog.Error("url detail: ownership check failed", "shortCode", shortCode, "err", ownerErr)
-			writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
-			return
-		}
-		if !isOwner {
+		isOwner, err := h.ownerRepo.IsOwner(r.Context(), shortCode, "", user.Sub)
+		if err != nil || !isOwner {
 			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
 			return
 		}
 	}
 
-	isActive := true
-	var deactivatedAt, deactivatedBy *string
-	if ownership, owErr := h.ownerRepo.GetOwnership(r.Context(), shortCode, ""); owErr == nil && ownership != nil {
-		isActive = ownership.IsActive
-		if ownership.DeactivatedAt != nil {
-			s := ownership.DeactivatedAt.Format(time.RFC3339)
-			deactivatedAt = &s
-		}
-		deactivatedBy = ownership.DeactivatedBy
+	// Получаем данные из Shlink
+	info, err := h.svc.Client().GetShortURL(r.Context(), user.ShlinkAPIKey, shortCode)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
+		return
 	}
 
+	// Метаданные из БД
+	meta, _ := h.ownerRepo.GetOwnership(r.Context(), shortCode, "")
+	isActive := true
+	var deactivatedAt, deactivatedBy *string
+	var validSince, validUntil *string
+	maxVisits := 0
+	if meta != nil {
+		isActive = meta.IsActive
+		if meta.DeactivatedAt != nil {
+			s := meta.DeactivatedAt.Format(time.RFC3339)
+			deactivatedAt = &s
+		}
+		deactivatedBy = meta.DeactivatedBy
+		if meta.ValidSince != nil {
+			s := meta.ValidSince.Format(time.RFC3339)
+			validSince = &s
+		}
+		if meta.ValidUntil != nil {
+			s := meta.ValidUntil.Format(time.RFC3339)
+			validUntil = &s
+		}
+		maxVisits = meta.MaxVisits
+	}
+
+	// Период для статистики
+	period := 30
+	if ps := r.URL.Query().Get("period"); ps != "" {
+		if n, err := strconv.Atoi(ps); err == nil && n > 0 && n <= 365 {
+			period = n
+		}
+	}
 	end := time.Now()
 	start := end.AddDate(0, 0, -period)
+
 	visitsResp, err := h.svc.Client().GetShortURLVisits(
-		r.Context(),
-		user.ShlinkAPIKey,
-		shortCode,
-		start.Format(time.RFC3339),
-		end.Format(time.RFC3339),
-		1000,
+		r.Context(), user.ShlinkAPIKey, shortCode,
+		start.Format(time.RFC3339), end.Format(time.RFC3339), 1000,
 	)
 	if err != nil {
 		slog.Warn("url detail: get visits failed", "shortCode", shortCode, "err", err)
@@ -141,6 +150,7 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		visits = visitsResp.Visits.Data
 	}
 
+	// Агрегация визитов
 	const dayFmt = "2006-01-02"
 	buckets := make(map[string]int, period)
 	ordered := make([]string, 0, period)
@@ -163,7 +173,6 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 				buckets[d]++
 			}
 		}
-
 		ua := strings.ToLower(v.UserAgent)
 		dev := urlDetailDevice(ua)
 		switch dev {
@@ -200,22 +209,21 @@ func (h *URLDetailHandler) GetURLDetail(w http.ResponseWriter, r *http.Request) 
 		DateCreated:   info.DateCreated,
 		VisitsTotal:   info.VisitsSummary.Total,
 		ClicksPerDay:  points,
-		Devices: deviceBreakdown{
-			Desktop: desktop,
-			Mobile:  mobile,
-			Tablet:  tablet,
-		},
+		Devices:       deviceBreakdown{Desktop: desktop, Mobile: mobile, Tablet: tablet},
 		Browsers:      topCountSlice(browsersMap, 10),
 		OS:            topCountSlice(osMap, 10),
 		Visits:        visitRows,
 		IsActive:      isActive,
+		ValidSince:    validSince,
+		ValidUntil:    validUntil,
+		MaxVisits:     maxVisits,
 		DeactivatedAt: deactivatedAt,
 		DeactivatedBy: deactivatedBy,
 	}
-
 	writeJSON(w, resp, http.StatusOK)
 }
 
+// helpers
 func urlDetailNullStr(s string) *string {
 	if strings.TrimSpace(s) == "" {
 		return nil
@@ -266,3 +274,4 @@ func urlDetailOS(ua string) string {
 		return "Other"
 	}
 }
+

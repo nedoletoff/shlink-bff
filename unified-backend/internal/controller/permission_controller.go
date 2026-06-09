@@ -3,24 +3,24 @@ package controller
 import (
 	"context"
 	"net/http"
+	"unified-backend/internal/middleware"
 
 	"github.com/google/uuid"
-
-	"unified-backend/internal/middleware"
 )
 
-// PermChecker — минимальный интерфейс для stubов в тестах.
+type PermissionSvc interface {
+	UserHasPermission(ctx context.Context, userID uuid.UUID, action string) (bool, error)
+	UserHasPermissionBySub(ctx context.Context, sub string, action string) (bool, error)
+	GetUserPermissions(ctx context.Context, sub string) ([]string, error) // добавлено
+}
+
 type PermChecker interface {
 	Check(ctx context.Context, userID uuid.UUID, action string) (bool, error)
+	CheckSub(ctx context.Context, sub string, action string) (bool, error)
+	GetUserPermissions(ctx context.Context, sub string) ([]string, error) // добавлено
 	Authorize(action string) func(http.Handler) http.Handler
 }
 
-// PermissionSvc — подмножество service.PermissionService без циклической зависимости.
-type PermissionSvc interface {
-	UserHasPermission(ctx context.Context, userID uuid.UUID, action string) (bool, error)
-}
-
-// PermissionController реализует PermChecker.
 type PermissionController struct {
 	svc PermissionSvc
 }
@@ -29,12 +29,18 @@ func NewPermissionController(svc PermissionSvc) *PermissionController {
 	return &PermissionController{svc: svc}
 }
 
-// Check проверяет, имеет ли пользователь из контекста нужное разрешение.
 func (c *PermissionController) Check(ctx context.Context, userID uuid.UUID, action string) (bool, error) {
 	return c.svc.UserHasPermission(ctx, userID, action)
 }
 
-// Authorize — chi-совместимое middleware: если у текущего пользователя нет action — возвращает 403.
+func (c *PermissionController) CheckSub(ctx context.Context, sub string, action string) (bool, error) {
+	return c.svc.UserHasPermissionBySub(ctx, sub, action)
+}
+
+func (c *PermissionController) GetUserPermissions(ctx context.Context, sub string) ([]string, error) {
+	return c.svc.GetUserPermissions(ctx, sub)
+}
+
 func (c *PermissionController) Authorize(action string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +49,6 @@ func (c *PermissionController) Authorize(action string) func(http.Handler) http.
 				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 				return
 			}
-
 			ok, err := c.svc.UserHasPermission(r.Context(), user.ID, action)
 			if err != nil {
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -58,5 +63,3 @@ func (c *PermissionController) Authorize(action string) func(http.Handler) http.
 	}
 }
 
-// Compile-time check.
-var _ PermChecker = (*PermissionController)(nil)

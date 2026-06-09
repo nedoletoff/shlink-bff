@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
 	"unified-backend/internal/config"
 	"unified-backend/internal/controller"
 	"unified-backend/internal/domain"
@@ -16,8 +15,6 @@ import (
 	"unified-backend/internal/service"
 )
 
-// SystemHandler — GET/PATCH /api/settings (системная конфигурация).
-// Заменяет SettingsHandler. PATCH требует system.config.
 type SystemHandler struct {
 	cfg          *config.Config
 	shlinkSvc    *service.ShlinkService
@@ -50,8 +47,26 @@ type settingsResponse struct {
 	ShlinkContainerName string `json:"shlinkContainerName"`
 }
 
-// GET /api/settings — открыт для всех авторизованных.
+// GET /api/settings – проверяем system.config.view или system.config
 func (h *SystemHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromCtx(r.Context())
+	if user == nil {
+		writeJSON(w, map[string]string{"error": "unauthorized"}, http.StatusUnauthorized)
+		return
+	}
+	ok, err := h.permCtrl.Check(r.Context(), user.ID, domain.PermSystemConfigView)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		// fallback: может быть полный доступ
+		ok, _ = h.permCtrl.Check(r.Context(), user.ID, domain.PermSystemConfig)
+		if !ok {
+			writeJSON(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+			return
+		}
+	}
 	health, err := h.shlinkSvc.Client().GetHealth(r.Context())
 	connected := err == nil
 	version := ""
@@ -60,7 +75,7 @@ func (h *SystemHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	domain := h.cfg.ShlinkDefaultDomain
 	if domain == "" {
-		domain = h.cfg.ShlinkURL
+		domain = h.cfg.ShlinkInternalURL
 	}
 	writeJSON(w, settingsResponse{
 		ShortCodeLength:     h.cfg.ShlinkShortIDLength,
@@ -91,7 +106,7 @@ type patchSettingsPayload struct {
 	ShlinkContainerName *string `json:"shlinkContainerName"`
 }
 
-// PATCH /api/settings — требует system.config.
+// PATCH /api/settings – требует system.config (полный доступ)
 func (h *SystemHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromCtx(r.Context())
 	if user == nil {
@@ -122,8 +137,12 @@ func (h *SystemHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	dbUpdates := make(map[string]string)
 	if payload.ShortCodeLength != nil {
 		v := *payload.ShortCodeLength
-		if v < 3 { v = 3 }
-		if v > 32 { v = 32 }
+		if v < 3 {
+			v = 3
+		}
+		if v > 32 {
+			v = 32
+		}
 		h.cfg.ShlinkShortIDLength = v
 		dbUpdates["short_code_length"] = strconv.Itoa(v)
 	}
@@ -176,3 +195,4 @@ func (h *SystemHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, map[string]string{"status": "updated"}, http.StatusOK)
 }
+

@@ -6,40 +6,38 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-
 	"unified-backend/internal/controller"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/repository/postgres"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
-// RoleInvalidator — минимальный интерфейс для инвалидации L1-кэша.
 type RoleInvalidator interface {
 	InvalidateRole(roleName string)
 }
 
-// RoleHandler — управление ролями через RBAC.
 type RoleHandler struct {
-	roleRepo  *postgres.RoleRepository
-	permRepo  *postgres.PermissionRepository
-	permCtrl  controller.PermChecker
-	inv       RoleInvalidator // опционально
+	roleRepo *postgres.RoleRepository
+	permRepo *postgres.PermissionRepository
+	permCtrl controller.PermChecker
+	inv      RoleInvalidator
 }
 
 func NewRoleHandler(
 	roleRepo *postgres.RoleRepository,
 	permRepo *postgres.PermissionRepository,
 	permCtrl controller.PermChecker,
-	inv ...RoleInvalidator,
+	inv RoleInvalidator,
 ) *RoleHandler {
-	h := &RoleHandler{roleRepo: roleRepo, permRepo: permRepo, permCtrl: permCtrl}
-	if len(inv) > 0 {
-		h.inv = inv[0]
+	return &RoleHandler{
+		roleRepo: roleRepo,
+		permRepo: permRepo,
+		permCtrl: permCtrl,
+		inv:      inv,
 	}
-	return h
 }
 
 func (h *RoleHandler) requirePerm(w http.ResponseWriter, r *http.Request, action string) bool {
@@ -60,7 +58,6 @@ func (h *RoleHandler) requirePerm(w http.ResponseWriter, r *http.Request, action
 	return true
 }
 
-// GET /api/roles
 func (h *RoleHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermRolesView) {
 		return
@@ -73,12 +70,10 @@ func (h *RoleHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, roles, http.StatusOK)
 }
 
-// POST /api/roles
 func (h *RoleHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermRolesManage) {
 		return
 	}
-
 	var p struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -92,7 +87,6 @@ func (h *RoleHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"error": "name required"}, http.StatusBadRequest)
 		return
 	}
-
 	role, err := h.roleRepo.Create(r.Context(), strings.TrimSpace(p.Name), p.Description)
 	if err != nil {
 		slog.Error("role_handler: create failed", "err", err)
@@ -102,45 +96,41 @@ func (h *RoleHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, role, http.StatusCreated)
 }
 
-// GET /api/roles/{id}/permissions
-func (h *RoleHandler) GetRolePermissions(w http.ResponseWriter, r *http.Request) {
+func (h *RoleHandler) GetRole(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermRolesView) {
 		return
 	}
-	roleID, err := uuid.Parse(chi.URLParam(r, "id"))
+	roleIDStr := chi.URLParam(r, "role")
+	roleID, err := uuid.Parse(roleIDStr)
 	if err != nil {
 		writeJSON(w, map[string]string{"error": "invalid role id"}, http.StatusBadRequest)
 		return
 	}
-	perms, err := h.roleRepo.GetPermissions(r.Context(), roleID)
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+	role, err := h.roleRepo.GetByID(r.Context(), roleID)
+	if err != nil || role == nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
 		return
 	}
-	if perms == nil {
-		perms = []domain.Permission{}
-	}
-	writeJSON(w, perms, http.StatusOK)
+	perms, _ := h.roleRepo.GetPermissions(r.Context(), roleID)
+	role.Permissions = perms
+	writeJSON(w, role, http.StatusOK)
 }
 
-// PUT /api/roles/{id}/permissions — полная замена набора разрешений + инвалидация L1-кэша.
-func (h *RoleHandler) SetRolePermissions(w http.ResponseWriter, r *http.Request) {
+func (h *RoleHandler) UpsertRolePermissions(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermRolesManage) {
 		return
 	}
-	roleID, err := uuid.Parse(chi.URLParam(r, "id"))
+	roleIDStr := chi.URLParam(r, "role")
+	roleID, err := uuid.Parse(roleIDStr)
 	if err != nil {
 		writeJSON(w, map[string]string{"error": "invalid role id"}, http.StatusBadRequest)
 		return
 	}
-
-	// Читаем роль до изменений, чтобы знать её имя для InvalidateRole.
 	role, err := h.roleRepo.GetByID(r.Context(), roleID)
 	if err != nil || role == nil {
 		writeJSON(w, map[string]string{"error": "role not found"}, http.StatusNotFound)
 		return
 	}
-
 	var payload struct {
 		PermissionIDs []string `json:"permissionIds"`
 	}
@@ -148,7 +138,6 @@ func (h *RoleHandler) SetRolePermissions(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, map[string]string{"error": "invalid json"}, http.StatusBadRequest)
 		return
 	}
-
 	permIDs := make([]uuid.UUID, 0, len(payload.PermissionIDs))
 	for _, s := range payload.PermissionIDs {
 		id, err := uuid.Parse(s)
@@ -158,17 +147,50 @@ func (h *RoleHandler) SetRolePermissions(w http.ResponseWriter, r *http.Request)
 		}
 		permIDs = append(permIDs, id)
 	}
-
 	if err := h.roleRepo.SetPermissions(r.Context(), roleID, permIDs); err != nil {
 		slog.Error("role_handler: set permissions failed", "err", err)
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
-
-	// Инвалидируем L1-кэш и все L2-записи для этой роли.
 	if h.inv != nil {
 		h.inv.InvalidateRole(role.Name)
 	}
-
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
+
+func (h *RoleHandler) DeleteRole(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePerm(w, r, domain.PermRolesManage) {
+		return
+	}
+	roleIDStr := chi.URLParam(r, "role")
+	roleID, err := uuid.Parse(roleIDStr)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "invalid role id"}, http.StatusBadRequest)
+		return
+	}
+	role, err := h.roleRepo.GetByID(r.Context(), roleID)
+	if err != nil || role == nil {
+		writeJSON(w, map[string]string{"error": "not found"}, http.StatusNotFound)
+		return
+	}
+	if role.Name == "admin" || role.Name == "viewer" {
+		writeJSON(w, map[string]string{"error": "cannot delete system role"}, http.StatusForbidden)
+		return
+	}
+	// Сначала удаляем permissions
+	if err := h.roleRepo.SetPermissions(r.Context(), roleID, []uuid.UUID{}); err != nil {
+		slog.Error("role_handler: clear permissions failed", "err", err)
+	}
+	// Затем удаляем роль (каскад удалит из role_permissions_v2)
+	_, err = h.roleRepo.Pool().Exec(r.Context(), `DELETE FROM roles WHERE id = $1`, roleID)
+	if err != nil {
+		slog.Error("role_handler: delete role failed", "err", err)
+		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
+		return
+	}
+	if h.inv != nil {
+		h.inv.InvalidateRole(role.Name)
+	}
+	writeJSON(w, map[string]string{"status": "deleted"}, http.StatusOK)
+}
+

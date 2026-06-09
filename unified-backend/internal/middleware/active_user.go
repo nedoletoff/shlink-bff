@@ -5,31 +5,25 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-
-	"github.com/google/uuid"
-
 	"unified-backend/internal/config"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/repository/postgres"
 	"unified-backend/internal/shlinkctl"
+
+	"github.com/google/uuid"
 )
 
-// PermInvalidator — опциональный интерфейс для инвалидации кэша разрешений.
-// Передаётся в RequireActiveUser; вызывается при смене role_id пользователя.
 type PermInvalidator interface {
 	InvalidateUser(userID uuid.UUID)
 }
 
 // RequireActiveUser — middleware аутентификации и провизионирования.
-// Проверяет только подлинность токена (через ExtractIdentity выше в цепочке)
-// и статус пользователя (active/disabled). Проверка прав — исключительно через
-// PermissionController в хендлерах или Authorize middleware.
 func RequireActiveUser(
 	userRepo *postgres.UserRepository,
 	auditRepo *postgres.AuditRepository,
 	provisioner *shlinkctl.Provisioner,
 	cfg *config.Config,
-	permInvalidator ...PermInvalidator, // опционально
+	permInvalidator ...PermInvalidator,
 ) func(http.Handler) http.Handler {
 	var inv PermInvalidator
 	if len(permInvalidator) > 0 {
@@ -63,7 +57,7 @@ func RequireActiveUser(
 			switch cfg.RoleSource {
 			case config.RoleSourceDB:
 				user, err = handleRoleSourceDB(ctx, userRepo, user, idnt, keycloakRole)
-			default: // RoleSourceKeycloak
+			default:
 				user, err = handleRoleSourceKeycloak(ctx, userRepo, user, idnt, keycloakRole, inv)
 			}
 
@@ -82,23 +76,23 @@ func RequireActiveUser(
 			if user.ShlinkAPIKey == "" {
 				key, provErr := provisioner.EnsureAPIKey(ctx, user.Sub, user.Username)
 				if provErr != nil {
-					slog.Warn("active_user: api key provisioning failed",
-						"sub", user.Sub, "err", provErr)
+					slog.Warn("active_user: api key provisioning failed", "sub", user.Sub, "err", provErr)
 				} else {
 					user.ShlinkAPIKey = key
 				}
 			}
 
+			// Кладём пользователя в контекст
 			ctx = WithUser(ctx, user)
+			// Обновляем role в контексте (используем user.Role, который уже содержит актуальное имя)
 			ctx = context.WithValue(ctx, CtxKeyRole, user.Role)
+
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// handleRoleSourceKeycloak — ROLE_SOURCE=keycloak (default).
-// При смене роли синхронизирует users.role и users.role_id;
-// инвалидирует кэш разрешений если передан inv.
+// handleRoleSourceKeycloak — синхронизация роли из Keycloak
 func handleRoleSourceKeycloak(
 	ctx context.Context,
 	repo *postgres.UserRepository,
@@ -107,38 +101,33 @@ func handleRoleSourceKeycloak(
 	keycloakRole string,
 	inv PermInvalidator,
 ) (*domain.User, error) {
-	// Первый визит — провизионируем.
 	if user == nil {
+		// Создаём нового пользователя
 		newUser := &domain.User{
 			Sub:      idnt.Sub,
 			Email:    idnt.Email,
 			Username: idnt.Username,
-			Role:     keycloakRole,
+			Role:     keycloakRole, // role_text
 			Status:   domain.StatusActive,
 		}
 		if err := repo.Upsert(ctx, newUser); err != nil {
 			return nil, err
 		}
-		// Сразу проставляем role_id чтобы PermissionService работал без fallback.
+		// Синхронизируем role_id
 		if err := syncRoleID(ctx, repo, newUser, keycloakRole, inv); err != nil {
-			slog.Warn("active_user: role_id sync failed on provision",
-				"sub", idnt.Sub, "role", keycloakRole, "err", err)
+			slog.Warn("active_user: role_id sync failed on provision", "sub", idnt.Sub, "err", err)
 		}
-		slog.Info("active_user: provisioned", "sub", idnt.Sub, "role", keycloakRole, "source", "keycloak")
+		slog.Info("active_user: provisioned", "sub", idnt.Sub, "role", keycloakRole)
 		return newUser, nil
 	}
 
 	fields := map[string]any{}
 
-	// Роль в Keycloak изменилась — синхронизируем.
 	if user.Role != keycloakRole {
-		slog.Info("active_user: role synced from keycloak",
-			"sub", idnt.Sub, "old", user.Role, "new", keycloakRole)
-		fields["role"] = keycloakRole
+		slog.Info("active_user: role synced from keycloak", "sub", idnt.Sub, "old", user.Role, "new", keycloakRole)
+		fields["role_text"] = keycloakRole
 		user.Role = keycloakRole
-		// role_id будет обновлён ниже в syncRoleID
 	}
-
 	if user.Username != idnt.Username {
 		fields["username"] = idnt.Username
 		user.Username = idnt.Username
@@ -153,35 +142,26 @@ func handleRoleSourceKeycloak(
 		}
 	}
 
-	// Синхронизируем role_id если он ещё не выставлен или роль поменялась.
-	if user.RoleID == nil || (len(fields) > 0 && fields["role"] != nil) {
+	// Если role_id не заполнен или роль изменилась – синхронизируем
+	if user.RoleID == nil || (fields["role_text"] != nil) {
 		if err := syncRoleID(ctx, repo, user, keycloakRole, inv); err != nil {
-			slog.Warn("active_user: role_id sync failed",
-				"sub", idnt.Sub, "role", keycloakRole, "err", err)
+			slog.Warn("active_user: role_id sync failed", "sub", idnt.Sub, "err", err)
 		}
 	}
 
 	return user, nil
 }
 
-// syncRoleID обновляет users.role_id по имени роли и инвалидирует кэш.
-func syncRoleID(
-	ctx context.Context,
-	repo *postgres.UserRepository,
-	user *domain.User,
-	roleName string,
-	inv PermInvalidator,
-) error {
+// syncRoleID обновляет users.role_id по имени роли и инвалидирует кэш
+func syncRoleID(ctx context.Context, repo *postgres.UserRepository, user *domain.User, roleName string, inv PermInvalidator) error {
 	roleID, err := repo.GetRoleIDByName(ctx, roleName)
 	if err != nil {
 		return err
 	}
 	if roleID == nil {
-		// Роль ещё не засиждена — игнорируем, PermissionService использует fallback.
-		return nil
+		return nil // роль ещё не заведена в БД – игнорируем
 	}
 	if user.RoleID != nil && *user.RoleID == *roleID {
-		// Уже актуально.
 		return nil
 	}
 	if err := repo.UpdateBySubFields(ctx, user.Sub, map[string]any{"role_id": roleID}); err != nil {
@@ -194,7 +174,7 @@ func syncRoleID(
 	return nil
 }
 
-// handleRoleSourceDB — ROLE_SOURCE=db.
+// handleRoleSourceDB — роль всегда из БД, только обновляем username/email
 func handleRoleSourceDB(
 	ctx context.Context,
 	repo *postgres.UserRepository,
@@ -213,7 +193,7 @@ func handleRoleSourceDB(
 		if err := repo.Upsert(ctx, newUser); err != nil {
 			return nil, err
 		}
-		slog.Info("active_user: provisioned", "sub", idnt.Sub, "role", keycloakRole, "source", "db (first visit)")
+		slog.Info("active_user: provisioned", "sub", idnt.Sub, "role", keycloakRole, "source", "db")
 		return newUser, nil
 	}
 
@@ -243,3 +223,4 @@ func writeErrJSON(w http.ResponseWriter, code int, errMsg, reason string) {
 	}
 	_ = json.NewEncoder(w).Encode(v)
 }
+

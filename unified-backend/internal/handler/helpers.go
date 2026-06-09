@@ -7,8 +7,6 @@ import (
 	"sort"
 )
 
-// writeJSON записывает JSON-ответ с указанным статус-кодом.
-// Используется всеми хендлерами пакета.
 func writeJSON(w http.ResponseWriter, v any, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -40,3 +38,4 @@ func topCountSlice(m map[string]int, n int) []namedCount {
 	}
 	return out
 }
+

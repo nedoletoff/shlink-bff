@@ -4,44 +4,42 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-
 	"unified-backend/internal/controller"
 	"unified-backend/internal/domain"
 	"unified-backend/internal/middleware"
 	"unified-backend/internal/repository/postgres"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
-// UserInvalidator — мин. интерфейс для сброса L2-кэша пользователя.
-type UserInvalidator interface {
+type PermInvalidator interface {
 	InvalidateUser(userID uuid.UUID)
 }
 
-// UserHandler — управление пользователями через разрешения RBAC.
 type UserHandler struct {
 	userRepo  *postgres.UserRepository
 	auditRepo *postgres.AuditRepository
 	permCtrl  controller.PermChecker
-	inv       UserInvalidator // опционально
+	inv       PermInvalidator
 }
 
 func NewUserHandler(
 	userRepo *postgres.UserRepository,
 	auditRepo *postgres.AuditRepository,
 	permCtrl controller.PermChecker,
-	inv ...UserInvalidator,
+	inv PermInvalidator,
 ) *UserHandler {
-	h := &UserHandler{userRepo: userRepo, auditRepo: auditRepo, permCtrl: permCtrl}
-	if len(inv) > 0 {
-		h.inv = inv[0]
+	return &UserHandler{
+		userRepo:  userRepo,
+		auditRepo: auditRepo,
+		permCtrl:  permCtrl,
+		inv:       inv,
 	}
-	return h
 }
 
 func (h *UserHandler) recordAuditAsync(entry *domain.AuditEntry) {
@@ -73,7 +71,6 @@ func (h *UserHandler) requirePerm(w http.ResponseWriter, r *http.Request, action
 	return true
 }
 
-// GET /api/users
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersView) {
 		return
@@ -86,7 +83,6 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, users, http.StatusOK)
 }
 
-// GET /api/users/{sub}
 func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersView) {
 		return
@@ -104,7 +100,6 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, user, http.StatusOK)
 }
 
-// PUT /api/users/{sub}
 func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersManage) {
 		return
@@ -136,7 +131,6 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		fields["slug_prefix"] = strings.TrimSpace(*p.SlugPrefix)
 	}
 	if p.AllowedDomains != nil {
-		// Нормализуем: trim spaces для каждого домена, фильтруем пустые
 		cleaned := make([]string, 0, len(*p.AllowedDomains))
 		for _, d := range *p.AllowedDomains {
 			d = strings.TrimSpace(d)
@@ -144,11 +138,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 				cleaned = append(cleaned, d)
 			}
 		}
-		encoded, err := json.Marshal(cleaned)
-		if err != nil {
-			writeJSON(w, map[string]string{"error": "invalid allowedDomains"}, http.StatusBadRequest)
-			return
-		}
+		encoded, _ := json.Marshal(cleaned)
 		fields["allowed_domains"] = string(encoded)
 	}
 	if len(fields) == 0 {
@@ -172,14 +162,9 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	})
 
 	updated, _ := h.userRepo.GetBySub(r.Context(), sub)
-	if updated == nil {
-		writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
-		return
-	}
 	writeJSON(w, updated, http.StatusOK)
 }
 
-// PATCH /api/users/{sub}/role — назначить роль по UUID + инвалидировать L2-кэш.
 func (h *UserHandler) PatchUserRole(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersManage) {
 		return
@@ -203,25 +188,23 @@ func (h *UserHandler) PatchUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Получаем имя роли, чтобы синхронизировать users.role (fallback-поле).
 	var roleName string
-	if err := h.userRepo.Pool().QueryRow(r.Context(),
+	if err := h.userRepo.Pool().QueryRow(
+		r.Context(),
 		`SELECT name FROM roles WHERE id = $1`, parsedID,
 	).Scan(&roleName); err != nil {
-		slog.Warn("user_handler: role not found", "roleId", p.RoleID, "err", err)
 		writeJSON(w, map[string]string{"error": "role not found"}, http.StatusNotFound)
 		return
 	}
 
 	if err := h.userRepo.UpdateBySubFields(r.Context(), sub, map[string]any{
-		"role_id": parsedID,
-		"role":    roleName,
+		"role_id":   parsedID,
+		"role_text": roleName,
 	}); err != nil {
 		writeJSON(w, map[string]string{"error": "internal error"}, http.StatusInternalServerError)
 		return
 	}
 
-	// Инвалидируем L2-кэш пользователя.
 	if h.inv != nil {
 		targetUser, _ := h.userRepo.GetBySub(r.Context(), sub)
 		if targetUser != nil {
@@ -242,7 +225,6 @@ func (h *UserHandler) PatchUserRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
-// GET /api/users/{sub}/links
 func (h *UserHandler) GetUserLinks(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersView) {
 		return
@@ -258,19 +240,18 @@ func (h *UserHandler) GetUserLinks(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
-// GET /api/audit
 func (h *UserHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	if !h.requirePerm(w, r, domain.PermUsersView) {
 		return
 	}
 	page, perPage := 1, 20
 	if v := r.URL.Query().Get("page"); v != "" {
-		if n, err := parsePositiveInt(v); err == nil {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			page = n
 		}
 	}
 	if v := r.URL.Query().Get("perPage"); v != "" {
-		if n, err := parsePositiveInt(v); err == nil {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			if n > 100 {
 				n = 100
 			}
@@ -289,3 +270,4 @@ func (h *UserHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 		"total":   result.Total,
 	}, http.StatusOK)
 }
+

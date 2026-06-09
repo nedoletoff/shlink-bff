@@ -15,8 +15,6 @@ import (
 )
 
 // Client — HTTP-клиент к внутреннему shlink-api.
-// X-Api-Key подставляется здесь, на стороне backend.
-// Ключ никогда не логируется и не отдаётся в ответах UI.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -45,6 +43,11 @@ type ShortURL struct {
 	Tags          []string      `json:"tags"`
 	VisitsSummary VisitsSummary `json:"visitsSummary"`
 	DateCreated   string        `json:"dateCreated"`
+	// Дополнительные поля, возвращаемые Shlink v5:
+	ValidSince *string `json:"validSince,omitempty"` // RFC3339
+	ValidUntil *string `json:"validUntil,omitempty"` // RFC3339
+	MaxVisits  *int    `json:"maxVisits,omitempty"`
+	Enabled    bool    `json:"enabled"` // активна ли ссылка
 }
 
 type Pagination struct {
@@ -74,12 +77,10 @@ type TagsWithStatsResponse struct {
 	} `json:"tags"`
 }
 
-// TagStats reflects Shlink v5.x response: visitsCount replaced by visitsSummary object.
 type TagStats struct {
 	Tag            string `json:"tag"`
 	ShortURLsCount int    `json:"shortUrlsCount"`
-	// v5: visitsCount (int) is replaced by visitsSummary object
-	VisitsSummary struct {
+	VisitsSummary  struct {
 		Total int `json:"total"`
 	} `json:"visitsSummary"`
 }
@@ -103,14 +104,12 @@ type VisitLocation struct {
 	CityName    string `json:"cityName"`
 }
 
-// CreateShortURLRequest используется при необходимости дополнить тело запроса
-// полями, которые BFF инжектирует сам (например shortCodeLength).
+// CreateShortURLRequest используется при необходимости дополнить тело запроса.
 type CreateShortURLRequest struct {
 	ShortCodeLength int `json:"shortCodeLength,omitempty"`
 }
 
-// ShlinkSettings — тело PATCH /rest/v3/settings (shlink >= v3.5).
-// Только shortCodesLength передаётся сейчас; при необходимости расширить.
+// ShlinkSettings — тело PATCH /rest/v3/settings.
 type ShlinkSettings struct {
 	ShortURLCreation *ShlinkShortURLCreationSettings `json:"shortUrlCreation,omitempty"`
 }
@@ -129,13 +128,11 @@ func (c *Client) GetShortURLs(ctx context.Context, apiKey, rawQuery string) (*Sh
 	return doRequest[ShortURLsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 
-// GetShortURL — GET /rest/v3/short-urls/{shortCode}
 func (c *Client) GetShortURL(ctx context.Context, apiKey, shortCode string) (*ShortURL, error) {
 	url := fmt.Sprintf("%s/rest/v3/short-urls/%s", c.baseURL, shortCode)
 	return doRequest[ShortURL](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 
-// GetShortURLVisits — GET /rest/v3/short-urls/{shortCode}/visits
 func (c *Client) GetShortURLVisits(ctx context.Context, apiKey, shortCode, startDate, endDate string, itemsPerPage int) (*VisitsResponse, error) {
 	if itemsPerPage <= 0 {
 		itemsPerPage = 1000
@@ -156,13 +153,11 @@ func (c *Client) CreateShortURL(ctx context.Context, apiKey string, body io.Read
 	return doRequest[ShortURL](ctx, c, http.MethodPost, c.baseURL+"/rest/v3/short-urls", apiKey, body)
 }
 
-// CreateShortURLWithConfig аналогичен CreateShortURL, но вмешивается в тело запроса:
-// если shortCodeLength > 0, он вставляется в JSON перед отправкой в Shlink.
+// CreateShortURLWithConfig — вставляет shortCodeLength в тело запроса перед отправкой.
 func (c *Client) CreateShortURLWithConfig(ctx context.Context, apiKey string, body io.Reader, shortCodeLength int) (*ShortURL, error) {
 	if shortCodeLength <= 0 {
 		return c.CreateShortURL(ctx, apiKey, body)
 	}
-
 	var payload map[string]json.RawMessage
 	if err := json.NewDecoder(body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("shlink_client: failed to decode create request body: %w", err)
@@ -172,7 +167,6 @@ func (c *Client) CreateShortURLWithConfig(ctx context.Context, apiKey string, bo
 		return nil, err
 	}
 	payload["shortCodeLength"] = json.RawMessage(lengthBytes)
-
 	modified, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -196,20 +190,17 @@ func (c *Client) GetTags(ctx context.Context, apiKey string) (*TagsWithStatsResp
 	return doRequest[TagsWithStatsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 
-// CreateTag — POST /rest/v3/tags создаёт новый тег. body: {"tags": ["newTag"]}
 func (c *Client) CreateTag(ctx context.Context, apiKey string, body io.Reader) (*TagsWithStatsResponse, error) {
 	url := c.baseURL + "/rest/v3/tags"
 	return doRequest[TagsWithStatsResponse](ctx, c, http.MethodPost, url, apiKey, body)
 }
 
-// RenameTag uses PUT /rest/v3/tags with body {"oldName": "...", "newName": "..."}
 func (c *Client) RenameTag(ctx context.Context, apiKey string, body io.Reader) error {
 	url := c.baseURL + "/rest/v3/tags"
 	_, err := doRequest[struct{}](ctx, c, http.MethodPut, url, apiKey, body)
 	return err
 }
 
-// DeleteTags uses DELETE /rest/v3/tags?tags[]=tag1&tags[]=tag2
 func (c *Client) DeleteTags(ctx context.Context, apiKey string, tags []string) error {
 	url := c.baseURL + "/rest/v3/tags?tags[]=" + strings.Join(tags, "&tags[]=")
 	_, err := doRequest[struct{}](ctx, c, http.MethodDelete, url, apiKey, nil)
@@ -225,7 +216,6 @@ func (c *Client) GetVisitsSummary(ctx context.Context, apiKey string) (map[strin
 	return *res, nil
 }
 
-// GetNonOrphanVisits возвращает реальные визиты по всем ссылкам в заданном диапазоне дат.
 func (c *Client) GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endDate string, itemsPerPage int) (*VisitsResponse, error) {
 	if itemsPerPage <= 0 {
 		itemsPerPage = 1000
@@ -242,11 +232,9 @@ func (c *Client) GetNonOrphanVisits(ctx context.Context, apiKey, startDate, endD
 	return doRequest[VisitsResponse](ctx, c, http.MethodGet, url, apiKey, nil)
 }
 
-// PatchSettings применяет shortCodesLength к shlink через PATCH /rest/v3/settings.
-// Требует глобального admin API-ключа. Доступен начиная с shlink v3.5.
 func (c *Client) PatchSettings(ctx context.Context, adminAPIKey string, shortCodeLength int) error {
 	if adminAPIKey == "" {
-		return fmt.Errorf("shlink: admin API key not configured (SHLINK_ADMIN_API_KEY)")
+		return fmt.Errorf("shlink: admin API key not configured")
 	}
 	payload := ShlinkSettings{
 		ShortURLCreation: &ShlinkShortURLCreationSettings{
@@ -262,7 +250,6 @@ func (c *Client) PatchSettings(ctx context.Context, adminAPIKey string, shortCod
 	return err
 }
 
-// HealthResponse — ответ GET /rest/health (например {"status":"pass","version":"5.0.2"}).
 type HealthResponse struct {
 	Status  string `json:"status"`
 	Version string `json:"version"`
@@ -290,7 +277,6 @@ func (c *Client) GetHealth(ctx context.Context) (*HealthResponse, error) {
 	return &result, nil
 }
 
-// ValidateVersion проверяет совместимость версии Shlink API на старте (#16).
 func (c *Client) ValidateVersion(ctx context.Context, minMajor int, attempts int, delay time.Duration) error {
 	if attempts <= 0 {
 		attempts = 1
@@ -317,7 +303,6 @@ func (c *Client) ValidateVersion(ctx context.Context, minMajor int, attempts int
 	return fmt.Errorf("shlink health unavailable after %d attempts: %w", attempts, lastErr)
 }
 
-// majorVersion извлекает мажорную часть из строки вида "5.0.2". При ошибке — 0.
 func majorVersion(v string) int {
 	parts := strings.SplitN(strings.TrimSpace(v), ".", 2)
 	if len(parts) == 0 {
@@ -330,7 +315,6 @@ func majorVersion(v string) int {
 	return n
 }
 
-// doRequest — обобщённый исполнитель HTTP-запросов к Shlink.
 func doRequest[T any](
 	ctx context.Context,
 	c *Client,
@@ -373,3 +357,4 @@ func extractPath(url string) string {
 	}
 	return url
 }
+
